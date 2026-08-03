@@ -149,7 +149,9 @@ def build_pdf(output: Path) -> None:
     y = draw_wrapped_text(
         pdf,
         "Copy both commands below. No GitHub account or authentication is required. The second "
-        "command installs, builds, verifies, and launches OrgChart Studio.",
+        "command installs, builds, verifies, and launches OrgChart Studio. Setup also offers an "
+        "optional local ChatGPT Desktop / Codex MCP companion; restart that desktop client once "
+        "after accepting it.",
         40,
         575,
         532,
@@ -179,7 +181,8 @@ def build_pdf(output: Path) -> None:
     draw_label(pdf, "02  Start OrgChart Studio after install", 40, 366)
     y2 = draw_wrapped_text(
         pdf,
-        "For later sessions, open Terminal and run:",
+        "For later sessions, open Terminal and run. Open the app before using its optional local "
+        "ChatGPT/Codex tools:",
         40,
         347,
         532,

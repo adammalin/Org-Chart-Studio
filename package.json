@@ -17,6 +17,9 @@
     "desktop": "node scripts/start-electron.mjs",
     "desktop:smoke": "ORGCHART_ELECTRON_SMOKE=1 node scripts/start-electron.mjs",
     "test:desktop": "npm run build && npm run desktop:smoke",
+    "mcp:start": "node mcp/server.mjs",
+    "mcp:configure": "node scripts/configure-orgchart-mcp.mjs install",
+    "mcp:remove": "node scripts/configure-orgchart-mcp.mjs remove",
     "security:scan": "node scripts/check-no-chart-data.mjs --tracked",
     "pretest": "npm run security:scan",
     "typecheck": "tsc --noEmit",
@@ -24,6 +27,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@phosphor-icons/react": "^2.1.10",
     "@xyflow/react": "^12.11.2",
     "elkjs": "^0.11.1",
@@ -32,7 +36,8 @@
     "pdf-lib": "1.17.1",
     "pptxgenjs": "4.0.1",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.50.0",
@@ -56,7 +61,8 @@
   },
   "overrides": {
     "postcss": "8.5.25",
-    "sharp": "0.35.3"
+    "sharp": "0.35.3",
+    "undici": "7.29.0"
   },
   "type": "module"
 }

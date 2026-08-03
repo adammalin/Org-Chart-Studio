@@ -15,7 +15,7 @@ The repository intentionally contains no operational organizational charts, pers
 - Autosave working drafts and create named immutable versions.
 - Compare and restore saved versions without overwriting history.
 - Arrange chart cards with branch movement, area selection, alignment, distribution, pinning, undo, and redo.
-- Route connectors in separate lanes or optional same-parent sibling combs.
+- Route connectors in separate lanes or optional same-parent sibling combs, then pin and manually move individual orthogonal lanes when a chart needs visual judgment. A per-connector reset returns the relationship to automatic routing, and diagonal segments are never created.
 - Export SVG, PNG, vector PDF, editable PowerPoint, and accessible CSV from one shared scene model.
 - Use a dedicated Backup & restore workspace to create one encrypted-by-default or explicitly unencrypted package for the full library or selected charts, then restore merge-only copies.
 - Choose separate desktop folders for local working data and encrypted recovery packages.
@@ -32,7 +32,7 @@ Repository hooks and automated scans reject common database files, chart-shaped 
 
 Existing PowerPoint, Word, PDF, image, roster, and spreadsheet files are treated as source evidence rather than as authoritative databases. A reviewed structured CSV or JSON document becomes the editable source of truth after import.
 
-The application has no live AI endpoint. An external assistant may help normalize a cleared source into canonical CSV or JSON, but a person must review the result and explicitly confirm the import preview. Material must not be provided to an AI environment unless that use is authorized for the material.
+The application has no live AI endpoint. An external assistant may help normalize a cleared source into canonical CSV or JSON, but a person must review the result and explicitly confirm the import preview. The desktop source test can optionally register a bounded local MCP companion for deliberate chart listing, reading, validation, import, draft editing, and version saves while the app is running. It does not expose deletion, backup restore, source downloads, storage changes, passphrases, or publication. Material returned by any assistant tool enters that AI conversation and must not be used unless the environment and material are approved for one another.
 
 ## Desktop distribution
 

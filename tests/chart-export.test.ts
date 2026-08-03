@@ -17,6 +17,12 @@ import {
 } from "../lib/chart-export";
 import { buildChartPdf } from "../lib/chart-export-pdf";
 import { buildChartPptx } from "../lib/chart-export-pptx";
+import {
+  buildOrthogonalEdgeRoutes,
+  manualEdgeRouteFromRoute,
+  moveManualEdgeRouteLane,
+} from "../lib/edge-routing";
+import { NODE_HEIGHT, NODE_WIDTH } from "../lib/org-chart";
 
 const generatedAt = "2026-07-31T20:00:00.000Z";
 
@@ -110,6 +116,53 @@ test("combed export geometry matches the optional same-parent screen routing", (
   assert.equal(siblingEdges.length, 2);
   assert.equal(new Set(siblingEdges.map((edge) => edge.points[0].x)).size, 1);
   assert.equal(new Set(siblingEdges.map((edge) => edge.points[1].y)).size, 1);
+});
+
+test("exports translate saved connector pins into the page coordinate system", () => {
+  const chart = seedChartDocuments()[0];
+  const edge = chart.edges[0];
+  const routes = buildOrthogonalEdgeRoutes(
+    chart.nodes.map((node) => ({
+      id: node.id,
+      x: node.position.x,
+      y: node.position.y,
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
+    })),
+    chart.edges,
+  );
+  const route = routes.get(edge.id)!;
+  const control = route.controls.find(
+    (candidate) => candidate.axis === "y" || candidate.axis === "both",
+  )!;
+  const manualRoute = manualEdgeRouteFromRoute(route)!;
+  const pinnedY = manualRoute.points[control.pointIndex].y + 67;
+  const movedRoute = moveManualEdgeRouteLane(
+    manualRoute,
+    control.pointIndex,
+    "y",
+    pinnedY,
+  );
+  const pinnedChart = {
+    ...chart,
+    edges: chart.edges.map((candidate) =>
+      candidate.id === edge.id
+        ? { ...candidate, data: { ...candidate.data, manualRoute: movedRoute } }
+        : candidate,
+    ),
+  };
+
+  const scene = buildChartExportScene(pinnedChart, "internal", generatedAt);
+  const sourceNode = chart.nodes.find((node) => node.id === edge.source)!;
+  const exportedSource = scene.nodes.find((node) => node.id === edge.source)!;
+  const offsetY = exportedSource.y - sourceNode.position.y;
+  const exportedEdge = scene.edges.find((candidate) => candidate.id === edge.id)!;
+
+  assert.ok(exportedEdge.points.some((point) => point.y === pinnedY + offsetY));
+  exportedEdge.points.slice(0, -1).forEach((point, index) => {
+    const next = exportedEdge.points[index + 1];
+    assert.ok(point.x === next.x || point.y === next.y);
+  });
 });
 
 test("public export refuses to silently detach a unit from an internal ancestor", () => {

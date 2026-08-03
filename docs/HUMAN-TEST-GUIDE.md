@@ -75,11 +75,14 @@ Pass when each chart behaves as a separate saved document and no other chart is 
 10. Pin the card, run **Respect pins**, and confirm its position remains.
 11. Run a selected-branch layout and then a full layout.
 12. Choose **Separate lanes** under **Connectors**. Inspect a chart with adjacent branches and confirm every connector avoids cards and positive-length overlap with every other connector.
-13. Choose **Sibling combs**. Confirm children from one parent that sit on the same nearby row share an aligned trunk, while different parents and substantially different rows remain separate. Export a visual format and confirm it uses the selected connector mode.
-14. Use **Undo** and **Redo**, including `Command-Z` and `Shift-Command-Z` outside a form field.
-15. Press `/`, search for a unit, and confirm the matching card can be focused.
-16. Collapse and expand a branch.
-17. Open **Accessible table** and confirm the same units and parents appear there.
+13. Click one connector. Confirm its automatic corner handles and contextual route toolbar appear. Drag a hollow corner handle and confirm the related lane moves only horizontally or vertically, the controls become pinned, and no diagonal segment appears.
+14. Move either connected card and confirm the saved route reconnects with horizontal and vertical segments. Export SVG and PowerPoint and confirm the manual lane remains in the same relative place.
+15. Choose **Reset connector** and confirm only that relationship returns to automatic routing. Undo and redo the pin and reset.
+16. Choose **Sibling combs**. Confirm children from one parent that sit on the same nearby row share an aligned trunk, while different parents, substantially different rows, and manually pinned relationships remain separate. Export a visual format and confirm it uses the selected connector mode.
+17. Use **Undo** and **Redo**, including `Command-Z` and `Shift-Command-Z` outside a form field.
+18. Press `/`, search for a unit, and confirm the matching card can be focused.
+19. Collapse and expand a branch.
+20. Open **Accessible table** and confirm the same units and parents appear there.
 
 Pass when organizational changes and presentation-only changes remain distinguishable, blocking hierarchy errors prevent a saved version or export, and the table agrees with the visual chart.
 
@@ -145,6 +148,20 @@ Pass when all outputs derive from the same data and geometry, public-safe output
 10. Configure a OneDrive or Dropbox backup folder, choose **Unencrypted**, and confirm creation is blocked until encryption is turned on or a local folder is selected.
 
 Pass when both formats can be recovered without destructive replacement and unencrypted packages cannot be written directly to a recognized cloud-sync folder.
+
+## Test 7: optional local MCP companion
+
+1. During setup, accept the optional ChatGPT Desktop / Codex integration and restart that desktop client once.
+2. Open OrgChart Studio, then inspect MCP servers and confirm `orgchart_studio` is enabled.
+3. Call `list_charts` and verify it returns summaries without full node data. Call `get_chart` only on an approved test chart and confirm the current saved layout is returned.
+4. Call `validate_chart` and `list_chart_versions`; confirm neither changes the chart.
+5. Validate a synthetic canonical CSV through `validate_normalized_import`, then approve `import_normalized_chart`. Confirm it creates a separate draft rather than overwriting an existing chart.
+6. Read that draft, make one reviewed change through `replace_chart_draft`, and save an immutable checkpoint through `save_chart_version`. Confirm the app UI shows the update and new version.
+7. Confirm write tools request approval and that delete, backup restore, source-file download, storage, passphrase, and publication tools are absent.
+8. Quit OrgChart Studio and confirm a tool reports that the desktop app must be opened. Reopen it and confirm tools reconnect with the new session.
+9. Run `npm run mcp:remove`, restart ChatGPT Desktop or Codex, and confirm only the OrgChart Studio server was removed. Run `npm run mcp:configure` to restore it if needed.
+
+Pass when MCP is local and on-demand, read and write boundaries are accurate, stale writes are rejected, the app remains the validated source of truth, and no tool bypasses the normal chart/version workflow.
 
 ## Keyboard and accessibility checks
 

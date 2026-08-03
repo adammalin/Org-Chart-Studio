@@ -51,6 +51,7 @@ test("macOS source-test shell entry points pass zsh syntax checking", () => {
     "bootstrap-mac-source-test.zsh",
     "setup-mac-source-test.zsh",
     "start-mac-source-test.zsh",
+    "start-orgchart-mcp.zsh",
   ];
 
   for (const script of scripts) {
@@ -64,4 +65,19 @@ test("macOS source-test shell entry points pass zsh syntax checking", () => {
       `${script} failed syntax checking:\n${result.stderr}`,
     );
   }
+});
+
+test("macOS setup offers an optional least-privilege local MCP registration", () => {
+  const setupSource = readFileSync(
+    path.join(projectRoot, "scripts", "setup-mac-source-test.zsh"),
+    "utf8",
+  );
+  const packageJson = readFileSync(path.join(projectRoot, "package.json"), "utf8");
+
+  assert.match(setupSource, /Optional ChatGPT Desktop \/ Codex integration/);
+  assert.match(setupSource, /configure-orgchart-mcp\.mjs/);
+  assert.match(setupSource, /ORGCHART_SETUP_MCP/);
+  assert.match(packageJson, /"mcp:start"/);
+  assert.match(packageJson, /"mcp:configure"/);
+  assert.match(packageJson, /"mcp:remove"/);
 });

@@ -26,6 +26,7 @@ const APP_NAME = "ORNL OrgChart Studio";
 const APP_ID = "gov.ornl.orgchart-studio";
 const SERVER_READY_TIMEOUT_MS = 30_000;
 const SERVER_STOP_TIMEOUT_MS = 5_000;
+const MCP_RUNTIME_FILE_NAME = "mcp-runtime.json";
 const smokeTest = process.env.ORGCHART_ELECTRON_SMOKE === "1";
 const desktopToken = randomBytes(32).toString("hex");
 const smokeUserDataPath = smokeTest
@@ -69,6 +70,7 @@ app.whenReady().then(async () => {
     storageRuntime = initializeStorageLocations();
     registerStorageHandlers();
     serverUrl = await startLocalServer();
+    publishMcpRuntime(serverUrl);
     createMainWindow(serverUrl);
   } catch (error) {
     console.error(`${APP_NAME} could not start.`, error);
@@ -314,6 +316,49 @@ function registerStorageHandlers() {
   });
 }
 
+function mcpRuntimePath() {
+  return path.join(app.getPath("userData"), MCP_RUNTIME_FILE_NAME);
+}
+
+function publishMcpRuntime(url) {
+  const target = mcpRuntimePath();
+  const temporary = `${target}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      temporary,
+      `${JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        baseUrl: url,
+        token: desktopToken,
+        startedAt: new Date().toISOString(),
+      })}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    fs.renameSync(temporary, target);
+    try {
+      fs.chmodSync(target, 0o600);
+    } catch {
+      // Some Windows filesystems do not implement POSIX modes.
+    }
+  } catch (error) {
+    if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
+    console.error("The optional local MCP connection could not be published.", error);
+  }
+}
+
+function removeMcpRuntime() {
+  const target = mcpRuntimePath();
+  if (!fs.existsSync(target)) return;
+  try {
+    const descriptor = JSON.parse(fs.readFileSync(target, "utf8"));
+    if (descriptor?.pid === process.pid) fs.rmSync(target, { force: true });
+  } catch {
+    // Leave an unreadable file for the next app start to replace safely.
+  }
+}
+
 function createMainWindow(url) {
   mainWindow = new BrowserWindow({
     title: APP_NAME,
@@ -403,6 +448,10 @@ function createMainWindow(url) {
             versionId: initialVersion.id
           })
         }).then((response) => response.json());
+        const chartValidation = await fetch(
+          '/api/charts?resource=validate&chartId=' + encodeURIComponent(created.chart.id),
+          { cache: 'no-store' }
+        ).then((response) => response.json());
         const normalizedCsv = [
           'id,name,shortName,type,parentId,positionTitle,assignmentLabel,positionStatus,effectiveDate,publicationVisibility',
           'smoke-root,Smoke Organization,Smoke Organization,laboratory,,Director,Position vacant,vacant,Current,internal',
@@ -499,6 +548,10 @@ function createMainWindow(url) {
           staleAutosaveProtected:
             staleSaveResponse.status === 409 &&
             staleSave.currentVersion === 2,
+          chartValidationRoundTrip:
+            chartValidation.chartId === created.chart.id &&
+            chartValidation.valid === true &&
+            chartValidation.findings.length === 0,
           assistedImportRoundTrip:
             intakePreview.preview.rowCount === 2 &&
             imported.chart.sources.length === 2 &&
@@ -522,6 +575,15 @@ function createMainWindow(url) {
             unencryptedBackupSave.bytes > 0
         };
       })()`);
+      const runtimeFile = mcpRuntimePath();
+      const runtimeDescriptor = JSON.parse(fs.readFileSync(runtimeFile, "utf8"));
+      capabilities.mcpRuntimePublished =
+        runtimeDescriptor.version === 1 &&
+        runtimeDescriptor.pid === process.pid &&
+        runtimeDescriptor.baseUrl === serverUrl &&
+        runtimeDescriptor.token === desktopToken &&
+        (process.platform === "win32" ||
+          (fs.statSync(runtimeFile).mode & 0o077) === 0);
       const passed = Object.values(capabilities).every(Boolean);
       console.log(`ORGCHART_ELECTRON_SMOKE ${JSON.stringify({ passed, ...capabilities })}`);
       if (!passed) requestedExitCode = 1;
@@ -558,6 +620,7 @@ function isAllowedExternalUrl(value) {
 async function beginQuit() {
   if (quitting) return;
   quitting = true;
+  removeMcpRuntime();
   await stopLocalServer();
   allowWindowClose = true;
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();

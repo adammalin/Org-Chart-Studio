@@ -461,6 +461,45 @@ button:disabled {
   font-weight: 700;
 }
 
+.route-editor-toolbar {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 9px;
+  overflow-x: auto;
+  border-bottom: 1px solid color-mix(in srgb, var(--ornl-forge) 30%, var(--border-subtle));
+  background: color-mix(in srgb, var(--ornl-forge) 8%, var(--ornl-polar));
+  color: var(--ornl-hale-navy);
+  padding: 6px 14px;
+  white-space: nowrap;
+}
+
+.route-editor-toolbar__relationship {
+  display: inline-flex;
+  min-width: 190px;
+  align-items: center;
+  gap: 6px;
+}
+
+.route-editor-toolbar__relationship strong {
+  max-width: 290px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+
+.route-editor-toolbar__relationship small,
+.route-editor-toolbar__hint {
+  color: color-mix(in srgb, var(--ornl-dark-matter) 68%, var(--ornl-polar));
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.route-editor-toolbar__relationship small {
+  border-left: 1px solid color-mix(in srgb, var(--ornl-forge) 32%, transparent);
+  padding-left: 7px;
+}
+
 .button {
   display: inline-flex;
   min-height: 36px;
@@ -762,6 +801,54 @@ button:disabled {
   stroke-linecap: square;
   stroke-linejoin: miter;
   pointer-events: none;
+}
+
+.org-relationship-edge__halo.is-selected {
+  stroke: color-mix(in srgb, var(--ornl-forge) 22%, var(--surface-muted));
+  stroke-width: 9px;
+}
+
+.org-relationship-edge.is-selected {
+  stroke: var(--ornl-forge) !important;
+  stroke-width: 2.5px !important;
+}
+
+.route-corner-control {
+  cursor: grab;
+  pointer-events: all;
+}
+
+.route-corner-control:active {
+  cursor: grabbing;
+}
+
+.route-corner-control circle {
+  fill: var(--ornl-polar);
+  stroke: var(--ornl-forge);
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+
+.route-corner-control path {
+  fill: none;
+  stroke: var(--ornl-forge);
+  stroke-linecap: round;
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+
+.route-corner-control.is-pinned circle {
+  fill: var(--ornl-forge);
+  stroke: var(--ornl-polar);
+}
+
+.route-corner-control.is-pinned path {
+  stroke: var(--ornl-polar);
+}
+
+.route-corner-control.is-locked {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .react-flow__controls,

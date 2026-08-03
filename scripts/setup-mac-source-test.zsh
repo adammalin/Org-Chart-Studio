@@ -138,6 +138,44 @@ print ""
 print "Running the hidden Electron startup and local-storage check..."
 npm run desktop:smoke
 
+MCP_CONFIG_ROOT="${CODEX_HOME:-${HOME}/.codex}"
+MCP_CONFIG_PATH="${MCP_CONFIG_ROOT}/config.toml"
+MCP_MANAGED_MARKER="# BEGIN ORGCHART STUDIO MCP - managed by installer"
+MCP_SETUP_CHOICE="${ORGCHART_SETUP_MCP:-ask}"
+
+if [[ -f "${MCP_CONFIG_PATH}" ]] &&
+   grep -Fq "${MCP_MANAGED_MARKER}" "${MCP_CONFIG_PATH}"; then
+  MCP_SETUP_CHOICE="install"
+elif [[ "${MCP_SETUP_CHOICE}" == "ask" ]]; then
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    print ""
+    print "Optional ChatGPT Desktop / Codex integration"
+    print "This registers a local MCP companion. It works only while OrgChart Studio is open."
+    print "Read tools are automatic; tools that change a chart ask for approval."
+    print -n "Install the local MCP integration? [Y/n] " > /dev/tty
+    MCP_RESPONSE=""
+    read -r MCP_RESPONSE < /dev/tty || MCP_RESPONSE=""
+    case "${MCP_RESPONSE:l}" in
+      n|no) MCP_SETUP_CHOICE="skip" ;;
+      *) MCP_SETUP_CHOICE="install" ;;
+    esac
+  else
+    MCP_SETUP_CHOICE="skip"
+  fi
+fi
+
+if [[ "${MCP_SETUP_CHOICE}" == "1" ||
+      "${MCP_SETUP_CHOICE}" == "yes" ||
+      "${MCP_SETUP_CHOICE}" == "install" ]]; then
+  node "${PROJECT_ROOT}/scripts/configure-orgchart-mcp.mjs" install \
+    --project-root "${PROJECT_ROOT}" \
+    --config "${MCP_CONFIG_PATH}"
+  print "Restart ChatGPT Desktop or Codex once so it discovers OrgChart Studio MCP."
+else
+  print "Optional local MCP integration was not installed."
+  print "Install it later with: npm run mcp:configure"
+fi
+
 print ""
 print "Setup verified."
 print "The app stores its working data under your macOS Application Support folder by default."

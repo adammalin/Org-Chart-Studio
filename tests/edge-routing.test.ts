@@ -3,6 +3,8 @@ import test from "node:test";
 import type { Edge } from "@xyflow/react";
 import {
   buildOrthogonalEdgeRoutes,
+  manualEdgeRouteFromRoute,
+  moveManualEdgeRouteLane,
   type EdgeRoutingNode,
 } from "../lib/edge-routing";
 
@@ -54,6 +56,16 @@ function positiveLengthCollinearOverlaps(
     }
   }
   return overlaps;
+}
+
+function assertOrthogonal(points: Array<{ x: number; y: number }>) {
+  points.slice(0, -1).forEach((start, index) => {
+    const end = points[index + 1];
+    assert.ok(
+      Math.abs(start.x - end.x) < 0.01 || Math.abs(start.y - end.y) < 0.01,
+      `segment ${index} must be horizontal or vertical`,
+    );
+  });
 }
 
 test("global connector lanes avoid horizontal and vertical path overlap", () => {
@@ -157,4 +169,76 @@ test("combed routing leaves different target rows on independent lanes", () => {
   assert.equal(routes.get("near")?.bundleKey, undefined);
   assert.equal(routes.get("far")?.bundleKey, undefined);
   assert.notEqual(routes.get("near")?.sourceHandleId, routes.get("far")?.sourceHandleId);
+});
+
+test("a manually moved connector corner pins its lane without creating diagonals", () => {
+  const nodes = [node("parent", 100, 0), node("child", 420, 360)];
+  const edge: Edge = { id: "parent-child", source: "parent", target: "child" };
+  const automaticRoute = buildOrthogonalEdgeRoutes(nodes, [edge]).get(edge.id)!;
+  const manualRoute = manualEdgeRouteFromRoute(automaticRoute)!;
+  const movableControl = automaticRoute.controls.find(
+    (control) => control.axis === "y" || control.axis === "both",
+  )!;
+  const originalPoint = manualRoute.points[movableControl.pointIndex];
+  const movedRoute = moveManualEdgeRouteLane(
+    manualRoute,
+    movableControl.pointIndex,
+    "y",
+    originalPoint.y + 73,
+  );
+  const pinnedEdge: Edge = {
+    ...edge,
+    data: { manualRoute: movedRoute },
+  };
+
+  const route = buildOrthogonalEdgeRoutes(nodes, [pinnedEdge]).get(edge.id)!;
+
+  assert.equal(route.manual, true);
+  assert.ok(route.controls.every((control) => control.pinned));
+  assert.equal(
+    route.controls[movableControl.pointIndex].y,
+    originalPoint.y + 73,
+  );
+  assertOrthogonal(route.points);
+});
+
+test("pinned routes reconnect orthogonally after either card moves", () => {
+  const initialNodes = [node("parent", 0, 0), node("child", 360, 350)];
+  const edge: Edge = { id: "parent-child", source: "parent", target: "child" };
+  const automaticRoute = buildOrthogonalEdgeRoutes(initialNodes, [edge]).get(edge.id)!;
+  const manualRoute = manualEdgeRouteFromRoute(automaticRoute)!;
+  const pinnedEdge: Edge = { ...edge, data: { manualRoute } };
+  const movedNodes = [node("parent", 180, 40), node("child", 610, 430)];
+
+  const route = buildOrthogonalEdgeRoutes(movedNodes, [pinnedEdge]).get(edge.id)!;
+
+  assert.equal(route.manual, true);
+  assertOrthogonal(route.points);
+  assert.equal(route.points[0].y, movedNodes[0].y + movedNodes[0].height);
+  assert.equal(route.points.at(-1)?.y, movedNodes[1].y);
+});
+
+test("a pinned sibling route is kept separate from automatic combs", () => {
+  const nodes = [
+    node("parent", 400, 0),
+    node("child-a", 0, 300),
+    node("child-b", 350, 300),
+    node("child-c", 700, 300),
+  ];
+  const baseEdges: Edge[] = [
+    { id: "a", source: "parent", target: "child-a" },
+    { id: "b", source: "parent", target: "child-b" },
+    { id: "c", source: "parent", target: "child-c" },
+  ];
+  const automatic = buildOrthogonalEdgeRoutes(nodes, baseEdges, "combed");
+  const manualRoute = manualEdgeRouteFromRoute(automatic.get("b")!)!;
+  const edges = baseEdges.map((edge) =>
+    edge.id === "b" ? { ...edge, data: { manualRoute } } : edge,
+  );
+
+  const routes = buildOrthogonalEdgeRoutes(nodes, edges, "combed");
+
+  assert.equal(routes.get("b")?.manual, true);
+  assert.equal(routes.get("b")?.bundleKey, undefined);
+  assertOrthogonal(routes.get("b")!.points);
 });

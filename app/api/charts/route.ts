@@ -284,6 +284,22 @@ export async function GET(request: Request) {
       },
     });
   }
+  if (url.searchParams.get("resource") === "validate" && chartId) {
+    const row = await DB.prepare("SELECT * FROM charts WHERE id = ?")
+      .bind(chartId)
+      .first<ChartRow>();
+    if (!row) {
+      return Response.json({ error: "Chart not found." }, { status: 404 });
+    }
+    const chart = chartFromRow(row, []);
+    const findings = validateHierarchy(chart.nodes, chart.edges);
+    return Response.json({
+      chartId,
+      chartVersion: chart.version,
+      valid: !findings.some((finding) => finding.severity === "blocking"),
+      findings,
+    });
+  }
   if (url.searchParams.get("resource") === "versions" && chartId) {
     const result = await DB.prepare(
       "SELECT * FROM chart_versions WHERE chart_id = ? ORDER BY version DESC",

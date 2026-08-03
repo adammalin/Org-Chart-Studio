@@ -8,6 +8,7 @@ import {
 } from "./org-chart";
 import {
   buildOrthogonalEdgeRoutes,
+  manualEdgeRouteForEdge,
   sourcePortOffset,
   type ConnectorRoutingMode,
 } from "./edge-routing";
@@ -227,7 +228,7 @@ export function buildChartExportScene(
 
   const includedIds = new Set(includedNodes.map((node) => node.id));
   assertAudienceHierarchyClosed(chart, audience, includedIds);
-  const includedEdges = chart.edges.filter(
+  const sourceEdges = chart.edges.filter(
     (edge) => includedIds.has(edge.source) && includedIds.has(edge.target),
   );
   const minX = Math.min(...includedNodes.map((node) => node.position.x));
@@ -236,6 +237,23 @@ export function buildChartExportScene(
   const maxY = Math.max(...includedNodes.map((node) => node.position.y + NODE_HEIGHT));
   const offsetX = PADDING - minX;
   const offsetY = HEADER_HEIGHT + PADDING - minY;
+  const includedEdges = sourceEdges.map((edge) => {
+    const manualRoute = manualEdgeRouteForEdge(edge);
+    if (!manualRoute) return edge;
+    return {
+      ...edge,
+      data: {
+        ...edge.data,
+        manualRoute: {
+          ...manualRoute,
+          points: manualRoute.points.map((point) => ({
+            x: point.x + offsetX,
+            y: point.y + offsetY,
+          })),
+        },
+      },
+    };
+  });
 
   const baseNodes = includedNodes.map((node) => {
     const unit = node.data.unit;

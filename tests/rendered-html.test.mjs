@@ -19,6 +19,9 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.match(bundle, /Chart editor/);
   assert.match(bundle, /Separate lanes/);
   assert.match(bundle, /Sibling combs/);
+  assert.match(bundle, /Pin current route/);
+  assert.match(bundle, /Reset connector/);
+  assert.match(bundle, /Corners never become diagonal/);
   assert.match(bundle, /Select area/);
   assert.match(bundle, /Cards touched by the rectangle become a movable group/);
   assert.match(bundle, /Align selected cards left/);

@@ -10,6 +10,25 @@ export interface EdgeRoutingNode {
   height: number;
 }
 
+export interface EdgeRoutePoint {
+  x: number;
+  y: number;
+}
+
+export type RouteCornerAxis = "x" | "y" | "both" | "none";
+
+export interface RouteCornerControl extends EdgeRoutePoint {
+  pointIndex: number;
+  axis: RouteCornerAxis;
+  pinned: boolean;
+}
+
+export interface ManualEdgeRoute {
+  version: 1;
+  points: EdgeRoutePoint[];
+  targetPortOffset: number;
+}
+
 export interface OrthogonalEdgeRoute {
   edgeId: string;
   sourceId: string;
@@ -18,14 +37,14 @@ export interface OrthogonalEdgeRoute {
   targetHandleId: string;
   sourcePortIndex: number;
   sourcePortCount: number;
+  targetPortOffset: number;
   bundleKey?: string;
-  points: Array<{ x: number; y: number }>;
+  manual: boolean;
+  points: EdgeRoutePoint[];
+  controls: RouteCornerControl[];
 }
 
-interface Point {
-  x: number;
-  y: number;
-}
+type Point = EdgeRoutePoint;
 
 interface Segment {
   start: Point;
@@ -50,6 +69,7 @@ interface RouteGroup {
   sourceX: number;
   sourceY: number;
   bundleKey?: string;
+  manual: boolean;
 }
 
 const SOURCE_PORT_SPACING = 18;
@@ -61,6 +81,72 @@ const NODE_CLEARANCE = 12;
 const LANE_SPACING = 14;
 const MIN_LEAD = 20;
 const EPSILON = 0.5;
+
+function isFinitePoint(value: unknown): value is Point {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as { x?: unknown; y?: unknown };
+  return (
+    typeof candidate.x === "number" &&
+    Number.isFinite(candidate.x) &&
+    typeof candidate.y === "number" &&
+    Number.isFinite(candidate.y)
+  );
+}
+
+export function manualEdgeRouteForEdge(edge: Edge): ManualEdgeRoute | undefined {
+  const candidate = edge.data?.manualRoute;
+  if (!candidate || typeof candidate !== "object") return undefined;
+  const manualRoute = candidate as Partial<ManualEdgeRoute>;
+  if (
+    manualRoute.version !== 1 ||
+    !Array.isArray(manualRoute.points) ||
+    !manualRoute.points.length ||
+    !manualRoute.points.every(isFinitePoint) ||
+    typeof manualRoute.targetPortOffset !== "number" ||
+    !Number.isFinite(manualRoute.targetPortOffset)
+  ) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    points: manualRoute.points.map((point) => ({ ...point })),
+    targetPortOffset: manualRoute.targetPortOffset,
+  };
+}
+
+export function manualEdgeRouteFromRoute(
+  route: OrthogonalEdgeRoute,
+): ManualEdgeRoute | undefined {
+  const points = route.points.slice(1, -1).map((point) => ({ ...point }));
+  if (!points.length) return undefined;
+  return {
+    version: 1,
+    points,
+    targetPortOffset: route.targetPortOffset,
+  };
+}
+
+export function moveManualEdgeRouteLane(
+  manualRoute: ManualEdgeRoute,
+  pointIndex: number,
+  axis: Exclude<RouteCornerAxis, "both" | "none">,
+  value: number,
+): ManualEdgeRoute {
+  if (!Number.isFinite(value) || !manualRoute.points[pointIndex]) return manualRoute;
+  const points = manualRoute.points.map((point) => ({ ...point }));
+  const coordinate = axis;
+  const originalValue = points[pointIndex][coordinate];
+  points[pointIndex][coordinate] = value;
+
+  for (const neighborIndex of [pointIndex - 1, pointIndex + 1]) {
+    const neighbor = points[neighborIndex];
+    if (neighbor && Math.abs(neighbor[coordinate] - originalValue) <= EPSILON) {
+      neighbor[coordinate] = value;
+    }
+  }
+
+  return { ...manualRoute, points };
+}
 
 export function sourcePortOffset(
   siblingIndex: number,
@@ -117,6 +203,66 @@ function compressedPoints(points: Point[]): Point[] {
       Math.abs(point.y - next.y) <= EPSILON;
     return !vertical && !horizontal;
   });
+}
+
+function orthogonalizedPoints(points: Point[]): Point[] {
+  if (points.length < 2) return points.map((point) => ({ ...point }));
+  const result: Point[] = [{ ...points[0] }];
+  points.slice(1).forEach((point) => {
+    const previous = result.at(-1)!;
+    const aligned =
+      Math.abs(previous.x - point.x) <= EPSILON ||
+      Math.abs(previous.y - point.y) <= EPSILON;
+    if (!aligned) {
+      const beforePrevious = result.at(-2);
+      const arrivedVertically =
+        !beforePrevious || Math.abs(beforePrevious.x - previous.x) <= EPSILON;
+      result.push(
+        arrivedVertically
+          ? { x: previous.x, y: point.y }
+          : { x: point.x, y: previous.y },
+      );
+    }
+    result.push({ ...point });
+  });
+  return compressedPoints(result);
+}
+
+function routeCornerAxis(points: Point[], pointIndex: number): RouteCornerAxis {
+  const point = points[pointIndex];
+  if (!point || pointIndex <= 0 || pointIndex >= points.length - 1) return "none";
+  let canMoveX = false;
+  let canMoveY = false;
+  for (const neighborIndex of [pointIndex - 1, pointIndex + 1]) {
+    if (neighborIndex <= 0 || neighborIndex >= points.length - 1) continue;
+    const neighbor = points[neighborIndex];
+    if (Math.abs(neighbor.x - point.x) <= EPSILON) canMoveX = true;
+    if (Math.abs(neighbor.y - point.y) <= EPSILON) canMoveY = true;
+  }
+  if (canMoveX && canMoveY) return "both";
+  if (canMoveX) return "x";
+  if (canMoveY) return "y";
+  return "none";
+}
+
+function cornerControls(
+  points: Point[],
+  pinned: boolean,
+): RouteCornerControl[] {
+  return points.slice(1, -1).map((point, index) => ({
+    ...point,
+    pointIndex: index,
+    axis: routeCornerAxis(points, index + 1),
+    pinned,
+  }));
+}
+
+function manualRoutePoints(
+  source: Point,
+  target: Point,
+  manualRoute: ManualEdgeRoute,
+): Point[] {
+  return orthogonalizedPoints([source, ...manualRoute.points, target]);
 }
 
 function segmentsForPoints(points: Point[], bundleKey?: string): Segment[] {
@@ -400,12 +546,18 @@ function buildRouteGroups(
   edgesBySource.forEach((sourceEdges, sourceId) => {
     const source = nodeById.get(sourceId);
     if (!source) return;
-    const edgeGroups =
+    const manualEdges = sourceEdges.filter((edge) => manualEdgeRouteForEdge(edge));
+    const automaticEdges = sourceEdges.filter((edge) => !manualEdgeRouteForEdge(edge));
+    const automaticGroups =
       mode === "combed"
-        ? clusterEdgesByTargetRow(sourceEdges, nodeById).flatMap((cluster) =>
+        ? clusterEdgesByTargetRow(automaticEdges, nodeById).flatMap((cluster) =>
             cluster.length > 1 ? [cluster] : cluster.map((edge) => [edge]),
           )
-        : sourceEdges.map((edge) => [edge]);
+        : automaticEdges.map((edge) => [edge]);
+    const edgeGroups = [
+      ...manualEdges.map((edge) => [edge]),
+      ...automaticGroups,
+    ];
     const orderedGroups = edgeGroups
       .map((groupEdges) => ({
         edges: groupEdges,
@@ -436,12 +588,14 @@ function buildRouteGroups(
           group.edges.length > 1
             ? `${source.id}:comb-${portIndex}`
             : undefined,
+        manual: group.edges.some((edge) => Boolean(manualEdgeRouteForEdge(edge))),
       });
     });
   });
 
   return groups.sort(
     (left, right) =>
+      Number(right.manual) - Number(left.manual) ||
       Number(Boolean(right.bundleKey)) - Number(Boolean(left.bundleKey)) ||
       left.sourceY - right.sourceY ||
       left.sourceX - right.sourceX ||
@@ -537,17 +691,38 @@ export function buildOrthogonalEdgeRoutes(
     const combedRoutes = routeCombedGroup(group, nodes, reserved);
     const groupRoutes = group.edges.map((edge, edgeIndex) => {
       const target = group.targets[edgeIndex];
-      const points =
-        combedRoutes?.[edgeIndex] ??
-        routeIndependentEdge(
-          group.source,
-          target,
-          group.sourceX,
-          nodes,
-          reserved,
-          (group.portIndex - (group.portCount - 1) / 2) * LANE_SPACING,
-          group.bundleKey,
-        );
+      const manualRoute = manualEdgeRouteForEdge(edge);
+      const automaticPoints =
+        manualRoute
+          ? undefined
+          : combedRoutes?.[edgeIndex] ??
+            routeIndependentEdge(
+              group.source,
+              target,
+              group.sourceX,
+              nodes,
+              reserved,
+              (group.portIndex - (group.portCount - 1) / 2) * LANE_SPACING,
+              group.bundleKey,
+            );
+      const targetPortOffset = manualRoute
+        ? Math.max(
+            -TARGET_PORT_MAX_OFFSET,
+            Math.min(TARGET_PORT_MAX_OFFSET, manualRoute.targetPortOffset),
+          )
+        : (automaticPoints?.at(-1)?.x ?? target.x + target.width / 2) -
+          (target.x + target.width / 2);
+      const sourcePoint = { x: group.sourceX, y: group.sourceY };
+      const targetPoint = {
+        x: target.x + target.width / 2 + targetPortOffset,
+        y: target.y,
+      };
+      const points = manualRoute
+        ? manualRoutePoints(sourcePoint, targetPoint, manualRoute)
+        : automaticPoints!;
+      const controls = manualRoute
+        ? cornerControls([sourcePoint, ...manualRoute.points, targetPoint], true)
+        : cornerControls(points, false);
       const route: OrthogonalEdgeRoute = {
         edgeId: edge.id,
         sourceId: edge.source,
@@ -556,8 +731,11 @@ export function buildOrthogonalEdgeRoutes(
         targetHandleId: "parent",
         sourcePortIndex: group.portIndex,
         sourcePortCount: group.portCount,
-        bundleKey: group.bundleKey,
+        targetPortOffset,
+        bundleKey: manualRoute ? undefined : group.bundleKey,
+        manual: Boolean(manualRoute),
         points,
+        controls,
       };
       routes.set(edge.id, route);
       return route;

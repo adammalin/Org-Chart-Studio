@@ -118,9 +118,16 @@ import {
 import {
   buildOrthogonalEdgeRoutes,
   edgeRoutePath,
+  manualEdgeRouteForEdge,
+  manualEdgeRouteFromRoute,
+  moveManualEdgeRouteLane,
   sourcePortOffset,
   type ConnectorRoutingMode,
+  type EdgeRoutePoint,
+  type ManualEdgeRoute,
   type OrthogonalEdgeRoute,
+  type RouteCornerAxis,
+  type RouteCornerControl,
 } from "../lib/edge-routing";
 
 type LayoutMode = "preserve" | "branch" | "respect-pins" | "full";
@@ -175,6 +182,18 @@ interface GroupDragState {
   startingPositions: Map<string, { x: number; y: number }>;
 }
 
+interface RouteCornerDragState {
+  edgeId: string;
+  pointIndex: number;
+  allowedAxis: RouteCornerAxis;
+  lockedAxis?: "x" | "y";
+  startPointer: EdgeRoutePoint;
+  startPoint: EdgeRoutePoint;
+  manualRoute: ManualEdgeRoute;
+  snapshot: EditorSnapshot;
+  moved: boolean;
+}
+
 type EditorDialogState =
   | { kind: "create-chart"; name: string }
   | { kind: "add-child"; name: string; parentName: string }
@@ -216,8 +235,35 @@ function cloneEditorNodes(nodes: OrgFlowNode[]): OrgFlowNode[] {
 function cloneEditorEdges(edges: Edge[]): Edge[] {
   return edges.map((edge) => ({
     ...edge,
-    data: edge.data ? { ...edge.data } : undefined,
+    data: edge.data
+      ? {
+          ...edge.data,
+          manualRoute: manualEdgeRouteForEdge(edge),
+        }
+      : undefined,
   }));
+}
+
+function edgeWithManualRoute(
+  edge: Edge,
+  manualRoute?: ManualEdgeRoute,
+): Edge {
+  const data = { ...(edge.data ?? {}) };
+  if (manualRoute) data.manualRoute = manualRoute;
+  else delete data.manualRoute;
+  return { ...edge, data };
+}
+
+interface RelationshipEdgeRenderData extends Record<string, unknown> {
+  route?: OrthogonalEdgeRoute;
+  onCornerDragStart?: (
+    edgeId: string,
+    route: OrthogonalEdgeRoute,
+    control: RouteCornerControl,
+    pointer: EdgeRoutePoint,
+  ) => void;
+  onCornerDrag?: (edgeId: string, pointer: EdgeRoutePoint) => void;
+  onCornerDragEnd?: (edgeId: string) => void;
 }
 
 function editorSnapshot(
@@ -313,20 +359,58 @@ function OrgRelationshipEdge({
   id,
   data,
   style,
+  selected,
   markerStart,
   markerEnd,
   interactionWidth,
 }: EdgeProps) {
-  const route = data?.route as OrthogonalEdgeRoute | undefined;
+  const renderData = data as RelationshipEdgeRenderData | undefined;
+  const route = renderData?.route;
+  const { screenToFlowPosition } = useReactFlow();
   if (!route) return null;
   const path = edgeRoutePath(route);
 
+  const beginCornerDrag = (
+    event: React.PointerEvent<SVGGElement>,
+    control: RouteCornerControl,
+  ) => {
+    if (control.axis === "none") return;
+    event.preventDefault();
+    event.stopPropagation();
+    const pointerId = event.pointerId;
+    const pointer = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    renderData?.onCornerDragStart?.(id, route, control, pointer);
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      moveEvent.preventDefault();
+      renderData?.onCornerDrag?.(
+        id,
+        screenToFlowPosition({ x: moveEvent.clientX, y: moveEvent.clientY }),
+      );
+    };
+    const finishPointerDrag = (finishEvent: PointerEvent) => {
+      if (finishEvent.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finishPointerDrag);
+      window.removeEventListener("pointercancel", finishPointerDrag);
+      renderData?.onCornerDragEnd?.(id);
+    };
+    window.addEventListener("pointermove", handlePointerMove, { passive: false });
+    window.addEventListener("pointerup", finishPointerDrag);
+    window.addEventListener("pointercancel", finishPointerDrag);
+  };
+
   return (
     <>
-      <path className="org-relationship-edge__halo" d={path} />
+      <path
+        className={`org-relationship-edge__halo ${selected ? "is-selected" : ""}`}
+        d={path}
+      />
       <BaseEdge
         id={id}
         path={path}
+        className={selected ? "org-relationship-edge is-selected" : "org-relationship-edge"}
         style={{
           ...style,
           strokeLinecap: "square",
@@ -336,6 +420,31 @@ function OrgRelationshipEdge({
         markerEnd={markerEnd}
         interactionWidth={interactionWidth}
       />
+      {selected
+        ? route.controls.map((control) => (
+            <g
+              key={`${id}-corner-${control.pointIndex}`}
+              className={`route-corner-control nodrag nopan ${
+                control.pinned ? "is-pinned" : "is-automatic"
+              } ${control.axis === "none" ? "is-locked" : ""}`}
+              transform={`translate(${control.x} ${control.y})`}
+              role="button"
+              aria-label={`${control.pinned ? "Pinned" : "Automatic"} connector corner ${control.pointIndex + 1}`}
+              tabIndex={0}
+              onPointerDown={(event) => beginCornerDrag(event, control)}
+            >
+              <title>
+                {control.axis === "none"
+                  ? "This endpoint corner is locked"
+                  : control.pinned
+                    ? "Drag this pinned corner to move its lane"
+                    : "Drag to pin and move this connector lane"}
+              </title>
+              <circle r="8" />
+              <path d="M -3 -3 L 3 3 M 3 -3 L -3 3" />
+            </g>
+          ))
+        : null}
     </>
   );
 }
@@ -350,6 +459,7 @@ function StudioWorkspace() {
   const [libraryLoading, setLibraryLoading] = useState(true);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [selectedId, setSelectedId] = useState("");
+  const [selectedEdgeId, setSelectedEdgeId] = useState("");
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("respect-pins");
@@ -410,6 +520,7 @@ function StudioWorkspace() {
   const dragStartSnapshotRef = useRef<EditorSnapshot | null>(null);
   const branchDragRef = useRef<BranchDragState | null>(null);
   const groupDragRef = useRef<GroupDragState | null>(null);
+  const routeCornerDragRef = useRef<RouteCornerDragState | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const { fitView } = useReactFlow<OrgFlowNode>();
 
@@ -491,6 +602,7 @@ function StudioWorkspace() {
       setNodes(chart.nodes);
       setEdges(chart.edges);
       setSelectedId(chart.nodes[0]?.id ?? "");
+      setSelectedEdgeId("");
       setCollapsedIds(new Set());
       setSearchQuery("");
       setUndoStack([]);
@@ -611,6 +723,18 @@ function StudioWorkspace() {
     });
   }, []);
 
+  const pushUndoSnapshot = useCallback((snapshot: EditorSnapshot) => {
+    setUndoStack((current) => [...current.slice(-39), snapshot]);
+    setRedoStack([]);
+  }, []);
+
+  const recordCurrentState = useCallback(
+    (label: string) => {
+      pushUndoSnapshot(editorSnapshot(nodes, edges, selectedId, label));
+    },
+    [edges, nodes, pushUndoSnapshot, selectedId],
+  );
+
   const routingNodes = useDeferredValue(nodes);
 
   const edgeRoutes = useMemo(
@@ -627,6 +751,85 @@ function StudioWorkspace() {
         connectorRoutingMode,
       ),
     [connectorRoutingMode, edges, routingNodes],
+  );
+
+  const startRouteCornerDrag = useCallback(
+    (
+      edgeId: string,
+      route: OrthogonalEdgeRoute,
+      control: RouteCornerControl,
+      pointer: EdgeRoutePoint,
+    ) => {
+      if (control.axis === "none") return;
+      const edge = edges.find((candidate) => candidate.id === edgeId);
+      if (!edge) return;
+      const manualRoute =
+        manualEdgeRouteForEdge(edge) ?? manualEdgeRouteFromRoute(route);
+      if (!manualRoute?.points[control.pointIndex]) return;
+      routeCornerDragRef.current = {
+        edgeId,
+        pointIndex: control.pointIndex,
+        allowedAxis: control.axis,
+        startPointer: { ...pointer },
+        startPoint: { ...manualRoute.points[control.pointIndex] },
+        manualRoute,
+        snapshot: editorSnapshot(
+          nodes,
+          edges,
+          selectedId,
+          "moving and pinning a connector lane",
+        ),
+        moved: false,
+      };
+    },
+    [edges, nodes, selectedId],
+  );
+
+  const dragRouteCorner = useCallback(
+    (edgeId: string, pointer: EdgeRoutePoint) => {
+      const drag = routeCornerDragRef.current;
+      if (!drag || drag.edgeId !== edgeId) return;
+      const deltaX = pointer.x - drag.startPointer.x;
+      const deltaY = pointer.y - drag.startPointer.y;
+      if (!drag.lockedAxis) {
+        if (drag.allowedAxis === "x" || drag.allowedAxis === "y") {
+          drag.lockedAxis = drag.allowedAxis;
+        } else {
+          if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < 1) return;
+          drag.lockedAxis = Math.abs(deltaX) > Math.abs(deltaY) ? "x" : "y";
+        }
+      }
+      const axis = drag.lockedAxis;
+      const nextValue =
+        drag.startPoint[axis] + (axis === "x" ? deltaX : deltaY);
+      const manualRoute = moveManualEdgeRouteLane(
+        drag.manualRoute,
+        drag.pointIndex,
+        axis,
+        nextValue,
+      );
+      drag.moved = true;
+      setEdges((current) =>
+        current.map((edge) =>
+          edge.id === edgeId ? edgeWithManualRoute(edge, manualRoute) : edge,
+        ),
+      );
+    },
+    [setEdges],
+  );
+
+  const finishRouteCornerDrag = useCallback(
+    (edgeId: string) => {
+      const drag = routeCornerDragRef.current;
+      if (!drag || drag.edgeId !== edgeId) return;
+      routeCornerDragRef.current = null;
+      if (!drag.moved) return;
+      pushUndoSnapshot(drag.snapshot);
+      setNotice(
+        "Connector lane pinned. Its saved route remains horizontal and vertical and will be used by exports.",
+      );
+    },
+    [pushUndoSnapshot],
   );
 
   const sourcePortCounts = useMemo(() => {
@@ -684,20 +887,70 @@ function StudioWorkspace() {
         return {
           ...edge,
           type: "orgRelationship",
-          selectable: false,
-          focusable: false,
+          selectable: true,
+          focusable: true,
+          selected: edge.id === selectedEdgeId,
           sourceHandle: route?.sourceHandleId,
           targetHandle: route?.targetHandleId,
-          data: { ...edge.data, route },
+          data: {
+            ...edge.data,
+            route,
+            onCornerDragStart: startRouteCornerDrag,
+            onCornerDrag: dragRouteCorner,
+            onCornerDragEnd: finishRouteCornerDrag,
+          },
           hidden: hiddenIds.has(edge.source) || hiddenIds.has(edge.target),
         };
       });
     },
-    [edgeRoutes, edges, hiddenIds],
+    [
+      dragRouteCorner,
+      edgeRoutes,
+      edges,
+      finishRouteCornerDrag,
+      hiddenIds,
+      selectedEdgeId,
+      startRouteCornerDrag,
+    ],
   );
 
   const selectedNode =
     nodes.find((flowNode) => flowNode.id === selectedId) ?? nodes[0];
+  const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
+  const selectedEdgeRoute = selectedEdgeId ? edgeRoutes.get(selectedEdgeId) : undefined;
+  const selectedEdgeSource = nodes.find((node) => node.id === selectedEdge?.source);
+  const selectedEdgeTarget = nodes.find((node) => node.id === selectedEdge?.target);
+
+  const pinSelectedConnector = useCallback(() => {
+    if (!selectedEdge || !selectedEdgeRoute || selectedEdgeRoute.manual) return;
+    const manualRoute = manualEdgeRouteFromRoute(selectedEdgeRoute);
+    if (!manualRoute) {
+      setNotice("This connector is already a straight orthogonal line with no lane corners to pin.");
+      return;
+    }
+    recordCurrentState("pinning a connector route");
+    setEdges((current) =>
+      current.map((edge) =>
+        edge.id === selectedEdge.id ? edgeWithManualRoute(edge, manualRoute) : edge,
+      ),
+    );
+    setNotice(
+      "Current connector corners pinned. Drag a pin to move that horizontal or vertical lane.",
+    );
+  }, [recordCurrentState, selectedEdge, selectedEdgeRoute, setEdges]);
+
+  const resetSelectedConnector = useCallback(() => {
+    if (!selectedEdge || !manualEdgeRouteForEdge(selectedEdge)) return;
+    recordCurrentState("resetting a connector route");
+    setEdges((current) =>
+      current.map((edge) =>
+        edge.id === selectedEdge.id ? edgeWithManualRoute(edge) : edge,
+      ),
+    );
+    setNotice(
+      "Connector pins cleared. Automatic non-overlapping routing is controlling this relationship again.",
+    );
+  }, [recordCurrentState, selectedEdge, setEdges]);
   const selectedCardCount = nodes.filter((flowNode) => flowNode.selected).length;
   const selectedParentEdge = edges.find((edge) => edge.target === selectedNode?.id);
   const findings = useMemo(
@@ -742,18 +995,6 @@ function StudioWorkspace() {
   const eligibleParents = nodes.filter(
     (flowNode) =>
       flowNode.id !== selectedNode?.id && !selectedDescendantIds.has(flowNode.id),
-  );
-
-  const pushUndoSnapshot = useCallback((snapshot: EditorSnapshot) => {
-    setUndoStack((current) => [...current.slice(-39), snapshot]);
-    setRedoStack([]);
-  }, []);
-
-  const recordCurrentState = useCallback(
-    (label: string) => {
-      pushUndoSnapshot(editorSnapshot(nodes, edges, selectedId, label));
-    },
-    [edges, nodes, pushUndoSnapshot, selectedId],
   );
 
   const positionDraggedBranch = useCallback(
@@ -1075,6 +1316,7 @@ function StudioWorkspace() {
 
   const handleNodeClick: NodeMouseHandler<OrgFlowNode> = (_event, flowNode) => {
     setSelectedId(flowNode.id);
+    setSelectedEdgeId("");
   };
 
   const saveUnitChanges = (form: HTMLFormElement) => {
@@ -2340,6 +2582,54 @@ function StudioWorkspace() {
               </div>
             ) : null}
 
+            {selectedEdge && selectedEdgeRoute ? (
+              <div
+                className="route-editor-toolbar"
+                role="toolbar"
+                aria-label="Edit selected connector route"
+              >
+                <span className="route-editor-toolbar__relationship">
+                  <PushPin
+                    size={16}
+                    weight={selectedEdgeRoute.manual ? "fill" : "regular"}
+                    aria-hidden="true"
+                  />
+                  <strong>
+                    {selectedEdgeSource?.data.unit.shortName ?? "Parent"} →{" "}
+                    {selectedEdgeTarget?.data.unit.shortName ?? "Child"}
+                  </strong>
+                  <small>
+                    {selectedEdgeRoute.manual
+                      ? `${selectedEdgeRoute.controls.length} pinned corners`
+                      : "Automatic route"}
+                  </small>
+                </span>
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  onClick={pinSelectedConnector}
+                  disabled={selectedEdgeRoute.manual || !selectedEdgeRoute.controls.length}
+                  title="Keep the current orthogonal connector corners in their present locations"
+                >
+                  <PushPin size={16} aria-hidden="true" />
+                  Pin current route
+                </button>
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  onClick={resetSelectedConnector}
+                  disabled={!selectedEdgeRoute.manual}
+                  title="Remove manual corner positions and calculate this connector automatically"
+                >
+                  <ArrowCounterClockwise size={16} aria-hidden="true" />
+                  Reset connector
+                </button>
+                <span className="route-editor-toolbar__hint">
+                  Drag a corner handle to move its lane. Corners never become diagonal.
+                </span>
+              </div>
+            ) : null}
+
             <div
               className={`flow-surface ${marqueeSelectionEnabled ? "is-marquee-active" : ""}`}
             >
@@ -2356,6 +2646,11 @@ function StudioWorkspace() {
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onNodeClick={handleNodeClick}
+                onEdgeClick={(event, edge) => {
+                  event.stopPropagation();
+                  setSelectedEdgeId(edge.id);
+                }}
+                onPaneClick={() => setSelectedEdgeId("")}
                 onSelectionChange={({ nodes: selectedNodes }) => {
                   if (!selectedNodes.length) return;
                   setSelectedId((current) =>
@@ -2525,6 +2820,7 @@ function StudioWorkspace() {
               <span><i className="legend-dot legend-dot--acting" />Acting</span>
               <span><i className="legend-dot legend-dot--vacant" />Vacant</span>
               <span><MapPin size={14} weight="fill" aria-hidden="true" /> Dragging pins presentation only</span>
+              <span><PushPin size={14} aria-hidden="true" /> Click a connector to pin or reset its corners</span>
               <span>
                 <Selection size={14} aria-hidden="true" />
                 {selectedCardCount > 1
