@@ -12,7 +12,7 @@
 - [x] Confirm the final root commit passes the complete tests, lint, desktop smoke test, tracked scan, and reachable-history scan.
 - [x] Confirm the remote's reachable history contains only the intended root commit and no unintended branches, tags, releases, issues, pull requests, Actions artifacts, repository secrets, or variables.
 - [ ] Confirm every pre-rewrite commit identifier returns `404 Not Found`, or ask GitHub Support to purge the unreachable pre-rewrite objects and cached views. Rewriting and force-pushing a branch does not immediately delete those server-side objects. Follow GitHub's [sensitive-data removal guidance](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
-- [ ] Confirm an unauthenticated install after the repository visibility is intentionally changed.
+- [x] Confirm an unauthenticated install through the public GitHub API and archive with credentials removed from the environment, including dependency install, build, and Electron smoke verification.
 
 ## Required owner and institutional decisions
 
@@ -22,4 +22,4 @@
 - [ ] Define a public support and vulnerability-reporting contact before broad promotion.
 - [ ] Decide whether repository issues, discussions, forking, and Actions should be enabled for the public audience.
 
-Do not change repository visibility until every required owner and institutional decision is resolved. Public visibility is a separate, deliberate action and is not performed by the cleanup process.
+The repository was made public before the unreachable-object purge and owner/institutional decisions were resolved. Current visibility must not be represented as completed release approval.

@@ -148,8 +148,8 @@ def build_pdf(output: Path) -> None:
     draw_label(pdf, "01  First install or update", 40, 594)
     y = draw_wrapped_text(
         pdf,
-        "After the GitHub repository is public, copy both commands below. The second command "
-        "installs, builds, verifies, and launches OrgChart Studio.",
+        "Copy both commands below. No GitHub account or authentication is required. The second "
+        "command installs, builds, verifies, and launches OrgChart Studio.",
         40,
         575,
         532,
@@ -160,7 +160,7 @@ def build_pdf(output: Path) -> None:
     install_lines = [
         "/usr/bin/curl --fail --location --show-error \\",
         '  --output "$HOME/Downloads/orgchart-studio-install.zsh" \\',
-        '  "https://raw.githubusercontent.com/adammalin/Organizational-Chart-Platform/main/scripts/bootstrap-mac-source-test.zsh"',
+        '  "https://raw.githubusercontent.com/adammalin/Org-Chart-Studio/main/scripts/bootstrap-mac-source-test.zsh"',
         "",
         '/bin/zsh "$HOME/Downloads/orgchart-studio-install.zsh" \\',
         '  "$HOME/OrgChart-Studio-source-test"',
@@ -270,7 +270,7 @@ def build_pdf(output: Path) -> None:
         21,
         "Draft source test - not a signed /Applications package or an approved production system.",
     )
-    source_url = "https://github.com/adammalin/Organizational-Chart-Platform"
+    source_url = "https://github.com/adammalin/Org-Chart-Studio"
     pdf.setFillColor(ENERGY)
     pdf.setFont("Helvetica-Bold", 8.5)
     pdf.drawRightString(572, 21, source_url)

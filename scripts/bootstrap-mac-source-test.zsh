@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-DEFAULT_SOURCE_ARCHIVE_URL="https://github.com/adammalin/Organizational-Chart-Platform/archive/refs/heads/main.zip"
+DEFAULT_SOURCE_ARCHIVE_URL="https://github.com/adammalin/Org-Chart-Studio/archive/refs/heads/main.zip"
 SOURCE_ARCHIVE_URL="${ORGCHART_SOURCE_ARCHIVE_URL:-${DEFAULT_SOURCE_ARCHIVE_URL}}"
-SOURCE_REPOSITORY="adammalin/Organizational-Chart-Platform"
+SOURCE_REPOSITORY="adammalin/Org-Chart-Studio"
 SOURCE_REF="main"
 RESOLVED_SOURCE_REVISION="${ORGCHART_SOURCE_REVISION:-}"
 if [[ ! -d "${PWD}/.git" &&
@@ -61,7 +61,7 @@ if [[ -e "${TARGET_DIRECTORY}" ]]; then
 fi
 
 TEMPORARY_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/orgchart-studio-bootstrap.XXXXXX")"
-ARCHIVE_PATH="${TEMPORARY_DIRECTORY}/Organizational-Chart-Platform-main.zip"
+ARCHIVE_PATH="${TEMPORARY_DIRECTORY}/Org-Chart-Studio-main.zip"
 EXTRACT_DIRECTORY="${TEMPORARY_DIRECTORY}/extract"
 COMMIT_METADATA_PATH="${TEMPORARY_DIRECTORY}/commit.json"
 
@@ -75,19 +75,6 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p "${EXTRACT_DIRECTORY}"
-
-download_authenticated_revision() {
-  RESOLVED_SOURCE_REVISION="$(
-    gh api "repos/${SOURCE_REPOSITORY}/commits/${SOURCE_REF}" --jq '.sha'
-  )"
-  if [[ ! "${RESOLVED_SOURCE_REVISION}" =~ '^[0-9a-f]{40}$' ]]; then
-    print -u2 "GitHub did not return a valid commit revision for ${SOURCE_REF}."
-    exit 1
-  fi
-  gh api \
-    "repos/${SOURCE_REPOSITORY}/zipball/${RESOLVED_SOURCE_REVISION}" \
-    > "${ARCHIVE_PATH}"
-}
 
 download_public_revision() {
   local candidate_revision public_archive_url
@@ -112,12 +99,7 @@ download_public_revision() {
 }
 
 print "Downloading the latest main-branch source ZIP..."
-if [[ "${SOURCE_ARCHIVE_URL}" == "${DEFAULT_SOURCE_ARCHIVE_URL}" ]] &&
-   command -v gh >/dev/null 2>&1 &&
-   gh auth status >/dev/null 2>&1; then
-  print "Using authenticated GitHub access..."
-  download_authenticated_revision
-elif [[ "${SOURCE_ARCHIVE_URL}" == "${DEFAULT_SOURCE_ARCHIVE_URL}" ]]; then
+if [[ "${SOURCE_ARCHIVE_URL}" == "${DEFAULT_SOURCE_ARCHIVE_URL}" ]]; then
   print "Using public GitHub access..."
   if ! download_public_revision; then
     print -u2 "The repository is not publicly accessible at the expected GitHub location."

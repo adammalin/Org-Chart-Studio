@@ -12,17 +12,9 @@ const bootstrapPath = path.join(
   "bootstrap-mac-source-test.zsh",
 );
 
-test("macOS bootstrap pins public or authenticated downloads and records provenance", () => {
+test("macOS bootstrap uses public-only downloads and records provenance", () => {
   const source = readFileSync(bootstrapPath, "utf8");
 
-  assert.match(
-    source,
-    /repos\/\$\{SOURCE_REPOSITORY\}\/commits\/\$\{SOURCE_REF\}/,
-  );
-  assert.match(
-    source,
-    /repos\/\$\{SOURCE_REPOSITORY\}\/zipball\/\$\{RESOLVED_SOURCE_REVISION\}/,
-  );
   assert.match(
     source,
     /api\.github\.com\/repos\/\$\{SOURCE_REPOSITORY\}\/commits\/\$\{SOURCE_REF\}/,
@@ -33,6 +25,8 @@ test("macOS bootstrap pins public or authenticated downloads and records provena
   );
   assert.match(source, /INSTALL-REVISION\.txt/);
   assert.match(source, /Archive SHA-256:/);
+  assert.match(source, /adammalin\/Org-Chart-Studio/);
+  assert.doesNotMatch(source, /\bgh\b/);
 });
 
 test("macOS bootstrap preserves local output but refreshes the bundled guide", () => {

@@ -2,7 +2,7 @@
 
 Working technical prototype for the data-first, governed organizational chart platform summarized in the [public product overview](docs/PUBLIC-PRODUCT-OVERVIEW.md).
 
-The codebase has been technically sanitized for public review, but the GitHub repository should remain private until the owner has approved distribution terms, software-release requirements, and the draft ORNL visual treatment. Before changing visibility, the owner must also confirm that GitHub no longer serves unreachable pre-cleanup objects by exact identifier or ask GitHub Support to purge them. See the [public-release checklist](docs/PUBLIC-RELEASE-CHECKLIST.md), [security policy](SECURITY.md), and [notice](NOTICE.md). The package is deliberately marked `UNLICENSED`; public visibility alone would not grant reuse rights.
+This repository is a public technical preview. Public visibility does not resolve the remaining distribution, software-release, draft branding, or unreachable-object purge items in the [public-release checklist](docs/PUBLIC-RELEASE-CHECKLIST.md). See the [security policy](SECURITY.md) and [notice](NOTICE.md) for the source-only data boundary. The package remains deliberately marked `UNLICENSED`; public visibility alone does not grant reuse rights.
 
 This repository implements a coherent local Phase 1 human-test slice:
 
@@ -52,7 +52,7 @@ For a first install or a later update, run:
 ```bash
 /usr/bin/curl --fail --location --show-error \
   --output "$HOME/Downloads/orgchart-studio-install.zsh" \
-  "https://raw.githubusercontent.com/adammalin/Organizational-Chart-Platform/main/scripts/bootstrap-mac-source-test.zsh"
+  "https://raw.githubusercontent.com/adammalin/Org-Chart-Studio/main/scripts/bootstrap-mac-source-test.zsh"
 
 /bin/zsh "$HOME/Downloads/orgchart-studio-install.zsh" \
   "$HOME/OrgChart-Studio-source-test"
@@ -64,7 +64,7 @@ Later, start the verified copy with:
 /bin/zsh "$HOME/OrgChart-Studio-source-test/scripts/start-mac-source-test.zsh"
 ```
 
-After the repository is made public, the first command needs only the `curl` included with macOS. The bootstrap resolves `main` to one exact commit through GitHub's public API, downloads that commit, and records the commit and archive SHA-256 in `INSTALL-REVISION.txt` before running setup. Setup uses a compatible installed Node.js 22 runtime or downloads a private, pinned Node.js 22 runtime after checking its official SHA-256 checksum, installs exact package-lock versions, builds the local Worker, and runs a hidden Electron smoke test before opening the app. This source-test method does not create a signed application under `/Applications` and does not bypass macOS Gatekeeper.
+The first command needs only the `curl` included with macOS; GitHub CLI and GitHub authentication are not used. The bootstrap resolves `main` to one exact commit through GitHub's public API, downloads that commit, and records the commit and archive SHA-256 in `INSTALL-REVISION.txt` before running setup. Setup uses a compatible installed Node.js 22 runtime or downloads a private, pinned Node.js 22 runtime after checking its official SHA-256 checksum, installs exact package-lock versions, builds the local Worker, and runs a hidden Electron smoke test before opening the app. This source-test method does not create a signed application under `/Applications` and does not bypass macOS Gatekeeper.
 
 Working chart data is stored separately from the source at `~/Library/Application Support/ORNL OrgChart Studio/local-worker-data` by default. In **Sources & imports**, staff can choose another empty local folder for the live chart library and a different folder for encrypted backups. A live-folder change takes effect only after restart: the app copies every file, compares SHA-256 checksums, switches only after verification, and retains the prior folder as a recovery copy. Live data locations inside the source repository, OneDrive, Dropbox, iCloud, or another recognized cloud-sync root are rejected. The separate backup folder may be in OneDrive or Dropbox because the app writes only the passphrase-encrypted `.orgchart-backup` envelope there. Updating the source-test folder preserves the application-data directory, plus any `.runtime`, `node_modules`, local output, and local tool state inside the source folder; the bundled quick-start PDF alone is refreshed to the tested copy.
 
