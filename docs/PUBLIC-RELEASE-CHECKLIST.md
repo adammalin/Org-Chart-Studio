@@ -1,0 +1,25 @@
+# Public-release checklist
+
+## Technical repository checks
+
+- [x] User-facing chart storage starts empty.
+- [x] Test fixtures are fictional and never inserted into the user's library.
+- [x] Operational charts, rosters, source evidence, databases, and backups are absent from the intended public tree.
+- [x] The tracked-file and history scanner blocks chart-shaped data, non-synthetic workforce rows, source evidence, common credentials, ORNL email addresses, and user-specific home paths.
+- [x] Git hooks run the scanner before normal commits and pushes.
+- [x] macOS public-install instructions use the public GitHub API and an exact commit archive.
+- [x] The package is marked private and `UNLICENSED` to prevent accidental package publication or an implied open-source license.
+- [x] Confirm the final root commit passes the complete tests, lint, desktop smoke test, tracked scan, and reachable-history scan.
+- [x] Confirm the remote's reachable history contains only the intended root commit and no unintended branches, tags, releases, issues, pull requests, Actions artifacts, repository secrets, or variables.
+- [ ] Confirm every pre-rewrite commit identifier returns `404 Not Found`, or ask GitHub Support to purge the unreachable pre-rewrite objects and cached views. Rewriting and force-pushing a branch does not immediately delete those server-side objects. Follow GitHub's [sensitive-data removal guidance](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
+- [ ] Confirm an unauthenticated install after the repository visibility is intentionally changed.
+
+## Required owner and institutional decisions
+
+- [ ] Obtain authority to distribute the software and select approved license or other distribution terms.
+- [ ] Complete applicable software-release, cybersecurity, privacy, records-management, export-control, accessibility, content, and legal review.
+- [ ] Approve the product name and draft ORNL-inspired visual treatment; approved logo artwork is not included.
+- [ ] Define a public support and vulnerability-reporting contact before broad promotion.
+- [ ] Decide whether repository issues, discussions, forking, and Actions should be enabled for the public audience.
+
+Do not change repository visibility until every required owner and institutional decision is resolved. Public visibility is a separate, deliberate action and is not performed by the cleanup process.

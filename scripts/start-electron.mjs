@@ -1,0 +1,20 @@
+import { spawn } from "node:child_process";
+import electronPath from "electron";
+
+const child = spawn(electronPath, ["."], {
+  cwd: process.cwd(),
+  env: {
+    ...process.env,
+    ORGCHART_NODE_BIN: process.execPath,
+  },
+  stdio: "inherit",
+});
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.once(signal, () => child.kill(signal));
+}
+
+child.once("exit", (code, signal) => {
+  if (signal) process.kill(process.pid, signal);
+  else process.exit(code ?? 0);
+});

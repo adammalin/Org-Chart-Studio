@@ -1,0 +1,6 @@
+#!/bin/zsh
+set -euo pipefail
+
+HOOK_DIRECTORY="${0:A:h}"
+PROJECT_ROOT="${HOOK_DIRECTORY:h}"
+exec node "${PROJECT_ROOT}/scripts/check-no-chart-data.mjs" --staged
