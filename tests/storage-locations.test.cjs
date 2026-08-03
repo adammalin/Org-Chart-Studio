@@ -10,6 +10,7 @@ const {
   defaultDataDirectory,
   isCloudSyncedPath,
   pathsOverlap,
+  saveBackup,
   saveEncryptedBackup,
   scheduleDataDirectoryMigration,
   setBackupDirectory,
@@ -148,6 +149,26 @@ test("encrypted backups may be written to a separate cloud-sync folder", () => {
       JSON.parse(fs.readFileSync(saved.path, "utf8")).ciphertextBase64,
       "ciphertext",
     );
+    const unencryptedJson = JSON.stringify({
+      format: "orgchart-studio-library-backup",
+      schemaVersion: 2,
+      exportedAt: "2026-08-03T12:00:00.000Z",
+      chartCount: 1,
+      sourceFileCount: 0,
+      charts: [{ id: "test-chart" }],
+      chartVersions: [],
+      sourceFiles: [],
+    });
+    assert.throws(
+      () =>
+        saveBackup({
+          userDataPath: item.userDataPath,
+          fileName: "orgchart-studio-backup-unencrypted-cloud.orgchart-backup",
+          backupJson: unencryptedJson,
+          encrypted: false,
+        }),
+      /cannot be saved.*cloud-sync/i,
+    );
 
     const snapshot = storageSettingsSnapshot({
       userDataPath: item.userDataPath,
@@ -155,6 +176,38 @@ test("encrypted backups may be written to a separate cloud-sync folder", () => {
     });
     assert.equal(snapshot.backupDirectory, fs.realpathSync(backupDirectory));
     assert.equal(snapshot.dataDirectoryIsOutsideRepository, true);
+  } finally {
+    item.cleanup();
+  }
+});
+
+test("an explicitly unencrypted backup may be written to a separate local folder", () => {
+  const item = fixture();
+  try {
+    const backupDirectory = path.join(item.root, "local-backups");
+    fs.mkdirSync(backupDirectory, { recursive: true });
+    setBackupDirectory({
+      userDataPath: item.userDataPath,
+      projectRoot: item.projectRoot,
+      selectedDirectory: backupDirectory,
+    });
+    const backupJson = JSON.stringify({
+      format: "orgchart-studio-library-backup",
+      schemaVersion: 2,
+      exportedAt: "2026-08-03T12:00:00.000Z",
+      chartCount: 1,
+      sourceFileCount: 0,
+      charts: [{ id: "test-chart" }],
+      chartVersions: [],
+      sourceFiles: [],
+    });
+    const saved = saveBackup({
+      userDataPath: item.userDataPath,
+      fileName: "orgchart-studio-backup-unencrypted-local.orgchart-backup",
+      backupJson,
+      encrypted: false,
+    });
+    assert.equal(JSON.parse(fs.readFileSync(saved.path, "utf8")).chartCount, 1);
   } finally {
     item.cleanup();
   }

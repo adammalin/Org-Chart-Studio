@@ -12,6 +12,13 @@ const ADDITIONAL_DATA = new TextEncoder().encode(
   `${ENCRYPTED_BACKUP_FORMAT}:v${ENCRYPTED_BACKUP_VERSION}`,
 );
 
+export type BackupProtection = "encrypted" | "unencrypted";
+
+export interface OpenedLibraryBackup {
+  backup: LibraryBackup;
+  protection: BackupProtection;
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunkSize = 0x8000;
@@ -116,4 +123,23 @@ export async function decryptLibraryBackup(
   } catch {
     throw new Error("The backup could not be decrypted. Check the passphrase and file integrity.");
   }
+}
+
+export async function openLibraryBackup(
+  value: unknown,
+  passphrase = "",
+): Promise<OpenedLibraryBackup> {
+  if (isLibraryBackup(value)) {
+    return { backup: value, protection: "unencrypted" };
+  }
+  if (!isEncryptedLibraryBackup(value)) {
+    throw new Error("This is not a supported OrgChart Studio backup.");
+  }
+  if (!passphrase) {
+    throw new Error("This backup is encrypted. Enter its passphrase to continue.");
+  }
+  return {
+    backup: await decryptLibraryBackup(value, passphrase),
+    protection: "encrypted",
+  };
 }

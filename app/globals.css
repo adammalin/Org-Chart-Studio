@@ -1434,6 +1434,7 @@ button:disabled {
 
 .library-panel,
 .sources-panel,
+.backup-panel,
 .history-panel,
 .export-panel {
   flex: 1;
@@ -1445,6 +1446,7 @@ button:disabled {
 
 .library-heading,
 .sources-heading,
+.backup-heading,
 .history-heading,
 .export-heading {
   display: flex;
@@ -1459,6 +1461,7 @@ button:disabled {
 
 .library-heading h1,
 .sources-heading h1,
+.backup-heading h1,
 .history-heading h1,
 .export-heading h1 {
   margin: 8px 0 5px;
@@ -1470,6 +1473,7 @@ button:disabled {
 
 .library-heading p,
 .sources-heading p,
+.backup-heading p,
 .history-heading p,
 .export-heading p {
   max-width: 690px;
@@ -1477,6 +1481,27 @@ button:disabled {
   color: color-mix(in srgb, var(--ornl-dark-matter) 70%, var(--ornl-polar));
   font-size: 12px;
   line-height: 1.55;
+}
+
+.backup-heading__summary {
+  display: flex;
+  min-width: 190px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  color: var(--ornl-hale-navy);
+}
+
+.backup-heading__summary span {
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.backup-heading__summary strong {
+  color: var(--ornl-green);
+  font-size: 9px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
 }
 
 .export-summary {
@@ -2758,6 +2783,204 @@ button:disabled {
   line-height: 1.45;
 }
 
+.backup-scope {
+  min-width: 0;
+  margin: 14px 0 0;
+  border: 0;
+  padding: 0;
+}
+
+.backup-scope > legend {
+  margin-bottom: 7px;
+  color: var(--ornl-hale-navy);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.backup-scope__options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid var(--border-subtle);
+}
+
+.backup-scope__options > label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  background: var(--ornl-polar);
+  color: var(--ornl-hale-navy);
+  padding: 10px;
+  cursor: pointer;
+}
+
+.backup-scope__options > label + label {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.backup-scope__options > label.is-selected {
+  box-shadow: inset 0 -4px 0 var(--ornl-green);
+  background: var(--surface-green);
+}
+
+.backup-scope__options input,
+.backup-chart-selection__list input {
+  margin: 2px 0 0;
+  accent-color: var(--ornl-green);
+}
+
+.backup-scope__options span,
+.backup-chart-selection__list span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.backup-scope__options strong,
+.backup-chart-selection__list strong {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+
+.backup-scope__options small,
+.backup-chart-selection__list small {
+  color: color-mix(in srgb, var(--ornl-dark-matter) 65%, var(--ornl-polar));
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.backup-chart-selection {
+  border: 1px solid var(--border-subtle);
+  border-top: 0;
+  background: var(--ornl-polar);
+}
+
+.backup-chart-selection__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-muted);
+  color: var(--ornl-hale-navy);
+  padding: 7px 9px;
+  font-size: 8px;
+  font-weight: 850;
+}
+
+.backup-chart-selection__heading > div {
+  display: flex;
+  gap: 9px;
+}
+
+.backup-chart-selection__heading button {
+  border: 0;
+  background: transparent;
+  color: var(--ornl-green);
+  padding: 0;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.backup-chart-selection__heading button:disabled {
+  color: color-mix(in srgb, var(--ornl-dark-matter) 40%, var(--ornl-polar));
+  cursor: not-allowed;
+}
+
+.backup-chart-selection__list {
+  max-height: 190px;
+  overflow: auto;
+}
+
+.backup-chart-selection__list > label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 9px;
+  cursor: pointer;
+}
+
+.backup-chart-selection__list > label + label {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.backup-encryption-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 11px;
+  color: var(--ornl-green);
+  font-size: 8px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.backup-unencrypted-warning {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  margin-top: 12px;
+  border-left: 4px solid var(--ornl-forge);
+  background: color-mix(in srgb, var(--ornl-forge) 11%, var(--ornl-polar));
+  color: var(--ornl-hale-navy);
+  padding: 11px;
+}
+
+.backup-unencrypted-warning > svg {
+  color: var(--ornl-forge);
+}
+
+.backup-unencrypted-warning strong {
+  font-size: 10px;
+}
+
+.backup-unencrypted-warning p {
+  margin: 4px 0 9px;
+  color: color-mix(in srgb, var(--ornl-dark-matter) 72%, var(--ornl-polar));
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.backup-unencrypted-warning .backup-unencrypted-warning__blocked {
+  border-top: 1px solid color-mix(in srgb, var(--ornl-forge) 38%, var(--ornl-polar));
+  color: var(--ornl-spark);
+  padding-top: 8px;
+  font-weight: 850;
+}
+
+.backup-unencrypted-warning label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+  color: var(--ornl-hale-navy);
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.backup-unencrypted-warning input {
+  margin: 2px 0 0;
+  accent-color: var(--ornl-green);
+}
+
+.backup-action .field-stack > span small {
+  color: color-mix(in srgb, var(--ornl-dark-matter) 60%, var(--ornl-polar));
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: none;
+}
+
 .backup-action .field-stack {
   margin-top: 12px;
 }
@@ -2957,6 +3180,7 @@ button:disabled {
 
   .library-panel,
   .sources-panel,
+  .backup-panel,
   .history-panel,
   .export-panel {
     padding: 22px 14px;
@@ -2964,6 +3188,7 @@ button:disabled {
 
   .library-heading,
   .sources-heading,
+  .backup-heading,
   .history-heading,
   .export-heading {
     align-items: flex-start;
@@ -3074,6 +3299,7 @@ button:disabled {
 
   .library-heading,
   .sources-heading,
+  .backup-heading,
   .history-heading,
   .export-heading {
     display: block;

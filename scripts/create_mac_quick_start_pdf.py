@@ -196,7 +196,7 @@ def build_pdf(output: Path) -> None:
     draw_wrapped_text(
         pdf,
         "Create a blank chart, or use Sources & imports to validate a reviewed CSV, Excel, or JSON file. "
-        "In Desktop file locations, keep the live library in a local folder and select a different backup "
+        "Then open Backup & restore. Keep the live library in a local folder and select a different backup "
         "folder. OneDrive or Dropbox is appropriate only for the encrypted backup package.",
         40,
         232,

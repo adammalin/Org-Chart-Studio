@@ -30,11 +30,11 @@ Before recording results, open `$HOME/OrgChart-Studio-source-test/INSTALL-REVISI
 
 ## Test 0: choose protected storage locations
 
-1. Open **Sources & imports** in the installed desktop app.
+1. Open **Backup & restore** in the installed desktop app.
 2. Under **Desktop file locations**, confirm the live chart library shows a path outside the Git checkout and is labeled **Local only**.
 3. Choose a new empty local folder that is not in OneDrive, Dropbox, iCloud, or the source repository. Confirm the app schedules the change instead of switching while its database service is running.
 4. Restart from the storage panel. Confirm the app reopens, the live path changes, and existing test charts still load. Confirm the old folder remains available as a recovery copy.
-5. Choose a different backup folder. A OneDrive or Dropbox folder is allowed for this role.
+5. Choose a different backup folder. A OneDrive or Dropbox folder is allowed only for encrypted backups.
 6. Create an encrypted backup and confirm a timestamped `.orgchart-backup` file appears in that folder. Confirm no SQLite, D1, R2, JSON, CSV, or original source-evidence file is written beside it.
 7. Run `npm run security:scan` from the source checkout and confirm the tracked-data scan passes.
 
@@ -44,7 +44,7 @@ Pass when live data remains local and outside the repository, the two configured
 
 1. Choose a test owner and one person to record results.
 2. Use synthetic or approved sanitized charts only.
-3. Create an encrypted backup from **Sources & imports** before a test that uses pre-existing app data.
+3. Create an encrypted backup from **Backup & restore** before a test that uses pre-existing app data.
 4. Store the backup passphrase separately; the app cannot recover it.
 5. Record the app commit, macOS version, and whether the Mac is Apple silicon or Intel.
 
@@ -131,17 +131,20 @@ Pass when autosave protects the working draft, named versions are immutable chec
 
 Pass when all outputs derive from the same data and geometry, public-safe output excludes restricted fields, and the editable formats are genuinely editable.
 
-## Test 6: encrypted backup and merge-only recovery
+## Test 6: optional encryption and merge-only recovery
 
-1. From **Sources & imports**, choose a separate backup folder, enter a passphrase of at least 12 characters, and confirm it.
-2. Save the encrypted library backup. In the desktop app it should appear directly in the configured folder; browser development mode uses a download.
-3. Add or change a disposable chart.
-4. Restore the backup with its passphrase.
-5. Confirm restored charts, source records, and saved versions appear as new drafts with new identifiers.
-6. Confirm existing charts were not overwritten or deleted.
-7. Try a wrong passphrase and confirm restore fails without creating partial charts.
+1. From **Backup & restore**, choose a separate backup folder, select **Entire library** and **Encrypted (recommended)**, enter a passphrase of at least 12 characters, and confirm it.
+2. Save the encrypted library backup. In the desktop app it should appear as one file in the configured folder; browser development mode uses a download.
+3. Create a second backup with **Selected charts** and confirm only the checked charts are reported in the completed backup summary.
+4. Add or change a disposable chart.
+5. Restore the backup with its passphrase.
+6. Confirm restored charts, source records, and saved versions appear as new drafts with new identifiers.
+7. Confirm existing charts were not overwritten or deleted.
+8. Try a wrong passphrase and confirm restore fails without creating partial charts.
+9. Choose **Unencrypted**, acknowledge the readable-file warning, create a backup in a local folder, and restore it without entering a passphrase.
+10. Configure a OneDrive or Dropbox backup folder, choose **Unencrypted**, and confirm creation is blocked until encryption is turned on or a local folder is selected.
 
-Pass when the complete library can be recovered without destructive replacement.
+Pass when both formats can be recovered without destructive replacement and unencrypted packages cannot be written directly to a recognized cloud-sync folder.
 
 ## Keyboard and accessibility checks
 

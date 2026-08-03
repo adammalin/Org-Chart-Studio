@@ -3,6 +3,7 @@ import {
   LIBRARY_BACKUP_FORMAT,
   LIBRARY_BACKUP_VERSION,
   isLibraryBackup,
+  resolveBackupSelection,
   type BackupSourceFile,
   type LibraryBackup,
 } from "../../../lib/backup-format";
@@ -198,7 +199,7 @@ function noStoreJson(value: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(value), { ...init, headers });
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const { DB, SOURCE_FILES } = getBindings();
   await ensureSchema(DB);
   const [chartResult, sourceResult, versionResult] = await Promise.all([
@@ -206,9 +207,34 @@ export async function GET() {
     DB.prepare("SELECT * FROM source_records ORDER BY imported_at DESC").all<SourceRow>(),
     DB.prepare("SELECT * FROM chart_versions ORDER BY chart_id, version").all<VersionRow>(),
   ]);
-  const chartRows = chartResult.results.filter(
+  const availableChartRows = chartResult.results.filter(
     (row) => !isRetiredExampleChartId(row.id),
   );
+  const requestedChartIds = new URL(request.url).searchParams.getAll("chartId");
+  if (requestedChartIds.length > MAX_CHARTS) {
+    return noStoreJson(
+      { error: `A backup can include no more than ${MAX_CHARTS} selected charts.` },
+      { status: 413 },
+    );
+  }
+  const selection = resolveBackupSelection(
+    availableChartRows.map((row) => row.id),
+    requestedChartIds,
+  );
+  if (selection.missingChartIds.length) {
+    return noStoreJson(
+      { error: "One or more selected charts are no longer available. Refresh and try again." },
+      { status: 404 },
+    );
+  }
+  if (!selection.chartIds.length) {
+    return noStoreJson(
+      { error: "No charts are available to include in a backup." },
+      { status: 422 },
+    );
+  }
+  const selectedChartIds = new Set(selection.chartIds);
+  const chartRows = availableChartRows.filter((row) => selectedChartIds.has(row.id));
   const includedChartIds = new Set(chartRows.map((row) => row.id));
   const sourceRows = sourceResult.results.filter((row) => includedChartIds.has(row.chart_id));
   const versionRows = versionResult.results.filter((row) => includedChartIds.has(row.chart_id));
@@ -260,6 +286,7 @@ export async function GET() {
   const backup: LibraryBackup = {
     format: LIBRARY_BACKUP_FORMAT,
     schemaVersion: LIBRARY_BACKUP_VERSION,
+    scope: selection.scope,
     exportedAt: new Date().toISOString(),
     chartCount: charts.length,
     sourceFileCount: sourceFiles.length,

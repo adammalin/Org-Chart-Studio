@@ -15,6 +15,7 @@ const {
 const { installLocalOnlyNetworkPolicy } = require("./network-policy.cjs");
 const {
   applyPendingDataMigration,
+  saveBackup,
   saveEncryptedBackup,
   scheduleDataDirectoryMigration,
   setBackupDirectory,
@@ -300,6 +301,17 @@ function registerStorageHandlers() {
       encryptedJson: payload.encryptedJson,
     });
   });
+  ipcMain.handle("backup:save", (_event, payload) => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Backup details were not provided.");
+    }
+    return saveBackup({
+      userDataPath: app.getPath("userData"),
+      fileName: payload.fileName,
+      backupJson: payload.backupJson,
+      encrypted: payload.encrypted === true,
+    });
+  });
 }
 
 function createMainWindow(url) {
@@ -449,6 +461,22 @@ function createMainWindow(url) {
             ciphertextBase64: 'c21va2U='
           })
         );
+        const unencryptedBackupSave = await window.orgChartDesktop.saveBackup(
+          'orgchart-studio-backup-unencrypted-electron-smoke.orgchart-backup',
+          JSON.stringify({
+            format: 'orgchart-studio-library-backup',
+            schemaVersion: 2,
+            scope: 'all',
+            exportedAt: new Date().toISOString(),
+            chartCount: 1,
+            sourceFileCount: 0,
+            versionCount: 0,
+            charts: [{ id: 'smoke-backup-chart' }],
+            chartVersions: [],
+            sourceFiles: []
+          }),
+          false
+        );
         return {
           localOnly: location.hostname === '127.0.0.1',
           desktopBridge: window.orgChartDesktop?.isDesktop === true,
@@ -456,6 +484,7 @@ function createMainWindow(url) {
           externalRequestBlocked: await fetch('https://example.com/orgchart-network-test').then(() => false, () => true),
           chartLibraryVisible: document.body.textContent.includes('Organizational chart library'),
           sourcesVisible: document.body.textContent.includes('Sources & imports'),
+          backupsVisible: document.body.textContent.includes('Backup & restore'),
           startsWithoutExampleCharts: chartLibrary.charts.length === 0,
           localWriteRoundTrip: deleted.deleted === created.chart.id,
           workingDraftRoundTrip:
@@ -487,7 +516,10 @@ function createMainWindow(url) {
             storageSettings.backupDirectory !== storageSettings.dataDirectory,
           encryptedBackupFolderRoundTrip:
             encryptedBackupSave.fileName === 'orgchart-studio-backup-electron-smoke.orgchart-backup' &&
-            encryptedBackupSave.bytes > 0
+            encryptedBackupSave.bytes > 0,
+          unencryptedBackupFolderRoundTrip:
+            unencryptedBackupSave.fileName === 'orgchart-studio-backup-unencrypted-electron-smoke.orgchart-backup' &&
+            unencryptedBackupSave.bytes > 0
         };
       })()`);
       const passed = Object.values(capabilities).every(Boolean);

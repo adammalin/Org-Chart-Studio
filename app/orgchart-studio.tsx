@@ -99,7 +99,11 @@ import {
   importTemplateCsv,
   type ImportPreview,
 } from "../lib/import-org-chart";
-import { decryptLibraryBackup, encryptLibraryBackup } from "../lib/encrypted-backup";
+import {
+  encryptLibraryBackup,
+  openLibraryBackup,
+  type BackupProtection,
+} from "../lib/encrypted-backup";
 import type { LibraryBackup } from "../lib/backup-format";
 import {
   EXPORT_PRESETS,
@@ -120,7 +124,15 @@ import {
 } from "../lib/edge-routing";
 
 type LayoutMode = "preserve" | "branch" | "respect-pins" | "full";
-type WorkspaceView = "library" | "canvas" | "table" | "sources" | "history" | "exports";
+type WorkspaceView =
+  | "library"
+  | "canvas"
+  | "table"
+  | "sources"
+  | "backups"
+  | "history"
+  | "exports";
+type BackupScope = "all" | "selected";
 type ExportFormat = "svg" | "png" | "pdf" | "pptx";
 
 const CONNECTOR_ROUTING_STORAGE_KEY = "orgchart-studio-connector-routing-mode";
@@ -362,6 +374,12 @@ function StudioWorkspace() {
   const [importBusy, setImportBusy] = useState(false);
   const [backupPassphrase, setBackupPassphrase] = useState("");
   const [backupPassphraseConfirm, setBackupPassphraseConfirm] = useState("");
+  const [backupProtection, setBackupProtection] = useState<BackupProtection>("encrypted");
+  const [unencryptedBackupConfirmed, setUnencryptedBackupConfirmed] = useState(false);
+  const [backupScope, setBackupScope] = useState<BackupScope>("all");
+  const [backupSelectedChartIds, setBackupSelectedChartIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [restorePassphrase, setRestorePassphrase] = useState("");
   const [backupFile, setBackupFile] = useState<File | null>(null);
   const [backupBusy, setBackupBusy] = useState<"export" | "restore" | null>(null);
@@ -396,6 +414,11 @@ function StudioWorkspace() {
   const { fitView } = useReactFlow<OrgFlowNode>();
 
   const activeChart = charts.find((chart) => chart.id === activeChartId) ?? charts[0];
+  const selectedBackupCharts = charts.filter((chart) =>
+    backupSelectedChartIds.has(chart.id),
+  );
+  const unencryptedCloudBackupBlocked =
+    backupProtection === "unencrypted" && Boolean(desktopStorage?.backupIsCloudSynced);
   const version = activeChart
     ? `${activeChart.status.replace("_", " ").replace(/^./, (character) => character.toUpperCase())} v${activeChart.version}`
     : libraryLoading
@@ -1660,46 +1683,102 @@ function StudioWorkspace() {
     }
   };
 
-  const exportEncryptedBackup = async () => {
+  const chooseBackupScope = (scope: BackupScope) => {
+    setBackupScope(scope);
+    if (scope === "selected" && !selectedBackupCharts.length && activeChart) {
+      setBackupSelectedChartIds(new Set([activeChart.id]));
+    }
+  };
+
+  const setBackupChartSelected = (chartId: string, selected: boolean) => {
+    setBackupSelectedChartIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(chartId);
+      else next.delete(chartId);
+      return next;
+    });
+  };
+
+  const createBackup = async () => {
     setBackupMessage("");
-    if (backupPassphrase.length < 12) {
-      setBackupMessage("Use a passphrase containing at least 12 characters.");
+    if (!charts.length) {
+      setBackupMessage("Add or import at least one chart before creating a backup.");
       return;
     }
-    if (backupPassphrase !== backupPassphraseConfirm) {
-      setBackupMessage("The backup passphrases do not match.");
+    if (backupScope === "selected" && !selectedBackupCharts.length) {
+      setBackupMessage("Select at least one chart to include in this backup.");
       return;
+    }
+    if (backupProtection === "encrypted") {
+      if (backupPassphrase.length < 12) {
+        setBackupMessage("Use a passphrase containing at least 12 characters.");
+        return;
+      }
+      if (backupPassphrase !== backupPassphraseConfirm) {
+        setBackupMessage("The backup passphrases do not match.");
+        return;
+      }
+    } else {
+      if (!unencryptedBackupConfirmed) {
+        setBackupMessage("Confirm that you understand the unencrypted backup will be readable.");
+        return;
+      }
+      if (unencryptedCloudBackupBlocked) {
+        setBackupMessage(
+          "Choose a local backup folder or turn encryption on. Unencrypted backups cannot be saved directly to a cloud-sync folder.",
+        );
+        return;
+      }
     }
 
     setBackupBusy("export");
     try {
-      const response = await fetch("/api/backups", {
+      const backupQuery = new URLSearchParams();
+      if (backupScope === "selected") {
+        for (const chart of selectedBackupCharts) backupQuery.append("chartId", chart.id);
+      }
+      const queryString = backupQuery.toString();
+      const response = await fetch(`/api/backups${queryString ? `?${queryString}` : ""}`, {
         headers: { accept: "application/json" },
         cache: "no-store",
       });
       const data = (await response.json()) as LibraryBackup & { error?: string };
       if (!response.ok) throw new Error(data.error ?? "The backup could not be prepared.");
-      const encrypted = await encryptLibraryBackup(data, backupPassphrase);
+      const packageValue =
+        backupProtection === "encrypted"
+          ? await encryptLibraryBackup(data, backupPassphrase)
+          : data;
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const fileName = `orgchart-studio-backup-${stamp}.orgchart-backup`;
-      const serialized = JSON.stringify(encrypted);
+      const scopeLabel = data.scope === "selected" ? `selected-${data.chartCount}` : "library";
+      const fileName = `orgchart-studio-backup-${scopeLabel}-${backupProtection}-${stamp}.orgchart-backup`;
+      const serialized = JSON.stringify(packageValue);
       const desktopBridge = window.orgChartDesktop;
       const savedBackup =
         desktopBridge && desktopStorage?.backupDirectory
-          ? await desktopBridge.saveEncryptedBackup(fileName, serialized)
+          ? await desktopBridge.saveBackup(
+              fileName,
+              serialized,
+              backupProtection === "encrypted",
+            )
           : null;
       if (!savedBackup) {
         downloadTextFile(serialized, fileName, "application/json");
       }
       setBackupPassphrase("");
       setBackupPassphraseConfirm("");
+      setUnencryptedBackupConfirmed(false);
+      const protectionLabel = backupProtection === "encrypted" ? "Encrypted" : "Unencrypted";
       setBackupMessage(
-        `Encrypted backup created with ${data.chartCount} charts, ${data.versionCount ?? 0} saved versions, and ${data.sourceFileCount} stored source files.${savedBackup ? ` Saved to ${savedBackup.path}.` : " Downloaded through the browser."}`,
+        `${protectionLabel} backup created with ${data.chartCount} charts, ${data.versionCount ?? 0} saved versions, and ${data.sourceFileCount} stored source files.${savedBackup ? ` Saved to ${savedBackup.path}.` : " Downloaded through the browser."}`,
       );
       setNotice(
-        savedBackup
-          ? "Encrypted library backup saved to the configured backup folder. Store its passphrase separately."
-          : "Encrypted library backup downloaded. Store its passphrase separately.",
+        backupProtection === "encrypted"
+          ? savedBackup
+            ? "Encrypted backup saved to the configured backup folder. Store its passphrase separately."
+            : "Encrypted backup downloaded. Store its passphrase separately."
+          : savedBackup
+            ? "Unencrypted backup saved to the configured local folder. Anyone with the file can read its contents."
+            : "Unencrypted backup downloaded. Anyone with the file can read its contents.",
       );
     } catch (error) {
       setBackupMessage(error instanceof Error ? error.message : "The backup could not be created.");
@@ -1708,25 +1787,25 @@ function StudioWorkspace() {
     }
   };
 
-  const restoreEncryptedBackup = async () => {
+  const restoreBackup = async () => {
     setBackupMessage("");
-    if (!backupFile || !restorePassphrase) {
-      setBackupMessage("Choose an encrypted backup and enter its passphrase.");
+    if (!backupFile) {
+      setBackupMessage("Choose an OrgChart Studio backup file.");
       return;
     }
     if (backupFile.size > 38_000_000) {
-      setBackupMessage("The encrypted backup exceeds the 38 MB prototype upload limit.");
+      setBackupMessage("The backup exceeds the 38 MB prototype upload limit.");
       return;
     }
 
     setBackupBusy("restore");
     try {
       const envelope = JSON.parse(await backupFile.text()) as unknown;
-      const decrypted = await decryptLibraryBackup(envelope, restorePassphrase);
+      const opened = await openLibraryBackup(envelope, restorePassphrase);
       const response = await fetch("/api/backups", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(decrypted),
+        body: JSON.stringify(opened.backup),
       });
       const result = (await response.json()) as {
         restoredChartCount?: number;
@@ -1748,7 +1827,9 @@ function StudioWorkspace() {
       setBackupMessage(
         `Restore merged ${result.restoredChartCount ?? 0} charts, ${result.restoredVersionCount ?? 0} saved versions, and ${result.restoredSourceFileCount ?? 0} source files as new drafts.`,
       );
-      setNotice("Encrypted backup restored by merge. Existing charts were not changed or deleted.");
+      setNotice(
+        `${opened.protection === "encrypted" ? "Encrypted" : "Unencrypted"} backup restored by merge. Existing charts were not changed or deleted.`,
+      );
     } catch (error) {
       setBackupMessage(error instanceof Error ? error.message : "The backup could not be restored.");
     } finally {
@@ -1986,6 +2067,14 @@ function StudioWorkspace() {
           >
             <FileArrowUp size={19} aria-hidden="true" />
             <span>Sources & imports</span>
+          </button>
+          <button
+            type="button"
+            className={workspaceView === "backups" ? "is-active" : ""}
+            onClick={() => setWorkspaceView("backups")}
+          >
+            <FileLock size={19} aria-hidden="true" />
+            <span>Backup & restore</span>
           </button>
           <button
             type="button"
@@ -2991,7 +3080,12 @@ function StudioWorkspace() {
             )}
           </section>
         ) : (
-          <section className="sources-panel" aria-labelledby="sources-title">
+          <section
+            className={workspaceView === "backups" ? "backup-panel" : "sources-panel"}
+            aria-labelledby={workspaceView === "backups" ? "backup-title" : "sources-title"}
+          >
+            {workspaceView === "sources" ? (
+              <>
             <div className="sources-heading">
               <div>
                 <span className="eyebrow">Source-controlled intake</span>
@@ -3206,14 +3300,33 @@ function StudioWorkspace() {
                 </article>
               </div>
             </div>
+              </>
+            ) : null}
 
-            <section className="backup-card" aria-labelledby="backup-title">
+            {workspaceView === "backups" ? (
+              <>
+                <div className="backup-heading">
+                  <div>
+                    <span className="eyebrow">Independent recovery workspace</span>
+                    <h1 id="backup-title">Backup and restore</h1>
+                    <p>
+                      Create one recovery file for the entire chart library or only the charts
+                      you choose. Encryption is optional and separate from source intake and publication.
+                    </p>
+                  </div>
+                  <div className="backup-heading__summary">
+                    <span>{charts.length} charts available</span>
+                    <strong>Merge-only restore</strong>
+                  </div>
+                </div>
+
+            <section className="backup-card" aria-labelledby="backup-package-title">
               <div className="backup-card__heading">
                 <FileLock size={26} aria-hidden="true" />
                 <div>
                   <span className="eyebrow">Portable recovery copy</span>
-                  <h2 id="backup-title">Encrypted library backup</h2>
-                  <p>Includes every chart, saved version, source record, layout, and available original imported file.</p>
+                  <h2 id="backup-package-title">Portable database backup</h2>
+                  <p>Every package is one file containing the chosen charts and their related application data. Encryption is recommended but optional.</p>
                 </div>
               </div>
 
@@ -3269,7 +3382,11 @@ function StudioWorkspace() {
                       <code title={desktopStorage.backupDirectory ?? undefined}>
                         {desktopStorage.backupDirectory ?? "No backup folder selected"}
                       </code>
-                      <p>May be in OneDrive or Dropbox. The app writes only encrypted .orgchart-backup packages here.</p>
+                      <p>
+                        {desktopStorage.backupIsCloudSynced
+                          ? "Encrypted backups may be saved here. Unencrypted backups require a local folder."
+                          : "Encrypted or explicitly confirmed unencrypted .orgchart-backup packages may be saved here."}
+                      </p>
                       <button
                         type="button"
                         className="button button--secondary"
@@ -3314,45 +3431,194 @@ function StudioWorkspace() {
 
               <div className="security-boundary">
                 <ShieldWarning size={20} aria-hidden="true" />
-                <p><strong>Prototype boundary:</strong> authentication and production access controls are not connected. Use only synthetic or approved sanitized data. A backup passphrase cannot be recovered by the application.</p>
+                <p><strong>Prototype boundary:</strong> authentication and production access controls are not connected. Use only synthetic or approved sanitized data. Encrypted passphrases cannot be recovered; unencrypted backup contents are readable by anyone who obtains the file.</p>
               </div>
 
               <div className="backup-actions-grid">
                 <div className="backup-action">
-                  <div><span>01</span><h3>Create encrypted backup</h3></div>
-                  <p>Encryption happens in this browser with AES-256-GCM. The passphrase is never stored.</p>
-                  <label className="field-stack">
-                    <span>Backup passphrase</span>
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={backupPassphrase}
-                      onChange={(event) => setBackupPassphrase(event.target.value)}
-                      placeholder="At least 12 characters"
-                    />
-                  </label>
-                  <label className="field-stack">
-                    <span>Confirm passphrase</span>
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={backupPassphraseConfirm}
-                      onChange={(event) => setBackupPassphraseConfirm(event.target.value)}
-                      placeholder="Enter it again"
-                    />
-                  </label>
+                  <div><span>01</span><h3>Create backup</h3></div>
+                  <p>Choose the contents and whether the single backup file should be encrypted.</p>
+                  <fieldset className="backup-scope">
+                    <legend>Backup contents</legend>
+                    <div className="backup-scope__options">
+                      <label className={backupScope === "all" ? "is-selected" : ""}>
+                        <input
+                          type="radio"
+                          name="backup-scope"
+                          checked={backupScope === "all"}
+                          onChange={() => chooseBackupScope("all")}
+                        />
+                        <span>
+                          <strong>Entire library</strong>
+                          <small>All charts, layouts, versions, sources, and retained files</small>
+                        </span>
+                      </label>
+                      <label className={backupScope === "selected" ? "is-selected" : ""}>
+                        <input
+                          type="radio"
+                          name="backup-scope"
+                          checked={backupScope === "selected"}
+                          onChange={() => chooseBackupScope("selected")}
+                        />
+                        <span>
+                          <strong>Selected charts</strong>
+                          <small>Only chosen charts and their related application data</small>
+                        </span>
+                      </label>
+                    </div>
+                    {backupScope === "selected" ? (
+                      <div className="backup-chart-selection">
+                        <div className="backup-chart-selection__heading">
+                          <span>{selectedBackupCharts.length} of {charts.length} charts selected</span>
+                          <div>
+                            <button
+                              type="button"
+                              onClick={() => setBackupSelectedChartIds(new Set(charts.map((chart) => chart.id)))}
+                              disabled={!charts.length || selectedBackupCharts.length === charts.length}
+                            >
+                              Select all
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setBackupSelectedChartIds(new Set())}
+                              disabled={!selectedBackupCharts.length}
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+                        <div className="backup-chart-selection__list" role="group" aria-label="Charts included in backup">
+                          {charts.map((chart) => (
+                            <label key={chart.id}>
+                              <input
+                                type="checkbox"
+                                checked={backupSelectedChartIds.has(chart.id)}
+                                onChange={(event) => setBackupChartSelected(chart.id, event.target.checked)}
+                              />
+                              <span>
+                                <strong>{chart.name}</strong>
+                                <small>{chart.nodes.length} units · {chart.sources.length} sources · {chart.status.replace("_", " ")}</small>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </fieldset>
+                  <fieldset className="backup-scope backup-protection">
+                    <legend>File protection</legend>
+                    <div className="backup-scope__options">
+                      <label className={backupProtection === "encrypted" ? "is-selected" : ""}>
+                        <input
+                          type="radio"
+                          name="backup-protection"
+                          checked={backupProtection === "encrypted"}
+                          onChange={() => {
+                            setBackupProtection("encrypted");
+                            setUnencryptedBackupConfirmed(false);
+                          }}
+                        />
+                        <span>
+                          <strong>Encrypted (recommended)</strong>
+                          <small>Requires a passphrase to read or restore the backup</small>
+                        </span>
+                      </label>
+                      <label className={backupProtection === "unencrypted" ? "is-selected" : ""}>
+                        <input
+                          type="radio"
+                          name="backup-protection"
+                          checked={backupProtection === "unencrypted"}
+                          onChange={() => {
+                            setBackupProtection("unencrypted");
+                            setUnencryptedBackupConfirmed(false);
+                          }}
+                        />
+                        <span>
+                          <strong>Unencrypted</strong>
+                          <small>Readable JSON package with no passphrase</small>
+                        </span>
+                      </label>
+                    </div>
+                  </fieldset>
+                  {backupProtection === "encrypted" ? (
+                    <>
+                      <div className="backup-encryption-note">
+                        <FileLock size={16} aria-hidden="true" />
+                        <span>AES-256-GCM encryption happens on this device before the file is saved.</span>
+                      </div>
+                      <label className="field-stack">
+                        <span>Backup passphrase</span>
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          value={backupPassphrase}
+                          onChange={(event) => setBackupPassphrase(event.target.value)}
+                          placeholder="At least 12 characters"
+                        />
+                      </label>
+                      <label className="field-stack">
+                        <span>Confirm passphrase</span>
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          value={backupPassphraseConfirm}
+                          onChange={(event) => setBackupPassphraseConfirm(event.target.value)}
+                          placeholder="Enter it again"
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <div className="backup-unencrypted-warning">
+                      <ShieldWarning size={18} aria-hidden="true" />
+                      <div>
+                        <strong>No encryption will be applied</strong>
+                        <p>Anyone with this file can read its chart data, source records, and retained source files.</p>
+                        {unencryptedCloudBackupBlocked ? (
+                          <p className="backup-unencrypted-warning__blocked">
+                            The configured backup folder is cloud-synced. Choose a local folder or turn encryption on.
+                          </p>
+                        ) : null}
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={unencryptedBackupConfirmed}
+                            onChange={(event) => setUnencryptedBackupConfirmed(event.target.checked)}
+                          />
+                          <span>I understand this backup will not be protected by a passphrase.</span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
                   <button
                     type="button"
                     className="button button--primary button--full"
-                    disabled={backupBusy !== null}
-                    onClick={() => void exportEncryptedBackup()}
+                    disabled={
+                      backupBusy !== null ||
+                      !charts.length ||
+                      (backupScope === "selected" && !selectedBackupCharts.length) ||
+                      (backupProtection === "unencrypted" &&
+                        (!unencryptedBackupConfirmed || unencryptedCloudBackupBlocked))
+                    }
+                    onClick={() => void createBackup()}
                   >
-                    <FileLock size={17} aria-hidden="true" />
+                    {backupProtection === "encrypted" ? (
+                      <FileLock size={17} aria-hidden="true" />
+                    ) : (
+                      <DownloadSimple size={17} aria-hidden="true" />
+                    )}
                     {backupBusy === "export"
-                      ? "Encrypting backup…"
+                      ? backupProtection === "encrypted"
+                        ? "Encrypting backup…"
+                        : "Creating backup…"
+                      : unencryptedCloudBackupBlocked
+                        ? "Choose a local backup folder"
                       : desktopStorage?.backupDirectory
-                        ? "Encrypt and save to backup folder"
-                        : "Encrypt and download"}
+                        ? backupProtection === "encrypted"
+                          ? "Encrypt and save to backup folder"
+                          : "Save unencrypted backup"
+                        : backupProtection === "encrypted"
+                          ? "Encrypt and download"
+                          : "Download unencrypted backup"}
                   </button>
                 </div>
 
@@ -3361,7 +3627,7 @@ function StudioWorkspace() {
                   <p>Restore is merge-only. Every recovered chart receives a new ID and returns as a draft.</p>
                   <label className="backup-file-picker">
                     <UploadSimple size={22} aria-hidden="true" />
-                    <span>{backupFile?.name ?? "Choose encrypted backup"}</span>
+                    <span>{backupFile?.name ?? "Choose backup file"}</span>
                     <input
                       key={backupFile?.name ?? "empty-backup"}
                       type="file"
@@ -3370,30 +3636,33 @@ function StudioWorkspace() {
                     />
                   </label>
                   <label className="field-stack">
-                    <span>Backup passphrase</span>
+                    <span>Passphrase <small>(encrypted backups only)</small></span>
                     <input
                       type="password"
                       autoComplete="current-password"
                       value={restorePassphrase}
                       onChange={(event) => setRestorePassphrase(event.target.value)}
-                      placeholder="Passphrase used at export"
+                      placeholder="Leave blank for unencrypted backups"
                     />
                   </label>
                   <button
                     type="button"
                     className="button button--secondary button--full"
                     disabled={backupBusy !== null || !backupFile}
-                    onClick={() => void restoreEncryptedBackup()}
+                    onClick={() => void restoreBackup()}
                   >
                     <UploadSimple size={17} aria-hidden="true" />
-                    {backupBusy === "restore" ? "Validating restore…" : "Decrypt and restore copies"}
+                    {backupBusy === "restore" ? "Validating restore…" : "Restore copies"}
                   </button>
                 </div>
               </div>
 
               {backupMessage ? <div className="backup-message" role="status">{backupMessage}</div> : null}
             </section>
+              </>
+            ) : null}
 
+            {workspaceView === "sources" ? (
             <div className="source-register">
               <div className="source-register__heading">
                 <div><span className="eyebrow">Active chart</span><h2>{activeChart?.name ?? "No active chart"}</h2></div>
@@ -3436,6 +3705,7 @@ function StudioWorkspace() {
                 </div>
               )}
             </div>
+            ) : null}
           </section>
         )}
       </main>

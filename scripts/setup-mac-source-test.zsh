@@ -141,7 +141,7 @@ npm run desktop:smoke
 print ""
 print "Setup verified."
 print "The app stores its working data under your macOS Application Support folder by default."
-print "Use Sources & imports to choose a different local data folder and a separate encrypted-backup folder."
+print "Use Backup & restore to choose a different local data folder and a separate backup folder. Cloud-sync folders require encryption."
 print "Source updates do not replace working data. Live chart data is blocked from normal Git commits and pushes."
 print "For later launches, run: /bin/zsh \"${PROJECT_ROOT}/scripts/start-mac-source-test.zsh\""
 print ""

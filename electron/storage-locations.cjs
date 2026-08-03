@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const CONFIG_FILE_NAME = "storage-locations.json";
 const DEFAULT_DATA_FOLDER_NAME = "local-worker-data";
-const MAX_ENCRYPTED_BACKUP_BYTES = 100 * 1024 * 1024;
+const MAX_BACKUP_BYTES = 100 * 1024 * 1024;
 
 function normalized(value) {
   const absolute = path.resolve(value);
@@ -286,7 +286,7 @@ function sanitizeBackupFileName(fileName) {
     baseName !== fileName ||
     !/^orgchart-studio-backup-[A-Za-z0-9_-]+\.orgchart-backup$/.test(baseName)
   ) {
-    throw new Error("The encrypted backup filename is invalid.");
+    throw new Error("The backup filename is invalid.");
   }
   return baseName;
 }
@@ -296,7 +296,7 @@ function validateEncryptedBackup(encryptedJson) {
     throw new Error("The encrypted backup must be serialized JSON.");
   }
   const byteLength = Buffer.byteLength(encryptedJson, "utf8");
-  if (byteLength < 2 || byteLength > MAX_ENCRYPTED_BACKUP_BYTES) {
+  if (byteLength < 2 || byteLength > MAX_BACKUP_BYTES) {
     throw new Error("The encrypted backup is empty or exceeds the 100 MB safety limit.");
   }
   let parsed;
@@ -318,20 +318,52 @@ function validateEncryptedBackup(encryptedJson) {
   }
 }
 
-function saveEncryptedBackup({ userDataPath, fileName, encryptedJson }) {
+function validateUnencryptedBackup(backupJson) {
+  if (typeof backupJson !== "string") {
+    throw new Error("The unencrypted backup must be serialized JSON.");
+  }
+  const byteLength = Buffer.byteLength(backupJson, "utf8");
+  if (byteLength < 2 || byteLength > MAX_BACKUP_BYTES) {
+    throw new Error("The unencrypted backup is empty or exceeds the 100 MB safety limit.");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(backupJson);
+  } catch {
+    throw new Error("The unencrypted backup is not valid JSON.");
+  }
+  if (
+    parsed?.format !== "orgchart-studio-library-backup" ||
+    ![1, 2].includes(parsed?.schemaVersion) ||
+    !Array.isArray(parsed?.charts) ||
+    !Array.isArray(parsed?.sourceFiles) ||
+    parsed.chartCount !== parsed.charts.length ||
+    parsed.sourceFileCount !== parsed.sourceFiles.length
+  ) {
+    throw new Error("The file is not an OrgChart Studio unencrypted backup package.");
+  }
+}
+
+function saveBackup({ userDataPath, fileName, backupJson, encrypted }) {
   const config = readStorageConfig(userDataPath);
   if (!config.backupDirectory) {
     throw new Error("Choose a backup folder before saving directly from the desktop app.");
   }
   const directory = assertDirectoryExists(config.backupDirectory, "The backup folder");
+  if (!encrypted && isCloudSyncedPath(directory)) {
+    throw new Error(
+      "Unencrypted backups cannot be saved to OneDrive, Dropbox, iCloud, or another cloud-sync folder. Choose a local backup folder or turn encryption on.",
+    );
+  }
   const safeName = sanitizeBackupFileName(fileName);
-  validateEncryptedBackup(encryptedJson);
+  if (encrypted) validateEncryptedBackup(backupJson);
+  else validateUnencryptedBackup(backupJson);
   const target = path.join(directory, safeName);
   const temporary = path.join(directory, `.${safeName}.tmp-${process.pid}-${Date.now()}`);
   if (fs.existsSync(target)) {
     throw new Error("A backup with this filename already exists. Create a new backup instead.");
   }
-  fs.writeFileSync(temporary, `${encryptedJson}\n`, {
+  fs.writeFileSync(temporary, `${backupJson}\n`, {
     encoding: "utf8",
     flag: "wx",
     mode: 0o600,
@@ -345,6 +377,15 @@ function saveEncryptedBackup({ userDataPath, fileName, encryptedJson }) {
   return { path: target, fileName: safeName, bytes: fs.statSync(target).size };
 }
 
+function saveEncryptedBackup({ userDataPath, fileName, encryptedJson }) {
+  return saveBackup({
+    userDataPath,
+    fileName,
+    backupJson: encryptedJson,
+    encrypted: true,
+  });
+}
+
 module.exports = {
   applyPendingDataMigration,
   defaultDataDirectory,
@@ -353,6 +394,7 @@ module.exports = {
   isPathInside,
   pathsOverlap,
   readStorageConfig,
+  saveBackup,
   saveEncryptedBackup,
   scheduleDataDirectoryMigration,
   setBackupDirectory,

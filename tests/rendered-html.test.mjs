@@ -25,9 +25,16 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.match(bundle, /Distribute selected cards horizontally/);
   assert.match(bundle, /Accessible table/);
   assert.match(bundle, /Sources & imports/);
+  assert.match(bundle, /Backup & restore/);
   assert.match(bundle, /Publish & export/);
   assert.match(bundle, /Version history/);
-  assert.match(bundle, /Encrypted library backup/);
+  assert.match(bundle, /Portable database backup/);
+  assert.match(bundle, /Entire library/);
+  assert.match(bundle, /Selected charts/);
+  assert.match(bundle, /Encrypted \(recommended\)/);
+  assert.match(bundle, /Unencrypted/);
+  assert.match(bundle, /will not be protected by a passphrase/i);
+  assert.match(bundle, /one recovery file/i);
   assert.match(bundle, /Restore without overwriting/);
   assert.match(bundle, /Download PPTX/);
   assert.match(bundle, /Download table/);

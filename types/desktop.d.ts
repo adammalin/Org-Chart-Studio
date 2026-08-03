@@ -36,5 +36,10 @@ interface Window {
       fileName: string,
       encryptedJson: string,
     ): Promise<DesktopBackupSaveResult>;
+    saveBackup(
+      fileName: string,
+      backupJson: string,
+      encrypted: boolean,
+    ): Promise<DesktopBackupSaveResult>;
   };
 }

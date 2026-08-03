@@ -3,9 +3,14 @@ import test from "node:test";
 import {
   LIBRARY_BACKUP_FORMAT,
   LIBRARY_BACKUP_VERSION,
+  resolveBackupSelection,
   type LibraryBackup,
 } from "../lib/backup-format";
-import { decryptLibraryBackup, encryptLibraryBackup } from "../lib/encrypted-backup";
+import {
+  decryptLibraryBackup,
+  encryptLibraryBackup,
+  openLibraryBackup,
+} from "../lib/encrypted-backup";
 import { seedChartDocuments } from "../lib/chart-library";
 
 function fixture(): LibraryBackup {
@@ -34,6 +39,28 @@ function fixture(): LibraryBackup {
   };
 }
 
+test("backup scope includes the full available library when no charts are requested", () => {
+  assert.deepEqual(resolveBackupSelection(["chart-a", "chart-b"], []), {
+    scope: "all",
+    chartIds: ["chart-a", "chart-b"],
+    missingChartIds: [],
+  });
+});
+
+test("selected backup scope deduplicates chart IDs and reports unavailable selections", () => {
+  assert.deepEqual(
+    resolveBackupSelection(
+      ["chart-a", "chart-b", "chart-c"],
+      ["chart-c", "chart-a", "chart-c", "missing-chart"],
+    ),
+    {
+      scope: "selected",
+      chartIds: ["chart-c", "chart-a"],
+      missingChartIds: ["missing-chart"],
+    },
+  );
+});
+
 test("legacy schema version 1 backups remain recognizable", async () => {
   const current = fixture();
   const legacy: LibraryBackup = {
@@ -59,6 +86,20 @@ test("an encrypted library backup round-trips without changing chart data", asyn
   assert.equal(encrypted.encryption.keyLength, 256);
   assert.equal(encrypted.encryption.iterations, 250_000);
   assert.deepEqual(decrypted, backup);
+});
+
+test("an unencrypted library package opens without a passphrase", async () => {
+  const backup = fixture();
+  const opened = await openLibraryBackup(backup);
+
+  assert.equal(opened.protection, "unencrypted");
+  assert.deepEqual(opened.backup, backup);
+});
+
+test("an encrypted package reports that its passphrase is required", async () => {
+  const encrypted = await encryptLibraryBackup(fixture(), "correct horse battery staple");
+
+  await assert.rejects(openLibraryBackup(encrypted), /passphrase/i);
 });
 
 test("a wrong passphrase cannot decrypt a library backup", async () => {
