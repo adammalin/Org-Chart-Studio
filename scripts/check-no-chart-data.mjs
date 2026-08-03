@@ -19,6 +19,9 @@ const SAFE_JSON_FILES = new Set([
   "tsconfig.json",
 ]);
 const PUBLIC_BINARY_ALLOWLIST = new Set([
+  "docs/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf",
+]);
+const HISTORICAL_PUBLIC_BINARY_ALLOWLIST = new Set([
   "output/pdf/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf",
 ]);
 const PUBLIC_RELEASE_TEXT_SCAN_EXCLUSIONS = new Set([
@@ -115,6 +118,13 @@ export function blockedDataPath(filePath) {
     baseName.endsWith(".db-shm") ||
     baseName.endsWith(".db-wal")
   );
+}
+
+export function blockedHistoricalDataPath(filePath) {
+  if (HISTORICAL_PUBLIC_BINARY_ALLOWLIST.has(normalizeRepositoryPath(filePath))) {
+    return false;
+  }
+  return blockedDataPath(filePath);
 }
 
 function isSafeFixture(filePath) {
@@ -276,7 +286,7 @@ function scanHistory() {
 
   const findings = [];
   for (const candidate of candidates) {
-    if (blockedDataPath(candidate.filePath)) {
+    if (blockedHistoricalDataPath(candidate.filePath)) {
       findings.push({
         filePath: candidate.filePath,
         reason: `database, runtime data, or backup package in Git object ${candidate.objectId.slice(0, 12)}`,

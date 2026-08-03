@@ -148,12 +148,9 @@ if (( UPDATE_EXISTING )); then
     --exclude "/work/" \
     "${EXPANDED_DIRECTORY}/" "${TARGET_DIRECTORY}/"
 
-  QUICK_START_RELATIVE_PATH="output/pdf/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf"
-  if [[ -f "${EXPANDED_DIRECTORY}/${QUICK_START_RELATIVE_PATH}" ]]; then
-    mkdir -p "${TARGET_DIRECTORY}/output/pdf"
-    cp \
-      "${EXPANDED_DIRECTORY}/${QUICK_START_RELATIVE_PATH}" \
-      "${TARGET_DIRECTORY}/${QUICK_START_RELATIVE_PATH}"
+  LEGACY_QUICK_START_PATH="${TARGET_DIRECTORY}/output/pdf/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf"
+  if [[ -f "${LEGACY_QUICK_START_PATH}" ]]; then
+    rm "${LEGACY_QUICK_START_PATH}"
   fi
 else
   mv "${EXPANDED_DIRECTORY}" "${TARGET_DIRECTORY}"

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -29,21 +29,20 @@ test("macOS bootstrap uses public-only downloads and records provenance", () => 
   assert.doesNotMatch(source, /\bgh\b/);
 });
 
-test("macOS bootstrap preserves local output but refreshes the bundled guide", () => {
+test("macOS bootstrap preserves local output and moves the bundled guide into docs", () => {
   const source = readFileSync(bootstrapPath, "utf8");
 
   assert.match(source, /--exclude "\/output\/"/);
+  assert.doesNotMatch(source, /--exclude "\/docs\/"/);
   assert.match(
     source,
-    /QUICK_START_RELATIVE_PATH="output\/pdf\/ORNL-OrgChart-Studio-macOS-Quick-Start\.pdf"/,
+    /LEGACY_QUICK_START_PATH="\$\{TARGET_DIRECTORY\}\/output\/pdf\/ORNL-OrgChart-Studio-macOS-Quick-Start\.pdf"/,
   );
-  assert.match(
-    source,
-    /"\$\{EXPANDED_DIRECTORY\}\/\$\{QUICK_START_RELATIVE_PATH\}"/,
-  );
-  assert.match(
-    source,
-    /"\$\{TARGET_DIRECTORY\}\/\$\{QUICK_START_RELATIVE_PATH\}"/,
+  assert.equal(
+    existsSync(
+      path.join(projectRoot, "docs", "ORNL-OrgChart-Studio-macOS-Quick-Start.pdf"),
+    ),
+    true,
   );
 });
 

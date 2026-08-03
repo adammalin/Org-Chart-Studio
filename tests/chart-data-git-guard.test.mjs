@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   blockedDataPath,
+  blockedHistoricalDataPath,
   contentLooksLikeChartData,
   contentLooksLikePublicReleaseRisk,
   scanPaths,
@@ -22,7 +23,17 @@ test("Git guard blocks source evidence but allows the generated public guide", (
   assert.equal(blockedDataPath("private/chart-photo.jpeg"), true);
   assert.equal(blockedDataPath("private/source.pdf"), true);
   assert.equal(
+    blockedDataPath("docs/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf"),
+    false,
+  );
+  assert.equal(
     blockedDataPath("output/pdf/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf"),
+    true,
+  );
+  assert.equal(
+    blockedHistoricalDataPath(
+      "output/pdf/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf",
+    ),
     false,
   );
 });

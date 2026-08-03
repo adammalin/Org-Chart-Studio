@@ -74,7 +74,7 @@ The desktop renderer is prevented from making non-loopback network requests, so 
 
 These controls protect the normal application and Git workflow; they cannot stop a person from deliberately bypassing hooks with Git override flags or manually copying/decrypting data into another application. Approved handling and access controls still apply. A cloud provider selected as the backup location will sync the encrypted package, so keep the passphrase separately in an approved password manager.
 
-Run `npm run test:desktop` when developing the desktop wrapper. The one-page installation guide is generated under `output/pdf/`.
+Run `npm run test:desktop` when developing the desktop wrapper. The one-page installation guide is generated at [docs/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf](docs/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf).
 
 The human-test sequence and boundaries are documented in [docs/HUMAN-TEST-GUIDE.md](docs/HUMAN-TEST-GUIDE.md). The requirement-by-requirement local readiness record is [docs/READINESS-AUDIT.md](docs/READINESS-AUDIT.md).
 

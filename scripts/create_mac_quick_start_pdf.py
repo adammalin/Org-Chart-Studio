@@ -10,7 +10,7 @@ from reportlab.pdfgen import canvas
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "output" / "pdf" / "ORNL-OrgChart-Studio-macOS-Quick-Start.pdf"
+OUTPUT = ROOT / "docs" / "ORNL-OrgChart-Studio-macOS-Quick-Start.pdf"
 PAGE_W, PAGE_H = letter
 
 ORNL_GREEN = HexColor("#00662C")

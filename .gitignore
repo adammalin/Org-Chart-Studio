@@ -71,4 +71,4 @@ next-env.d.ts
 *.webp
 *.xls
 *.xlsx
-!output/pdf/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf
+!docs/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf
