@@ -160,7 +160,7 @@ def build_pdf(output: Path) -> None:
     install_lines = [
         "/usr/bin/curl --fail --location --show-error \\",
         '  --output "$HOME/Downloads/orgchart-studio-install.zsh" \\',
-        '  "https://raw.githubusercontent.com/adammalin/Org-Chart-Studio/main/scripts/bootstrap-mac-source-test.zsh"',
+        '  "https://raw.githubusercontent.com/adammalin/Org-Chart-Studio/refs/heads/main/scripts/bootstrap-mac-source-test.zsh"',
         "",
         '/bin/zsh "$HOME/Downloads/orgchart-studio-install.zsh" \\',
         '  "$HOME/OrgChart-Studio-source-test"',
