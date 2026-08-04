@@ -417,7 +417,57 @@ function createMainWindow(url) {
     if (!smokeTest) return;
     try {
       const capabilities = await mainWindow.webContents.executeJavaScript(`(async () => {
+        const waitFor = async (predicate, label, timeoutMs = 8000) => {
+          const deadline = Date.now() + timeoutMs;
+          while (Date.now() < deadline) {
+            const value = predicate();
+            if (value) return value;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          throw new Error('Timed out waiting for ' + label + '.');
+        };
+        const signalProposalReady = async (proposal, activityId) => {
+          await fetch('/api/ai-activity', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              action: 'complete',
+              activityId,
+              operation: 'replace_chart_draft',
+              label: 'Reviewing synthetic proposal',
+              chartId: proposal.chartId,
+              chartName: proposal.chartName,
+              succeeded: true,
+              completionKind: 'review_ready',
+              proposalId: proposal.id
+            })
+          });
+        };
+        const openProposalReview = async (proposal, activityId) => {
+          await signalProposalReady(proposal, activityId);
+          const reviewButton = await waitFor(
+            () => document.querySelector('.mcp-activity-hud__review'),
+            'the AI review receipt'
+          );
+          reviewButton.click();
+          return waitFor(
+            () => document.querySelector('.ai-review-panel'),
+            'the AI proposal panel'
+          );
+        };
+        const buttonReceivesPointer = (button) => {
+          const rect = button.getBoundingClientRect();
+          const hit = document.elementFromPoint(
+            rect.left + rect.width / 2,
+            rect.top + rect.height / 2
+          );
+          return hit === button || button.contains(hit);
+        };
         const chartLibrary = await fetch('/api/charts', { cache: 'no-store' }).then((response) => response.json());
+        const chartLibraryInitiallyVisible = await waitFor(
+          () => document.body.textContent.includes('Organizational chart library'),
+          'the chart library workspace'
+        );
         const created = await fetch('/api/charts', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -469,6 +519,74 @@ function createMainWindow(url) {
           '/api/charts?resource=validate&chartId=' + encodeURIComponent(created.chart.id),
           { cache: 'no-store' }
         ).then((response) => response.json());
+        const rejectedProposalDocument = {
+          ...restored.chart,
+          nodes: restored.chart.nodes.map((node, index) => index === 0 ? {
+            ...node,
+            data: {
+              ...node.data,
+              unit: { ...node.data.unit, assignmentLabel: 'Synthetic rejected proposal' }
+            }
+          } : node)
+        };
+        const rejectedProposal = await fetch('/api/ai-proposals', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'stage', chart: rejectedProposalDocument })
+        }).then((response) => response.json());
+        await openProposalReview(rejectedProposal.proposal, 'electron-smoke-reject');
+        const rejectButton = document.querySelector('[data-ai-proposal-action="reject"]');
+        const applyButtonBesideReject = document.querySelector('[data-ai-proposal-action="accept"]');
+        const rejectButtonClickable =
+          rejectButton instanceof HTMLButtonElement &&
+          !rejectButton.disabled &&
+          buttonReceivesPointer(rejectButton);
+        const applyButtonClickableBeforeReject =
+          applyButtonBesideReject instanceof HTMLButtonElement &&
+          !applyButtonBesideReject.disabled &&
+          buttonReceivesPointer(applyButtonBesideReject);
+        rejectButton.click();
+        await waitFor(
+          () => !document.querySelector('.ai-review-panel'),
+          'the rejected proposal panel to close'
+        );
+        const afterReject = await fetch('/api/charts', { cache: 'no-store' })
+          .then((response) => response.json())
+          .then((library) => library.charts.find((chart) => chart.id === created.chart.id));
+        const rejectRoundTrip =
+          afterReject.nodes[0].data.unit.assignmentLabel !== 'Synthetic rejected proposal';
+
+        const acceptedProposalDocument = {
+          ...afterReject,
+          nodes: afterReject.nodes.map((node, index) => index === 0 ? {
+            ...node,
+            data: {
+              ...node.data,
+              unit: { ...node.data.unit, assignmentLabel: 'Synthetic accepted proposal' }
+            }
+          } : node)
+        };
+        const acceptedProposal = await fetch('/api/ai-proposals', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'stage', chart: acceptedProposalDocument })
+        }).then((response) => response.json());
+        await openProposalReview(acceptedProposal.proposal, 'electron-smoke-accept');
+        const applyButton = document.querySelector('[data-ai-proposal-action="accept"]');
+        const applyButtonClickable =
+          applyButton instanceof HTMLButtonElement &&
+          !applyButton.disabled &&
+          buttonReceivesPointer(applyButton);
+        applyButton.click();
+        await waitFor(
+          () => !document.querySelector('.ai-review-panel'),
+          'the accepted proposal panel to close'
+        );
+        const afterAccept = await fetch('/api/charts', { cache: 'no-store' })
+          .then((response) => response.json())
+          .then((library) => library.charts.find((chart) => chart.id === created.chart.id));
+        const applyRoundTrip =
+          afterAccept.nodes[0].data.unit.assignmentLabel === 'Synthetic accepted proposal';
         const normalizedCsv = [
           'id,name,shortName,type,parentId,positionTitle,assignmentLabel,positionStatus,effectiveDate,publicationVisibility',
           'smoke-root,Smoke Organization,Smoke Organization,laboratory,,Director,Position vacant,vacant,Current,internal',
@@ -550,7 +668,7 @@ function createMainWindow(url) {
           desktopQuitVisible: Boolean(document.querySelector('[data-desktop-quit]')),
           userAgentIncludesElectron: navigator.userAgent.includes('Electron'),
           externalRequestBlocked: await fetch('https://example.com/orgchart-network-test').then(() => false, () => true),
-          chartLibraryVisible: document.body.textContent.includes('Organizational chart library'),
+          chartLibraryVisible: chartLibraryInitiallyVisible,
           sourcesVisible: document.body.textContent.includes('Sources & imports'),
           backupsVisible: document.body.textContent.includes('Backup & restore'),
           startsWithoutExampleCharts: chartLibrary.charts.length === 0,
@@ -571,6 +689,12 @@ function createMainWindow(url) {
             chartValidation.chartId === created.chart.id &&
             chartValidation.valid === true &&
             chartValidation.findings.length === 0,
+          aiProposalButtonsClickable:
+            rejectButtonClickable &&
+            applyButtonClickableBeforeReject &&
+            applyButtonClickable,
+          aiProposalRejectRoundTrip: rejectRoundTrip,
+          aiProposalApplyRoundTrip: applyRoundTrip,
           assistedImportRoundTrip:
             intakePreview.preview.rowCount === 2 &&
             imported.chart.sources.length === 2 &&

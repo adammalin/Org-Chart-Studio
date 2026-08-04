@@ -27,6 +27,8 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.match(bundle, /Review update/);
   assert.match(bundle, /Preview proposed changes/);
   assert.match(bundle, /Apply reviewed changes/);
+  assert.match(bundle, /data-ai-proposal-action/);
+  assert.match(bundle, /did not answer within 15 seconds/);
   assert.match(bundle, /AI-assisted change timeline/);
   assert.match(bundle, /Quit OrgChart Studio and stop its local server/);
   assert.match(bundle, /Wait for the current save to finish before quitting/);

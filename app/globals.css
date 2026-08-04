@@ -2392,6 +2392,7 @@ button:disabled {
   z-index: 130;
   inset: 0;
   background: color-mix(in srgb, var(--ornl-hale-navy) 9%, transparent);
+  pointer-events: none;
 }
 
 .ai-review-panel {
@@ -2405,6 +2406,8 @@ button:disabled {
   border-left: 1px solid color-mix(in srgb, var(--ornl-green) 45%, var(--ornl-polar));
   background: var(--ornl-polar);
   box-shadow: -20px 0 52px color-mix(in srgb, var(--ornl-hale-navy) 25%, transparent);
+  isolation: isolate;
+  pointer-events: auto;
 }
 
 .ai-review-panel__header {
@@ -2504,9 +2507,12 @@ button:disabled {
 }
 
 .ai-review-change-list {
+  position: relative;
+  z-index: 1;
   display: grid;
   align-content: start;
   gap: 10px;
+  min-height: 0;
   overflow-y: auto;
   padding: 14px;
 }
@@ -2603,9 +2609,12 @@ button:disabled {
 }
 
 .ai-review-panel__footer {
+  position: relative;
+  z-index: 3;
   border-top: 1px solid var(--border-subtle);
   background: var(--surface-muted);
   padding: 14px 18px 18px;
+  pointer-events: auto;
 }
 
 .ai-review-panel__footer p {
@@ -2619,6 +2628,20 @@ button:disabled {
   display: flex;
   justify-content: flex-end;
   gap: 9px;
+}
+
+.ai-review-panel__footer button {
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.ai-review-panel__error {
+  border-left: 4px solid var(--ornl-spark);
+  background: color-mix(in srgb, var(--ornl-spark) 7%, var(--ornl-polar));
+  color: var(--ornl-dark-matter) !important;
+  padding: 9px 10px;
+  font-weight: 750;
 }
 
 .ai-review-reject {

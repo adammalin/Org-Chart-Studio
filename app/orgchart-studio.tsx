@@ -539,6 +539,7 @@ function StudioWorkspace() {
   const [dismissedMcpRevision, setDismissedMcpRevision] = useState(0);
   const [pendingAiProposal, setPendingAiProposal] = useState<AiChartProposal | null>(null);
   const [aiProposalBusy, setAiProposalBusy] = useState<"load" | "accept" | "reject" | null>(null);
+  const [aiProposalError, setAiProposalError] = useState("");
   const [aiReviewCategory, setAiReviewCategory] = useState<"all" | AiChangeCategory>("all");
   const [aiActivities, setAiActivities] = useState<AiActivityRecord[]>([]);
   const hydratedChartRef = useRef<string | null>(null);
@@ -693,6 +694,8 @@ function StudioWorkspace() {
       }
       saveGenerationRef.current += 1;
       hydratedChartRef.current = null;
+      setAiProposalBusy(null);
+      setAiProposalError("");
       setPendingAiProposal(proposal);
       setAiReviewCategory("all");
       setActiveChartId(proposal.chartId);
@@ -777,11 +780,15 @@ function StudioWorkspace() {
       const proposal = pendingAiProposal;
       if (!proposal || aiProposalBusy) return;
       setAiProposalBusy(action);
+      setAiProposalError("");
+      const controller = new AbortController();
+      const requestTimeout = window.setTimeout(() => controller.abort(), 15_000);
       try {
         const response = await fetch("/api/ai-proposals", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ action, proposalId: proposal.id }),
+          signal: controller.signal,
         });
         const data = (await response.json()) as {
           chart?: ChartDocument;
@@ -828,17 +835,23 @@ function StudioWorkspace() {
             ? `Applied ${proposal.summary.total} reviewed AI change${proposal.summary.total === 1 ? "" : "s"} to ${resolvedChart.name}. Save a named version when this working draft is ready for a checkpoint.`
             : `Rejected the AI proposal. ${resolvedChart.name} was not changed.`,
         );
-        await dismissMcpActivity();
+        void dismissMcpActivity();
         await loadAiActivities(resolvedChart.id).catch(() => undefined);
         window.requestAnimationFrame(() => {
           hydratedChartRef.current = resolvedChart.id;
           void fitView({ duration: 320, padding: 0.14 });
         });
       } catch (error) {
-        setNotice(
-          error instanceof Error ? error.message : "The AI proposal could not be resolved.",
-        );
+        const message =
+          error instanceof DOMException && error.name === "AbortError"
+            ? "The local app did not answer within 15 seconds. The proposal is still unsaved; try again or restart OrgChart Studio."
+            : error instanceof Error
+              ? error.message
+              : "The AI proposal could not be resolved.";
+        setAiProposalError(message);
+        setNotice(message);
       } finally {
+        window.clearTimeout(requestTimeout);
         setAiProposalBusy(null);
       }
     },
@@ -4694,20 +4707,29 @@ function StudioWorkspace() {
                 Applying updates the working draft and records this review. Save a named
                 version afterward to link the AI activity to a checkpoint.
               </p>
+              {aiProposalError ? (
+                <p className="ai-review-panel__error" role="alert">
+                  {aiProposalError}
+                </p>
+              ) : null}
               <div>
                 <button
                   type="button"
                   className="button button--secondary ai-review-reject"
+                  data-ai-proposal-action="reject"
                   onClick={() => void resolveAiProposal("reject")}
                   disabled={aiProposalBusy !== null}
+                  aria-busy={aiProposalBusy === "reject"}
                 >
                   {aiProposalBusy === "reject" ? "Rejecting…" : "Reject proposal"}
                 </button>
                 <button
                   type="button"
                   className="button button--primary"
+                  data-ai-proposal-action="accept"
                   onClick={() => void resolveAiProposal("accept")}
                   disabled={aiProposalBusy !== null}
+                  aria-busy={aiProposalBusy === "accept"}
                 >
                   <Check size={17} weight="bold" aria-hidden="true" />
                   {aiProposalBusy === "accept" ? "Applying…" : "Apply reviewed changes"}

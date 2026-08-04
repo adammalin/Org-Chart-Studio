@@ -17,3 +17,12 @@ test("create, add-child, and metadata forms use an accessible in-app dialog", ()
   assert.match(workspaceSource, /aria-labelledby="editor-dialog-title"/);
   assert.match(workspaceSource, /autoFocus/);
 });
+
+test("AI proposal review keeps actionable buttons and failures inside its modal", () => {
+  assert.match(workspaceSource, /data-ai-proposal-action="reject"/);
+  assert.match(workspaceSource, /data-ai-proposal-action="accept"/);
+  assert.match(workspaceSource, /aria-busy=\{aiProposalBusy === "reject"\}/);
+  assert.match(workspaceSource, /aria-busy=\{aiProposalBusy === "accept"\}/);
+  assert.match(workspaceSource, /className="ai-review-panel__error" role="alert"/);
+  assert.match(workspaceSource, /controller\.abort\(\), 15_000/);
+});
