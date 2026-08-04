@@ -815,6 +815,8 @@ function StudioWorkspace() {
   const hydratedChartRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveGenerationRef = useRef(0);
+  const saveInFlightRef = useRef(false);
+  const saveQueuedRef = useRef(false);
   const chartsRef = useRef<ChartDocument[]>([]);
   const dragStartSnapshotRef = useRef<EditorSnapshot | null>(null);
   const branchDragRef = useRef<BranchDragState | null>(null);
@@ -1776,7 +1778,12 @@ function StudioWorkspace() {
       edges,
     });
     if (savedContent === editorContent) {
-      setSaveState("saved");
+      if (!saveInFlightRef.current) setSaveState("saved");
+      return;
+    }
+    if (saveInFlightRef.current) {
+      saveQueuedRef.current = true;
+      setSaveState("saving");
       return;
     }
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -1784,6 +1791,9 @@ function StudioWorkspace() {
     setSaveState("saving");
     saveTimerRef.current = setTimeout(async () => {
       saveTimerRef.current = null;
+      saveInFlightRef.current = true;
+      saveQueuedRef.current = false;
+      let saveSucceeded = false;
       const chartToSave: ChartDocument = {
         ...chartSnapshot,
         status: chartSnapshot.status === "current" ? "draft" : chartSnapshot.status,
@@ -1816,11 +1826,18 @@ function StudioWorkspace() {
           return;
         }
         if (!response.ok || !data.chart) throw new Error(data.error ?? "Save failed.");
-        if (saveGeneration !== saveGenerationRef.current) return;
-        setCharts((current) =>
-          current.map((chart) => (chart.id === data.chart!.id ? data.chart! : chart)),
+        const nextCharts = chartsRef.current.map((chart) =>
+          chart.id === data.chart!.id ? data.chart! : chart,
         );
-        setSaveState("saved");
+        chartsRef.current = nextCharts;
+        setCharts(nextCharts);
+        saveSucceeded = true;
+        if (
+          saveGeneration === saveGenerationRef.current &&
+          !saveQueuedRef.current
+        ) {
+          setSaveState("saved");
+        }
         if (data.returnedToDraft) {
           setNotice(
             `Editing began from Current v${chartSnapshot.version}. That approved checkpoint is preserved, and the working chart is now a Draft.`,
@@ -1828,6 +1845,17 @@ function StudioWorkspace() {
         }
       } catch {
         if (saveGeneration === saveGenerationRef.current) setSaveState("error");
+      } finally {
+        saveInFlightRef.current = false;
+        if (
+          saveSucceeded &&
+          (saveQueuedRef.current || saveGeneration !== saveGenerationRef.current)
+        ) {
+          saveQueuedRef.current = false;
+          setSaveRetryRevision((revision) => revision + 1);
+        } else if (!saveSucceeded) {
+          saveQueuedRef.current = false;
+        }
       }
     }, 700);
 
@@ -5021,38 +5049,43 @@ function StudioWorkspace() {
                   No cards or reporting lines in {activeChart?.name ?? "this chart"} are marked
                   Needs review.
                 </p>
-                {activeChart?.status === "draft" ? (
-                  <button
-                    type="button"
-                    className="button button--primary"
-                    onClick={() => requestLifecycleTransition(activeChart, "in_review")}
-                    disabled={saveState !== "saved"}
-                  >
-                    Submit chart for review
-                  </button>
-                ) : activeChart?.status === "in_review" ? (
-                  <button
-                    type="button"
-                    className="button button--primary"
-                    onClick={() => requestLifecycleTransition(activeChart, "current")}
-                    disabled={saveState !== "saved" || Boolean(blockingFindings.length)}
-                  >
-                    Mark chart Current
-                  </button>
-                ) : activeChart?.status === "current" ? (
-                  <strong>Current v{activeChart.lifecycle.lastCurrentVersion ?? activeChart.version} is the approved checkpoint.</strong>
-                ) : null}
-                {hasAnotherChartForSourceReview ? (
-                  <button
-                    type="button"
-                    className="button button--primary"
-                    onClick={openNextChartForSourceReview}
-                    disabled={saveState === "saving" || saveState === "error"}
-                  >
-                    Open next chart with reviews
-                    <CaretRight size={16} aria-hidden="true" />
-                  </button>
-                ) : null}
+                <div className="source-review-empty__actions">
+                  {activeChart?.status === "draft" ? (
+                    <button
+                      type="button"
+                      className="button button--primary"
+                      onClick={() => requestLifecycleTransition(activeChart, "in_review")}
+                      disabled={saveState !== "saved"}
+                    >
+                      Submit chart for review
+                    </button>
+                  ) : activeChart?.status === "in_review" ? (
+                    <button
+                      type="button"
+                      className="button button--primary"
+                      onClick={() => requestLifecycleTransition(activeChart, "current")}
+                      disabled={saveState !== "saved" || Boolean(blockingFindings.length)}
+                    >
+                      Mark chart Current
+                    </button>
+                  ) : activeChart?.status === "current" ? (
+                    <strong>
+                      Current v{activeChart.lifecycle.lastCurrentVersion ?? activeChart.version} is
+                      the approved checkpoint.
+                    </strong>
+                  ) : null}
+                  {hasAnotherChartForSourceReview ? (
+                    <button
+                      type="button"
+                      className="button button--primary"
+                      onClick={openNextChartForSourceReview}
+                      disabled={saveState === "saving" || saveState === "error"}
+                    >
+                      Open next chart with reviews
+                      <CaretRight size={16} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ) : visibleSourceReviewNodes.length || visibleSourceReviewEdges.length ? (
               <div className="source-review-list">

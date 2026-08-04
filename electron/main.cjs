@@ -602,6 +602,130 @@ function createMainWindow(url) {
           .then((library) => library.charts.find((chart) => chart.id === created.chart.id));
         const applyRoundTrip =
           afterAccept.nodes[0].data.unit.assignmentLabel === 'Synthetic accepted proposal';
+        const reviewRoot = {
+          ...afterAccept.nodes[0],
+          data: {
+            ...afterAccept.nodes[0].data,
+            unit: {
+              ...afterAccept.nodes[0].data.unit,
+              sourceCertainty: 'needs_review',
+              reviewNote: 'Confirm the synthetic root source.'
+            }
+          }
+        };
+        const reviewChild = {
+          ...structuredClone(reviewRoot),
+          id: 'electron-review-child',
+          position: { x: reviewRoot.position.x + 260, y: reviewRoot.position.y + 180 },
+          data: {
+            ...structuredClone(reviewRoot.data),
+            unit: {
+              ...structuredClone(reviewRoot.data.unit),
+              id: 'electron-review-child',
+              name: 'Synthetic review child',
+              shortName: 'Review child',
+              type: 'division',
+              reviewNote: 'Confirm the synthetic child source.'
+            }
+          }
+        };
+        const reviewChartSaved = await fetch('/api/charts', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'save',
+            chart: {
+              ...afterAccept,
+              nodes: [reviewRoot, reviewChild],
+              edges: [{
+                id: 'electron-review-edge',
+                source: reviewRoot.id,
+                target: reviewChild.id,
+                type: 'smoothstep',
+                data: { relationshipType: 'primary supervisory', sourceCertainty: 'confirmed' }
+              }]
+            }
+          })
+        }).then((response) => response.json());
+        await fetch('/api/ai-activity', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'complete',
+            activityId: 'electron-smoke-source-review-refresh',
+            operation: 'replace_chart_draft',
+            label: 'Preparing source review smoke test',
+            chartId: reviewChartSaved.chart.id,
+            chartName: reviewChartSaved.chart.name,
+            succeeded: true,
+            completionKind: 'saved'
+          })
+        });
+        const reviewQueueNavigation = await waitFor(
+          () => [...document.querySelectorAll('.sidebar button')].find(
+            (button) => button.textContent.includes('Review queue') && button.textContent.includes('2')
+          ),
+          'the source review queue to refresh'
+        );
+        reviewQueueNavigation.click();
+        await waitFor(
+          () => document.body.textContent.includes('Source review queue'),
+          'the source review workspace'
+        );
+        const originalWindowFetch = window.fetch.bind(window);
+        let delayedAutosaveResponses = 1;
+        window.fetch = async (input, init) => {
+          const requestUrl = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          const responsePromise = originalWindowFetch(input, init);
+          if (
+            delayedAutosaveResponses > 0 &&
+            requestUrl.includes('/api/charts') &&
+            init?.method === 'POST' &&
+            typeof init.body === 'string' &&
+            JSON.parse(init.body).action === 'save'
+          ) {
+            delayedAutosaveResponses -= 1;
+            const response = await responsePromise;
+            await new Promise((resolve) => setTimeout(resolve, 1200));
+            return response;
+          }
+          return responsePromise;
+        };
+        let serializedSourceReviewAutosave = false;
+        try {
+          const firstConfirm = await waitFor(
+            () => [...document.querySelectorAll('.source-review-item__actions button')].find(
+              (button) => button.textContent.trim() === 'Confirm'
+            ),
+            'the first source review decision'
+          );
+          firstConfirm.click();
+          await new Promise((resolve) => setTimeout(resolve, 850));
+          const secondConfirm = await waitFor(
+            () => [...document.querySelectorAll('.source-review-item__actions button')].find(
+              (button) => button.textContent.trim() === 'Confirm'
+            ),
+            'the second source review decision'
+          );
+          secondConfirm.click();
+          await waitFor(
+            () =>
+              document.querySelector('.save-status')?.textContent.trim() === 'Saved' &&
+              document.body.textContent.includes('This chart’s review queue is clear'),
+            'serialized source review decisions to save',
+            8000
+          );
+        } finally {
+          window.fetch = originalWindowFetch;
+        }
+        const sourceReviewSavedChart = await fetch('/api/charts', { cache: 'no-store' })
+          .then((response) => response.json())
+          .then((library) => library.charts.find((chart) => chart.id === created.chart.id));
+        serializedSourceReviewAutosave =
+          sourceReviewSavedChart.nodes.length === 2 &&
+          sourceReviewSavedChart.nodes.every(
+            (node) => node.data.unit.sourceCertainty === 'confirmed'
+          );
         const normalizedCsv = [
           'id,name,shortName,type,parentId,positionTitle,assignmentLabel,positionStatus,effectiveDate,publicationVisibility',
           'smoke-root,Smoke Organization,Smoke Organization,laboratory,,Director,Position vacant,vacant,Current,internal',
@@ -832,6 +956,7 @@ function createMainWindow(url) {
             applyButtonClickable,
           aiProposalRejectRoundTrip: rejectRoundTrip,
           aiProposalApplyRoundTrip: applyRoundTrip,
+          serializedSourceReviewAutosave,
           aiImportButtonsClickable: importButtonsClickable,
           stagedAiImportRoundTrip:
             stagedImportRoundTrip &&
