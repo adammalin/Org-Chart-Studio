@@ -40,7 +40,11 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.match(bundle, /Chart quality report/);
   assert.match(bundle, /Compare and propose merge/);
   assert.match(bundle, /Backup health/);
-  assert.match(bundle, /Planned or future state/);
+  assert.match(bundle, /Effective state/);
+  assert.match(bundle, /Planned \/ future/);
+  assert.match(bundle, /Draft.*In review.*Current.*Archived/s);
+  assert.match(bundle, /Type the complete chart name to confirm/);
+  assert.match(bundle, /Current checkpoint/);
   assert.match(bundle, /Quit OrgChart Studio and stop its local server/);
   assert.match(bundle, /Wait for the current save to finish before quitting/);
   assert.match(bundle, /Select area/);

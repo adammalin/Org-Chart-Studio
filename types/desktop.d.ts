@@ -41,6 +41,7 @@ interface Window {
       backupJson: string,
       encrypted: boolean,
     ): Promise<DesktopBackupSaveResult>;
+    reportSaveState(state: "saved" | "saving" | "proposal" | "error"): void;
     requestQuit(): Promise<boolean>;
   };
 }

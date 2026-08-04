@@ -140,6 +140,77 @@ test("compact presentation respects card and sidecar overrides", () => {
   assert.equal(presentation.sidecarNodeIds.has("unit-operations"), false);
 });
 
+test("compact descendants share one aligned card column at every visible depth", () => {
+  const cardNodes = initialNodes.map((flowNode) => ({
+    ...flowNode,
+    data: {
+      ...flowNode.data,
+      unit: { ...flowNode.data.unit, compactDisplay: "card" as const },
+    },
+  }));
+  const presentation = deriveCompactPresentation(cardNodes, initialEdges);
+  const arranged = arrangeCompactPresentation(cardNodes, initialEdges, presentation);
+  const positionById = new Map(
+    arranged.map((flowNode) => [flowNode.id, flowNode.position]),
+  );
+
+  assert.equal(
+    positionById.get("unit-research")?.x,
+    positionById.get("unit-quantum-division")?.x,
+  );
+  assert.equal(
+    positionById.get("unit-quantum-division")?.x,
+    positionById.get("unit-quantum-networking")?.x,
+  );
+});
+
+test("horizontal compact layout spreads lower cards across hierarchy rows", () => {
+  const cardNodes = initialNodes.map((flowNode) => ({
+    ...flowNode,
+    data: {
+      ...flowNode.data,
+      unit: { ...flowNode.data.unit, compactDisplay: "card" as const },
+    },
+  }));
+  const presentation = deriveCompactPresentation(cardNodes, initialEdges);
+  const vertical = arrangeCompactPresentation(
+    cardNodes,
+    initialEdges,
+    presentation,
+    "vertical",
+  );
+  const horizontal = arrangeCompactPresentation(
+    cardNodes,
+    initialEdges,
+    presentation,
+    "horizontal",
+  );
+  const horizontalPositionById = new Map(
+    horizontal.map((flowNode) => [flowNode.id, flowNode.position]),
+  );
+
+  assert.equal(
+    horizontalPositionById.get("unit-quantum-division")?.y,
+    horizontalPositionById.get("unit-computing-division")?.y,
+  );
+  assert.notEqual(
+    horizontalPositionById.get("unit-quantum-division")?.x,
+    horizontalPositionById.get("unit-computing-division")?.x,
+  );
+  assert.equal(
+    horizontalPositionById.get("unit-quantum-networking")?.y,
+    horizontalPositionById.get("unit-materials-systems")?.y,
+  );
+  assert.ok(
+    (horizontalPositionById.get("unit-quantum-networking")?.y ?? 0) >
+      (horizontalPositionById.get("unit-quantum-division")?.y ?? 0),
+  );
+  assert.ok(
+    Math.max(...horizontal.map((flowNode) => flowNode.position.y)) <
+      Math.max(...vertical.map((flowNode) => flowNode.position.y)),
+  );
+});
+
 test("branch translation moves descendants together without moving unrelated cards", () => {
   const rootId = "unit-research";
   const branchIds = descendantIds(rootId, initialEdges);

@@ -5,6 +5,7 @@ import {
   EXPORT_CONNECTION_POINT_STROKE_WIDTH,
   EXPORT_COLORS,
   EXPORT_PRESETS,
+  exportLifecycleLabel,
   type ChartExportScene,
   type ExportPresetId,
   type ExportSceneNode,
@@ -301,7 +302,7 @@ export async function buildChartPdf(
     color: color(EXPORT_COLORS.ink),
   });
   page.drawText(
-    `${scene.audience === "public" ? "PUBLIC-SAFE DRAFT" : "INTERNAL WORKING DRAFT"} - VERSION ${scene.chartVersion}`,
+    exportLifecycleLabel(scene).replaceAll("•", "-"),
     {
       x: offsetX + 30 * scale,
       y: mapY(53),

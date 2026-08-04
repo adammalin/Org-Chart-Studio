@@ -6,7 +6,59 @@ import {
   type OrgFlowNode,
 } from "./org-chart";
 
-export type ChartStatus = "draft" | "in_review" | "approved" | "archived";
+export type ChartStatus = "draft" | "in_review" | "current" | "archived";
+
+export interface ChartLifecycleMetadata {
+  statusChangedAt: string;
+  lastCurrentAt: string | null;
+  lastCurrentVersion: number | null;
+  lastCurrentBy: string;
+  lastCurrentNote: string;
+}
+
+export const chartStatusLabels: Record<ChartStatus, string> = {
+  draft: "Draft",
+  in_review: "In review",
+  current: "Current",
+  archived: "Archived",
+};
+
+export const chartStatusDescriptions: Record<ChartStatus, string> = {
+  draft: "Actively being built or edited; not yet approved.",
+  in_review: "Submitted for a person to verify before it becomes Current.",
+  current: "Approved, authoritative, and currently in use.",
+  archived: "Historical and read-only; no longer the working chart.",
+};
+
+export function normalizeChartStatus(status: unknown): ChartStatus {
+  if (status === "approved") return "current";
+  if (status === "in_review" || status === "current" || status === "archived") {
+    return status;
+  }
+  return "draft";
+}
+
+export function normalizeChartLifecycle(
+  lifecycle: Partial<ChartLifecycleMetadata> | null | undefined,
+  status: ChartStatus,
+  updatedAt: string,
+  version: number,
+  legacyApproved = false,
+): ChartLifecycleMetadata {
+  const inferredCurrentAt = status === "current" ? updatedAt : null;
+  const inferredCurrentVersion = status === "current" ? version : null;
+  return {
+    statusChangedAt: lifecycle?.statusChangedAt || updatedAt,
+    lastCurrentAt: lifecycle?.lastCurrentAt || inferredCurrentAt,
+    lastCurrentVersion: lifecycle?.lastCurrentVersion ?? inferredCurrentVersion,
+    lastCurrentBy:
+      lifecycle?.lastCurrentBy ||
+      (legacyApproved || (status === "current" && !lifecycle)
+        ? "Migrated approved record"
+        : ""),
+    lastCurrentNote: lifecycle?.lastCurrentNote || "",
+  };
+}
 
 export const RETIRED_EXAMPLE_CHART_IDS = [
   "chart-synthetic-laboratory",
@@ -40,6 +92,7 @@ export interface ChartDocument {
   version: number;
   createdAt: string;
   updatedAt: string;
+  lifecycle: ChartLifecycleMetadata;
   nodes: OrgFlowNode[];
   edges: Edge[];
   sources: SourceRecord[];
@@ -115,6 +168,7 @@ function branchDocument(
     version: 1,
     createdAt: date,
     updatedAt: date,
+    lifecycle: normalizeChartLifecycle(null, "draft", date, 1),
     nodes,
     edges,
     sources: [],
@@ -131,6 +185,7 @@ export function seedChartDocuments(): ChartDocument[] {
     version: 1,
     createdAt: date,
     updatedAt: date,
+    lifecycle: normalizeChartLifecycle(null, "draft", date, 1),
     nodes: storageSafeNodes(initialNodes),
     edges: initialEdges,
     sources: [
@@ -181,6 +236,7 @@ export function createBlankChart(name: string, id = crypto.randomUUID()): ChartD
     version: 1,
     createdAt: now,
     updatedAt: now,
+    lifecycle: normalizeChartLifecycle(null, "draft", now, 1),
     nodes: [
       {
         id: rootId,

@@ -48,6 +48,8 @@ let quitting = false;
 let allowWindowClose = false;
 let requestedExitCode = 0;
 let storageRuntime = null;
+let rendererSaveState = "saved";
+let quitDialogOpen = false;
 
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_ID);
@@ -95,7 +97,7 @@ app.on("activate", () => {
 app.on("before-quit", (event) => {
   if (allowWindowClose) return;
   event.preventDefault();
-  void beginQuit();
+  void requestUserQuit();
 });
 
 app.on("window-all-closed", () => {
@@ -253,22 +255,13 @@ function initializeStorageLocations() {
 }
 
 function registerStorageHandlers() {
+  ipcMain.on("app:save-state", (_event, state) => {
+    if (["saved", "saving", "proposal", "error"].includes(state)) {
+      rendererSaveState = state;
+    }
+  });
   ipcMain.handle("app:request-quit", async () => {
-    if (quitting) return true;
-    const result = await dialog.showMessageBox(mainWindow, {
-      type: "warning",
-      title: `Quit ${APP_NAME}?`,
-      message: `Quit ${APP_NAME}?`,
-      detail:
-        "The app window, its local MCP connection, and its private local server will close. Changes already showing Saved and existing backups will remain on this computer.",
-      buttons: ["Cancel", "Quit"],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true,
-    });
-    if (result.response !== 1) return false;
-    setImmediate(() => void beginQuit());
-    return true;
+    return requestUserQuit();
   });
   ipcMain.handle("storage:get-settings", () =>
     storageSettingsSnapshot(storageArguments()),
@@ -408,7 +401,7 @@ function createMainWindow(url) {
   mainWindow.on("close", (event) => {
     if (allowWindowClose) return;
     event.preventDefault();
-    void beginQuit();
+    void requestUserQuit();
   });
   mainWindow.once("ready-to-show", () => {
     if (!smokeTest) mainWindow.show();
@@ -445,26 +438,16 @@ function createMainWindow(url) {
         };
         const openProposalReview = async (proposal, activityId) => {
           await signalProposalReady(proposal, activityId);
-          const reviewButton = await waitFor(
-            () => document.querySelector('.mcp-activity-hud__review'),
-            'the AI review receipt'
-          );
-          reviewButton.click();
           return waitFor(
             () => document.querySelector('.ai-review-panel'),
-            'the AI proposal panel'
+            'the automatically opened AI proposal panel'
           );
         };
         const openImportReview = async (proposal, activityId) => {
           await signalProposalReady(proposal, activityId, 'stage_normalized_import');
-          const reviewButton = await waitFor(
-            () => document.querySelector('.mcp-activity-hud__review'),
-            'the AI import review receipt'
-          );
-          reviewButton.click();
           return waitFor(
             () => document.querySelector('.ai-import-review-panel'),
-            'the AI import review panel'
+            'the automatically opened AI import review panel'
           );
         };
         const buttonReceivesPointer = (button) => {
@@ -485,6 +468,26 @@ function createMainWindow(url) {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ action: 'create', name: 'Electron smoke fixture' })
         }).then((response) => response.json());
+        await fetch('/api/ai-activity', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'complete',
+            activityId: 'electron-smoke-library-refresh',
+            operation: 'create_chart_draft',
+            label: 'Creating chart draft',
+            chartId: created.chart.id,
+            chartName: created.chart.name,
+            succeeded: true,
+            completionKind: 'saved'
+          })
+        });
+        const mcpLibraryAutoRefresh = await waitFor(
+          () => [...document.querySelectorAll('.chart-card h2')].some(
+            (heading) => heading.textContent === created.chart.name
+          ),
+          'the MCP-created chart to appear without a page reload'
+        );
         const editedChart = {
           ...created.chart,
           nodes: created.chart.nodes.map((node, index) => index === 0 ? {
@@ -688,11 +691,33 @@ function createMainWindow(url) {
           '/api/charts?resource=source&sourceId=' + encodeURIComponent(stagedEvidenceSource.id),
           { cache: 'no-store' }
         );
+        const archiveChartForDeletion = async (chartId) => {
+          const chart = await fetch('/api/charts', { cache: 'no-store' })
+            .then((response) => response.json())
+            .then((library) => library.charts.find((candidate) => candidate.id === chartId));
+          if (!chart) throw new Error('The smoke-test chart could not be found for cleanup.');
+          if (chart.status === 'archived') return chart;
+          const response = await fetch('/api/charts', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              action: 'transition_status',
+              chartId,
+              targetStatus: 'archived',
+              expectedVersion: chart.version,
+              expectedUpdatedAt: chart.updatedAt
+            })
+          });
+          if (!response.ok) throw new Error('The smoke-test chart could not be archived for cleanup.');
+          return response.json().then((result) => result.chart);
+        };
+        await archiveChartForDeletion(imported.chart.id);
         const importedDeleted = await fetch('/api/charts', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ action: 'delete', chartId: imported.chart.id })
         }).then((response) => response.json());
+        await archiveChartForDeletion(stagedImportedChart.id);
         const stagedImportedDeleted = await fetch('/api/charts', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -703,6 +728,7 @@ function createMainWindow(url) {
         const importedIntakeMetadataCleaned = !intakesAfterStagedDelete.intakes.some(
           (intake) => intake.id === sourceIntake.intake.id
         );
+        await archiveChartForDeletion(created.chart.id);
         const deleted = await fetch('/api/charts', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -774,10 +800,12 @@ function createMainWindow(url) {
           localOnly: location.hostname === '127.0.0.1',
           desktopBridge: window.orgChartDesktop?.isDesktop === true,
           desktopQuitBridge: typeof window.orgChartDesktop?.requestQuit === 'function',
+          desktopSaveStateBridge: typeof window.orgChartDesktop?.reportSaveState === 'function',
           desktopQuitVisible: Boolean(document.querySelector('[data-desktop-quit]')),
           userAgentIncludesElectron: navigator.userAgent.includes('Electron'),
           externalRequestBlocked: await fetch('https://example.com/orgchart-network-test').then(() => false, () => true),
           chartLibraryVisible: chartLibraryInitiallyVisible,
+          mcpLibraryAutoRefresh: Boolean(mcpLibraryAutoRefresh),
           sourcesVisible: document.body.textContent.includes('Sources & imports'),
           backupsVisible: document.body.textContent.includes('Backup & restore'),
           startsWithoutExampleCharts: chartLibrary.charts.length === 0,
@@ -875,6 +903,49 @@ function isAllowedExternalUrl(value) {
     return url.protocol === "https:" || url.protocol === "mailto:";
   } catch {
     return false;
+  }
+}
+
+async function requestUserQuit() {
+  if (quitting) return true;
+  if (quitDialogOpen) return false;
+  quitDialogOpen = true;
+  try {
+    if (rendererSaveState === "saving") {
+      await dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "Saving is still in progress",
+        message: "Wait for Saved before closing OrgChart Studio.",
+        detail:
+          "The app is still writing your latest chart decision to local storage. Keep it open until the top bar changes from Saving to Saved, then close it again.",
+        buttons: ["Keep app open"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      return false;
+    }
+
+    const hasSaveIssue = rendererSaveState === "error";
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: hasSaveIssue ? "error" : "warning",
+      title: `Quit ${APP_NAME}?`,
+      message: hasSaveIssue
+        ? "The latest change may not be saved."
+        : `Quit ${APP_NAME}?`,
+      detail: hasSaveIssue
+        ? "The top bar shows Save issue. Keep the app open to retry or resolve the problem. Quitting now may require redoing the latest unsaved change; previously saved charts remain on this computer."
+        : "The app window, its local MCP connection, and its private local server will close. Changes already showing Saved, pending review proposals, and existing backups will remain on this computer.",
+      buttons: hasSaveIssue ? ["Keep app open", "Quit without latest change"] : ["Cancel", "Quit"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+    if (result.response !== 1) return false;
+    setImmediate(() => void beginQuit());
+    return true;
+  } finally {
+    quitDialogOpen = false;
   }
 }
 

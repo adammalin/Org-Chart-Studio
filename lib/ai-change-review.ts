@@ -154,7 +154,7 @@ export function diffChartDocuments(
   const chartFields: Array<[keyof ChartDocument, string]> = [
     ["name", "Chart name"],
     ["description", "Chart description"],
-    ["status", "Working status"],
+    ["status", "Chart lifecycle"],
   ];
   for (const [field, label] of chartFields) {
     if (current[field] !== proposed[field]) {

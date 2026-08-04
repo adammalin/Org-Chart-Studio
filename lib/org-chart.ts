@@ -23,6 +23,8 @@ export type SourceCertainty = "confirmed" | "inferred" | "needs_review";
 
 export type ChartPresentationMode = "compact" | "individual";
 
+export type CompactLayoutOrientation = "vertical" | "horizontal";
+
 export type CompactDisplay = "auto" | "card" | "list" | "sidecar";
 
 export interface OrganizationalUnit {
@@ -445,6 +447,7 @@ export function arrangeCompactPresentation(
   nodes: OrgFlowNode[],
   edges: Edge[],
   presentation = deriveCompactPresentation(nodes, edges),
+  orientation: CompactLayoutOrientation = "vertical",
 ): OrgFlowNode[] {
   const visibleNodes = nodes.filter(
     (flowNode) => !presentation.listedNodeIds.has(flowNode.id),
@@ -469,11 +472,6 @@ export function arrangeCompactPresentation(
     nodeById,
   );
   const positions = new Map<string, XYPosition>();
-  const BRANCH_GAP = 64;
-  const LEVEL_GAP = 92;
-  const STACK_GAP = 18;
-  const DEEP_INDENT = 24;
-  let chartOffsetX = 0;
 
   const dimensionsFor = (nodeId: string) =>
     compactNodeDimensions(
@@ -481,6 +479,122 @@ export function arrangeCompactPresentation(
       presentation.entriesByParent.get(nodeId)?.length ?? 0,
       presentation.sidecarNodeIds.has(nodeId),
     );
+
+  if (orientation === "horizontal") {
+    const SIBLING_GAP = 32;
+    const ROOT_GAP = 128;
+    const LEVEL_GAP = 70;
+    const ROOT_LEVEL_GAP = 92;
+    const STACK_GAP = 18;
+    const layerHeights = new Map<number, number>();
+    visibleNodes.forEach((flowNode) => {
+      if (presentation.sidecarNodeIds.has(flowNode.id)) return;
+      const level = presentation.levels.get(flowNode.id) ?? 1;
+      layerHeights.set(
+        level,
+        Math.max(layerHeights.get(level) ?? 0, dimensionsFor(flowNode.id).height),
+      );
+    });
+    const layerY = new Map<number, number>();
+    let cursorY = 30;
+    [...layerHeights.keys()]
+      .sort((a, b) => a - b)
+      .forEach((level) => {
+        layerY.set(level, cursorY);
+        cursorY +=
+          (layerHeights.get(level) ?? NODE_HEIGHT) +
+          (level === 1 ? ROOT_LEVEL_GAP : LEVEL_GAP);
+      });
+
+    const visibleChildren = (nodeId: string) =>
+      (childrenByParent.get(nodeId) ?? []).filter(
+        (childId) => !presentation.sidecarNodeIds.has(childId),
+      );
+    const subtreeWidthById = new Map<string, number>();
+    const subtreeWidth = (nodeId: string, visiting = new Set<string>()): number => {
+      const known = subtreeWidthById.get(nodeId);
+      if (known !== undefined) return known;
+      const ownWidth = dimensionsFor(nodeId).width;
+      if (visiting.has(nodeId)) return ownWidth;
+      const nextVisiting = new Set(visiting).add(nodeId);
+      const childWidths = visibleChildren(nodeId).map((childId) =>
+        subtreeWidth(childId, nextVisiting),
+      );
+      const childrenSpan = childWidths.length
+        ? childWidths.reduce((total, width) => total + width, 0) +
+          Math.max(0, childWidths.length - 1) * SIBLING_GAP
+        : 0;
+      const width = Math.max(ownWidth, childrenSpan);
+      subtreeWidthById.set(nodeId, width);
+      return width;
+    };
+
+    const placeSubtree = (
+      nodeId: string,
+      left: number,
+      visiting = new Set<string>(),
+    ) => {
+      if (visiting.has(nodeId)) return;
+      const nextVisiting = new Set(visiting).add(nodeId);
+      const dimensions = dimensionsFor(nodeId);
+      const span = subtreeWidth(nodeId);
+      const level = presentation.levels.get(nodeId) ?? 1;
+      positions.set(nodeId, {
+        x: left + (span - dimensions.width) / 2,
+        y: layerY.get(level) ?? 30,
+      });
+      const children = visibleChildren(nodeId);
+      const childrenSpan = children.length
+        ? children.reduce((total, childId) => total + subtreeWidth(childId), 0) +
+          Math.max(0, children.length - 1) * SIBLING_GAP
+        : 0;
+      let childLeft = left + (span - childrenSpan) / 2;
+      children.forEach((childId) => {
+        placeSubtree(childId, childLeft, nextVisiting);
+        childLeft += subtreeWidth(childId) + SIBLING_GAP;
+      });
+    };
+
+    let chartOffsetX = 0;
+    roots.forEach((rootId) => {
+      const rootSpan = subtreeWidth(rootId);
+      placeSubtree(rootId, chartOffsetX);
+      const rootPosition = positions.get(rootId) ?? { x: chartOffsetX, y: 30 };
+      const rootDimensions = dimensionsFor(rootId);
+      const sidecars = (childrenByParent.get(rootId) ?? []).filter((id) =>
+        presentation.sidecarNodeIds.has(id),
+      );
+      sidecars.forEach((sidecarId, index) => {
+        const sidecarDimensions = dimensionsFor(sidecarId);
+        positions.set(sidecarId, {
+          x: rootPosition.x + rootDimensions.width + 38,
+          y: rootPosition.y + 24 + index * (sidecarDimensions.height + STACK_GAP),
+        });
+      });
+      const sidecarRight = sidecars.reduce((right, id) => {
+        const position = positions.get(id);
+        return Math.max(right, (position?.x ?? 0) + dimensionsFor(id).width);
+      }, chartOffsetX + rootSpan);
+      chartOffsetX = Math.max(chartOffsetX + rootSpan, sidecarRight) + ROOT_GAP;
+    });
+
+    let fallbackY = 30;
+    visibleNodes.forEach((flowNode) => {
+      if (positions.has(flowNode.id)) return;
+      positions.set(flowNode.id, { x: chartOffsetX, y: fallbackY });
+      fallbackY += dimensionsFor(flowNode.id).height + STACK_GAP;
+    });
+
+    return visibleNodes.map((flowNode) => ({
+      ...flowNode,
+      position: positions.get(flowNode.id) ?? flowNode.position,
+    }));
+  }
+
+  const BRANCH_GAP = 64;
+  const LEVEL_GAP = 92;
+  const STACK_GAP = 18;
+  let chartOffsetX = 0;
 
   roots.forEach((rootId) => {
     const rootDimensions = dimensionsFor(rootId);
@@ -510,17 +624,17 @@ export function arrangeCompactPresentation(
       parentId: string,
       columnX: number,
       startY: number,
-      depth: number,
     ): number => {
       let cursorY = startY;
       for (const childId of childrenByParent.get(parentId) ?? []) {
         if (presentation.sidecarNodeIds.has(childId)) continue;
         const childDimensions = dimensionsFor(childId);
-        const childX = columnX + Math.max(0, depth - 3) * DEEP_INDENT;
-        positions.set(childId, { x: childX, y: cursorY });
+        // Compact descendants share one branch column at every depth. The left-entry
+        // rail communicates nesting without creating a stair-step card edge.
+        positions.set(childId, { x: columnX, y: cursorY });
         cursorY += childDimensions.height + STACK_GAP;
         if ((childrenByParent.get(childId) ?? []).length) {
-          cursorY = placeStack(childId, columnX, cursorY, depth + 1);
+          cursorY = placeStack(childId, columnX, cursorY);
         }
       }
       return cursorY;
@@ -533,7 +647,6 @@ export function arrangeCompactPresentation(
         branchId,
         branchX,
         branchY + branchDimensions.height + 32,
-        (presentation.levels.get(branchId) ?? 2) + 1,
       );
       branchX += branchDimensions.width + BRANCH_GAP;
       if (branchIndex === branchIds.length - 1) branchX -= BRANCH_GAP;

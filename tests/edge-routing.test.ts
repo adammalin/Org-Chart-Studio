@@ -113,6 +113,28 @@ test("level-three compact targets share a left-entry rail", () => {
   assertOrthogonal(secondRoute.points);
 });
 
+test("nested compact descendants reuse the same left-entry rail", () => {
+  const branch = node("branch", 0, 0);
+  const child = { ...node("child", 0, 220), targetSide: "left" as const };
+  const grandchild = { ...node("grandchild", 0, 440), targetSide: "left" as const };
+  const routes = buildOrthogonalEdgeRoutes(
+    [branch, child, grandchild],
+    [
+      { id: "edge-child", source: branch.id, target: child.id },
+      { id: "edge-grandchild", source: child.id, target: grandchild.id },
+    ],
+    "combed",
+  );
+  const childRoute = routes.get("edge-child")!;
+  const grandchildRoute = routes.get("edge-grandchild")!;
+
+  assert.equal(childRoute.points.at(-2)?.x, grandchildRoute.points.at(-2)?.x);
+  assert.equal(childRoute.points.at(-1)?.x, child.x);
+  assert.equal(grandchildRoute.points.at(-1)?.x, grandchild.x);
+  assertOrthogonal(childRoute.points);
+  assertOrthogonal(grandchildRoute.points);
+});
+
 test("separate routing detours around cards between a parent and child", () => {
   const nodes = [
     node("parent", 250, 0),

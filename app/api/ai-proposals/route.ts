@@ -5,6 +5,8 @@ import {
   type AiChartProposal,
 } from "../../../lib/ai-change-review";
 import {
+  normalizeChartLifecycle,
+  normalizeChartStatus,
   storageSafeNodes,
   type ChartDocument,
   type ChartStatus,
@@ -16,7 +18,7 @@ interface ChartRow {
   id: string;
   name: string;
   description: string;
-  status: ChartStatus;
+  status: string;
   version: number;
   created_at: string;
   updated_at: string;
@@ -59,7 +61,7 @@ interface ProposalStore {
 
 const PROPOSAL_TTL_MS = 30 * 60_000;
 const MAX_PENDING_PROPOSALS = 20;
-const chartStatuses: ChartStatus[] = ["draft", "in_review", "approved", "archived"];
+const chartStatuses: ChartStatus[] = ["draft", "in_review", "current", "archived"];
 const proposalGlobal = globalThis as typeof globalThis & {
   __orgChartAiProposalStore?: ProposalStore;
 };
@@ -103,15 +105,25 @@ function sourceFromRow(row: SourceRow): SourceRecord {
 }
 
 function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
-  const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges">;
+  const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges"> & {
+    lifecycle?: Partial<ChartDocument["lifecycle"]>;
+  };
+  const status = normalizeChartStatus(row.status);
   return {
     id: row.id,
     name: row.name,
     description: row.description,
-    status: row.status,
+    status,
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    lifecycle: normalizeChartLifecycle(
+      payload.lifecycle,
+      status,
+      row.updated_at,
+      row.version,
+      row.status === "approved",
+    ),
     nodes: payload.nodes,
     edges: payload.edges,
     sources,
@@ -224,6 +236,12 @@ export async function POST(request: Request) {
     if (error) return noStoreJson({ error }, { status: 422 });
     const current = await loadCurrentChart(DB, proposed.id);
     if (!current) return noStoreJson({ error: "Chart not found." }, { status: 404 });
+    if (current.status === "archived") {
+      return noStoreJson(
+        { error: "Archived charts are read-only. Restore this chart as a Draft before proposing changes." },
+        { status: 423 },
+      );
+    }
     if (proposed.version !== current.version || proposed.updatedAt !== current.updatedAt) {
       return noStoreJson(
         {
@@ -251,6 +269,8 @@ export async function POST(request: Request) {
       current,
       proposed: {
         ...proposed,
+        status: current.status,
+        lifecycle: current.lifecycle,
         createdAt: current.createdAt,
         sources: current.sources,
         nodes: storageSafeNodes(proposed.nodes),
@@ -305,17 +325,35 @@ export async function POST(request: Request) {
 
     const proposed = proposal.proposed;
     const updatedAt = new Date().toISOString();
+    const returnedToDraft = current.status === "current";
+    const appliedChart: ChartDocument = {
+      ...proposed,
+      status: returnedToDraft ? "draft" : current.status,
+      version: current.version,
+      createdAt: current.createdAt,
+      updatedAt,
+      lifecycle: {
+        ...current.lifecycle,
+        statusChangedAt: returnedToDraft ? updatedAt : current.lifecycle.statusChangedAt,
+      },
+      sources: current.sources,
+      nodes: storageSafeNodes(proposed.nodes),
+    };
     const result = await DB.prepare(
       `UPDATE charts
        SET name = ?, description = ?, status = ?, updated_at = ?, payload = ?
        WHERE id = ? AND version = ? AND updated_at = ?`,
     )
       .bind(
-        proposed.name,
-        proposed.description,
-        proposed.status,
+        appliedChart.name,
+        appliedChart.description,
+        appliedChart.status,
         updatedAt,
-        JSON.stringify({ nodes: storageSafeNodes(proposed.nodes), edges: proposed.edges }),
+        JSON.stringify({
+          nodes: appliedChart.nodes,
+          edges: appliedChart.edges,
+          lifecycle: appliedChart.lifecycle,
+        }),
         proposal.chartId,
         proposal.current.version,
         proposal.current.updatedAt,
@@ -347,15 +385,7 @@ export async function POST(request: Request) {
       )
       .run();
     store.proposals.delete(proposal.id);
-    const chart: ChartDocument = {
-      ...proposed,
-      version: current.version,
-      createdAt: current.createdAt,
-      updatedAt,
-      sources: current.sources,
-      nodes: storageSafeNodes(proposed.nodes),
-    };
-    return noStoreJson({ chart, activityId });
+    return noStoreJson({ chart: appliedChart, activityId, returnedToDraft });
   }
 
   return noStoreJson({ error: "Unsupported AI proposal action." }, { status: 400 });

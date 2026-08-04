@@ -1,6 +1,8 @@
 import { ensureSchema, getBindings } from "../../../db";
 import {
   createBlankChart,
+  normalizeChartLifecycle,
+  normalizeChartStatus,
   RETIRED_EXAMPLE_CHART_IDS,
   storageSafeNodes,
   type ChartDocument,
@@ -8,6 +10,9 @@ import {
   type ChartVersion,
   type SourceRecord,
 } from "../../../lib/chart-library";
+import {
+  lifecycleTransitionError,
+} from "../../../lib/chart-lifecycle";
 import { parseImportBytes } from "../../../lib/import-org-chart-file";
 import { validateHierarchy } from "../../../lib/org-chart";
 import { auditChartQuality } from "../../../lib/chart-governance";
@@ -17,7 +22,7 @@ interface ChartRow {
   id: string;
   name: string;
   description: string;
-  status: ChartStatus;
+  status: string;
   version: number;
   created_at: string;
   updated_at: string;
@@ -68,7 +73,7 @@ interface IntakeFileRow {
   created_at: string;
 }
 
-const chartStatuses: ChartStatus[] = ["draft", "in_review", "approved", "archived"];
+const chartStatuses: ChartStatus[] = ["draft", "in_review", "current", "archived"];
 function validateEditableChart(chart: ChartDocument): {
   error?: string;
   findings?: ReturnType<typeof validateHierarchy>;
@@ -116,15 +121,25 @@ function sourceFromRow(row: SourceRow): SourceRecord {
 }
 
 function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
-  const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges">;
+  const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges"> & {
+    lifecycle?: Partial<ChartDocument["lifecycle"]>;
+  };
+  const status = normalizeChartStatus(row.status);
   return {
     id: row.id,
     name: row.name,
     description: row.description,
-    status: row.status,
+    status,
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    lifecycle: normalizeChartLifecycle(
+      payload.lifecycle,
+      status,
+      row.updated_at,
+      row.version,
+      row.status === "approved",
+    ),
     nodes: payload.nodes,
     edges: payload.edges,
     sources,
@@ -145,10 +160,14 @@ function versionFromRow(row: VersionRow): ChartVersion {
   };
 }
 
-function chartPayload(chart: Pick<ChartDocument, "nodes" | "edges">) {
+function chartPayload(
+  chart: Pick<ChartDocument, "nodes" | "edges"> &
+    Partial<Pick<ChartDocument, "lifecycle">>,
+) {
   return JSON.stringify({
     nodes: storageSafeNodes(chart.nodes),
     edges: chart.edges,
+    lifecycle: chart.lifecycle,
   });
 }
 
@@ -542,6 +561,7 @@ export async function POST(request: Request) {
       version: 1,
       createdAt: now,
       updatedAt: now,
+      lifecycle: normalizeChartLifecycle(null, "draft", now, 1),
       nodes: preview.nodes,
       edges: preview.edges,
       sources: [
@@ -597,6 +617,7 @@ export async function POST(request: Request) {
       | "create"
       | "duplicate"
       | "save"
+      | "transition_status"
       | "snapshot"
       | "snapshot_current"
       | "restore_version"
@@ -608,6 +629,9 @@ export async function POST(request: Request) {
     versionId?: string;
     expectedVersion?: number;
     expectedUpdatedAt?: string;
+    targetStatus?: ChartStatus;
+    currentBy?: string;
+    approvalNote?: string;
   };
 
   if (body.action === "create") {
@@ -637,6 +661,7 @@ export async function POST(request: Request) {
       version: 1,
       createdAt: now,
       updatedAt: now,
+      lifecycle: normalizeChartLifecycle(null, "draft", now, 1),
       nodes: storageSafeNodes(existing.nodes),
       sources: [],
     };
@@ -647,15 +672,131 @@ export async function POST(request: Request) {
     return Response.json({ chart }, { status: 201 });
   }
 
+  if (body.action === "transition_status" && body.chartId && body.targetStatus) {
+    if (!chartStatuses.includes(body.targetStatus)) {
+      return Response.json({ error: "Chart lifecycle status is invalid." }, { status: 400 });
+    }
+    const [row, sourceResult] = await Promise.all([
+      DB.prepare("SELECT * FROM charts WHERE id = ?")
+        .bind(body.chartId)
+        .first<ChartRow>(),
+      DB.prepare("SELECT * FROM source_records WHERE chart_id = ? ORDER BY imported_at DESC")
+        .bind(body.chartId)
+        .all<SourceRow>(),
+    ]);
+    if (!row) return Response.json({ error: "Chart not found." }, { status: 404 });
+    if (body.expectedVersion !== row.version || body.expectedUpdatedAt !== row.updated_at) {
+      return Response.json(
+        {
+          error: "The chart changed before its lifecycle status could be updated.",
+          currentVersion: row.version,
+          currentUpdatedAt: row.updated_at,
+        },
+        { status: 409 },
+      );
+    }
+    const currentChart = chartFromRow(row, sourceResult.results.map(sourceFromRow));
+    const transitionError = lifecycleTransitionError(currentChart, body.targetStatus);
+    if (transitionError) {
+      return Response.json({ error: transitionError }, { status: 422 });
+    }
+    const updatedAt = new Date().toISOString();
+    if (body.targetStatus === "current") {
+      const currentBy = body.currentBy?.trim().slice(0, 120) ?? "";
+      if (!currentBy) {
+        return Response.json(
+          { error: "Record who reviewed and marked this chart Current." },
+          { status: 422 },
+        );
+      }
+      const latest = await DB.prepare(
+        "SELECT MAX(version) AS version FROM chart_versions WHERE chart_id = ?",
+      )
+        .bind(currentChart.id)
+        .first<{ version: number | null }>();
+      const nextVersion = Math.max(currentChart.version, latest?.version ?? 0) + 1;
+      const nextChart: ChartDocument = {
+        ...currentChart,
+        status: "current",
+        version: nextVersion,
+        updatedAt,
+        lifecycle: {
+          ...currentChart.lifecycle,
+          statusChangedAt: updatedAt,
+          lastCurrentAt: updatedAt,
+          lastCurrentVersion: nextVersion,
+          lastCurrentBy: currentBy,
+          lastCurrentNote: body.approvalNote?.trim().slice(0, 1_000) ?? "",
+        },
+      };
+      const update = DB.prepare(
+        `UPDATE charts
+         SET status = ?, version = ?, updated_at = ?, payload = ?
+         WHERE id = ? AND version = ? AND updated_at = ?`,
+      ).bind(
+        nextChart.status,
+        nextVersion,
+        updatedAt,
+        chartPayload(nextChart),
+        nextChart.id,
+        currentChart.version,
+        currentChart.updatedAt,
+      );
+      await DB.batch([
+        update,
+        versionInsert(DB, nextChart, `Marked Current by ${currentBy}`, updatedAt),
+      ]);
+      const versionRow = await DB.prepare(
+        "SELECT * FROM chart_versions WHERE chart_id = ? AND version = ?",
+      )
+        .bind(nextChart.id, nextVersion)
+        .first<VersionRow>();
+      return Response.json({
+        chart: nextChart,
+        version: versionRow ? versionFromRow(versionRow) : null,
+      });
+    }
+
+    const nextChart: ChartDocument = {
+      ...currentChart,
+      status: body.targetStatus,
+      updatedAt,
+      lifecycle: {
+        ...currentChart.lifecycle,
+        statusChangedAt: updatedAt,
+      },
+    };
+    const result = await DB.prepare(
+      `UPDATE charts SET status = ?, updated_at = ?, payload = ?
+       WHERE id = ? AND version = ? AND updated_at = ?`,
+    )
+      .bind(
+        nextChart.status,
+        updatedAt,
+        chartPayload(nextChart),
+        nextChart.id,
+        currentChart.version,
+        currentChart.updatedAt,
+      )
+      .run();
+    if ((result.meta.changes ?? 0) !== 1) {
+      return Response.json(
+        { error: "The chart changed before its lifecycle status could be updated." },
+        { status: 409 },
+      );
+    }
+    return Response.json({ chart: nextChart });
+  }
+
   if (body.action === "save" && body.chart) {
     const chart = body.chart;
     const validation = validateEditableChart(chart);
     if (validation.error) {
       return Response.json(validation, { status: 422 });
     }
-    const existing = await DB.prepare("SELECT version, updated_at FROM charts WHERE id = ?")
+    const existing = await DB.prepare("SELECT * FROM charts WHERE id = ?")
       .bind(chart.id)
-      .first<{ version: number; updated_at: string }>();
+      .first<ChartRow>();
     if (!existing) return Response.json({ error: "Chart not found." }, { status: 404 });
     if (chart.version !== existing.version || chart.updatedAt !== existing.updated_at) {
       return Response.json(
@@ -667,19 +808,58 @@ export async function POST(request: Request) {
         { status: 409 },
       );
     }
+    const existingChart = chartFromRow(existing, []);
+    if (existingChart.status === "archived") {
+      return Response.json(
+        { error: "Archived charts are read-only. Restore this chart as a Draft before editing." },
+        { status: 423 },
+      );
+    }
+    const incomingStatus = normalizeChartStatus(chart.status);
+    const editingCurrent = existingChart.status === "current" && incomingStatus === "draft";
+    if (incomingStatus !== existingChart.status && !editingCurrent) {
+      return Response.json(
+        { error: "Use the chart lifecycle control to change this status." },
+        { status: 422 },
+      );
+    }
+    if (existingChart.status === "current" && !editingCurrent) {
+      return Response.json(
+        { error: "Current charts are protected. Begin editing to return it to Draft first." },
+        { status: 423 },
+      );
+    }
     const updatedAt = new Date().toISOString();
+    const nextChart: ChartDocument = {
+      ...chart,
+      status: editingCurrent ? "draft" : existingChart.status,
+      version: existing.version,
+      updatedAt,
+      lifecycle: {
+        ...normalizeChartLifecycle(
+          chart.lifecycle,
+          editingCurrent ? "draft" : existingChart.status,
+          existing.updated_at,
+          existing.version,
+        ),
+        statusChangedAt: editingCurrent
+          ? updatedAt
+          : existingChart.lifecycle.statusChangedAt,
+      },
+      nodes: storageSafeNodes(chart.nodes),
+    };
     const result = await DB.prepare(
       `UPDATE charts
        SET name = ?, description = ?, status = ?, version = ?, updated_at = ?, payload = ?
        WHERE id = ? AND updated_at = ?`,
     )
       .bind(
-        chart.name,
-        chart.description,
-        chart.status,
+        nextChart.name,
+        nextChart.description,
+        nextChart.status,
         existing.version,
         updatedAt,
-        JSON.stringify({ nodes: storageSafeNodes(chart.nodes), edges: chart.edges }),
+        chartPayload(nextChart),
         chart.id,
         existing.updated_at,
       )
@@ -697,7 +877,7 @@ export async function POST(request: Request) {
         { status: 409 },
       );
     }
-    return Response.json({ chart: { ...chart, version: existing.version, updatedAt } });
+    return Response.json({ chart: nextChart, returnedToDraft: editingCurrent });
   }
 
   if (body.action === "snapshot" && body.chart) {
@@ -707,6 +887,17 @@ export async function POST(request: Request) {
       .bind(chart.id)
       .first<ChartRow>();
     if (!existing) return Response.json({ error: "Chart not found." }, { status: 404 });
+    const existingChart = chartFromRow(existing, []);
+    if (existingChart.status === "current" || existingChart.status === "archived") {
+      return Response.json(
+        {
+          error: existingChart.status === "current"
+            ? "Current already points to its approved checkpoint. Begin editing to create a Draft before saving another version."
+            : "Archived charts are read-only. Restore this chart as a Draft before saving another version.",
+        },
+        { status: 423 },
+      );
+    }
     if (chart.version !== existing.version || chart.updatedAt !== existing.updated_at) {
       return Response.json(
         {
@@ -769,6 +960,13 @@ export async function POST(request: Request) {
       .bind(body.chartId)
       .first<ChartRow>();
     if (!existing) return Response.json({ error: "Chart not found." }, { status: 404 });
+    const existingStatus = normalizeChartStatus(existing.status);
+    if (existingStatus === "current" || existingStatus === "archived") {
+      return Response.json(
+        { error: `${existingStatus === "current" ? "Current" : "Archived"} charts cannot create a new working checkpoint.` },
+        { status: 423 },
+      );
+    }
     if (
       body.expectedVersion !== existing.version ||
       body.expectedUpdatedAt !== existing.updated_at
@@ -870,8 +1068,13 @@ export async function POST(request: Request) {
     );
     const restoredChart: ChartDocument = {
       ...current,
+      status: "draft",
       version: nextVersion,
       updatedAt,
+      lifecycle: {
+        ...current.lifecycle,
+        statusChangedAt: updatedAt,
+      },
       nodes: storageSafeNodes(restoredPayload.nodes),
       edges: restoredPayload.edges,
     };
@@ -881,8 +1084,8 @@ export async function POST(request: Request) {
 
     await DB.batch([
       DB.prepare(
-        "UPDATE charts SET version = ?, updated_at = ?, payload = ? WHERE id = ?",
-      ).bind(nextVersion, updatedAt, chartPayload(restoredChart), body.chartId),
+        "UPDATE charts SET status = ?, version = ?, updated_at = ?, payload = ? WHERE id = ?",
+      ).bind("draft", nextVersion, updatedAt, chartPayload(restoredChart), body.chartId),
       versionInsert(
         DB,
         restoredChart,
@@ -903,6 +1106,16 @@ export async function POST(request: Request) {
   }
 
   if (body.action === "delete" && body.chartId) {
+    const chartRow = await DB.prepare("SELECT status FROM charts WHERE id = ?")
+      .bind(body.chartId)
+      .first<{ status: string }>();
+    if (!chartRow) return Response.json({ error: "Chart not found." }, { status: 404 });
+    if (normalizeChartStatus(chartRow.status) !== "archived") {
+      return Response.json(
+        { error: "Archive a chart before permanently deleting it." },
+        { status: 423 },
+      );
+    }
     const sourceResult = await DB.prepare(
       "SELECT storage_key FROM source_records WHERE chart_id = ? AND storage_key <> ''",
     )

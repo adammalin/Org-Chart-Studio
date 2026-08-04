@@ -6,6 +6,7 @@ import {
   EXPORT_CONNECTION_POINT_STROKE_WIDTH,
   EXPORT_COLORS,
   EXPORT_PRESETS,
+  exportLifecycleLabel,
   type ChartExportScene,
   type ExportPresetId,
   type ExportSceneNode,
@@ -319,7 +320,7 @@ export async function buildChartPptx(
     objectName: "Chart title",
   });
   slide.addText(
-    `${scene.audience === "public" ? "PUBLIC-SAFE DRAFT" : "INTERNAL WORKING DRAFT"}  |  VERSION ${scene.chartVersion}`,
+    exportLifecycleLabel(scene).replaceAll("•", " | "),
     {
       x: offsetX + 30 * scale,
       y: offsetY + 43 * scale,

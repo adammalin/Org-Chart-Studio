@@ -7,6 +7,7 @@ import {
   compactNodeDimensions,
   deriveCompactPresentation,
   type ChartPresentationMode,
+  type CompactLayoutOrientation,
   type OrgFlowNode,
   type PositionStatus,
 } from "./org-chart";
@@ -128,9 +129,13 @@ export interface ChartExportScene {
   chartName: string;
   chartStatus: ChartDocument["status"];
   chartVersion: number;
+  lastCurrentAt: string | null;
+  lastCurrentVersion: number | null;
+  lastCurrentBy: string;
   generatedAt: string;
   audience: ExportAudience;
   presentationMode: ChartPresentationMode;
+  compactLayoutOrientation: CompactLayoutOrientation;
   width: number;
   height: number;
   nodes: ExportSceneNode[];
@@ -278,6 +283,7 @@ export function buildChartExportScene(
   generatedAt = new Date().toISOString(),
   connectorRoutingMode: ConnectorRoutingMode = "separate",
   presentationMode: ChartPresentationMode = "individual",
+  compactLayoutOrientation: CompactLayoutOrientation = "vertical",
 ): ChartExportScene {
   const audienceNodes = chart.nodes.filter((node) => visibleForAudience(node, audience));
   if (!audienceNodes.length) {
@@ -292,7 +298,12 @@ export function buildChartExportScene(
   const compactPresentation = deriveCompactPresentation(audienceNodes, audienceEdges);
   const includedNodes =
     presentationMode === "compact"
-      ? arrangeCompactPresentation(audienceNodes, audienceEdges, compactPresentation)
+      ? arrangeCompactPresentation(
+          audienceNodes,
+          audienceEdges,
+          compactPresentation,
+          compactLayoutOrientation,
+        )
       : audienceNodes;
   const includedIds = new Set(includedNodes.map((node) => node.id));
   const sourceEdges = audienceEdges.filter(
@@ -418,7 +429,8 @@ export function buildChartExportScene(
       hierarchyLevel,
       targetSide:
         presentationMode === "compact" &&
-        (hierarchyLevel >= 3 || compactPresentation.sidecarNodeIds.has(node.id))
+        (compactPresentation.sidecarNodeIds.has(node.id) ||
+          (compactLayoutOrientation === "vertical" && hierarchyLevel >= 3))
           ? ("left" as const)
           : ("top" as const),
       compactEntries,
@@ -483,9 +495,13 @@ export function buildChartExportScene(
     chartName: chart.name,
     chartStatus: chart.status,
     chartVersion: chart.version,
+    lastCurrentAt: chart.lifecycle.lastCurrentAt,
+    lastCurrentVersion: chart.lifecycle.lastCurrentVersion,
+    lastCurrentBy: chart.lifecycle.lastCurrentBy,
     generatedAt,
     audience,
     presentationMode,
+    compactLayoutOrientation,
     width: Math.max(760, maxX - minX + PADDING * 2),
     height: maxY - minY + HEADER_HEIGHT + FOOTER_HEIGHT + PADDING * 2,
     nodes,
@@ -539,12 +555,20 @@ function statusColor(status: PositionStatus): string {
   return EXPORT_COLORS.green;
 }
 
+export function exportLifecycleLabel(scene: ChartExportScene): string {
+  const status = scene.chartStatus === "in_review"
+    ? "IN REVIEW"
+    : scene.chartStatus.toUpperCase();
+  const audience = scene.audience === "public" ? "PUBLIC-SAFE DRAFT" : "INTERNAL";
+  return `${audience} • ${status} • VERSION ${scene.chartVersion}`;
+}
+
 export function buildChartSvg(
   scene: ChartExportScene,
   presetId: ExportPresetId = "natural",
 ): string {
   const viewport = resolveExportViewport(scene, presetId);
-  const audienceLabel = scene.audience === "public" ? "PUBLIC-SAFE DRAFT" : "INTERNAL WORKING DRAFT";
+  const audienceLabel = exportLifecycleLabel(scene);
   const edgeMarkup = scene.edges
     .map((edge) => {
       const path = edge.points
@@ -627,7 +651,7 @@ export function buildChartSvg(
   });
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${viewport.width}" height="${viewport.height}" viewBox="0 0 ${viewport.width} ${viewport.height}" role="img" aria-labelledby="title description">
     <title id="title">${escapeXml(scene.chartName)} organizational chart</title>
-    <desc id="description">${escapeXml(audienceLabel)}, version ${scene.chartVersion}, ${scene.presentationMode === "compact" ? "compact grouped presentation" : "individual card presentation"}, ${escapeXml(viewport.preset.label)}, generated ${escapeXml(generatedLabel)}.</desc>
+    <desc id="description">${escapeXml(audienceLabel)}, ${scene.presentationMode === "compact" ? `${scene.compactLayoutOrientation} compact grouped presentation` : "individual card presentation"}, ${escapeXml(viewport.preset.label)}, generated ${escapeXml(generatedLabel)}.</desc>
     <defs>
       ${scene.nodes.map((node, index) => `<clipPath id="export-card-content-${index}" clipPathUnits="userSpaceOnUse"><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"/></clipPath>`).join("")}
     </defs>
@@ -637,9 +661,9 @@ export function buildChartSvg(
     <rect x="0" y="0" width="${scene.width}" height="${HEADER_HEIGHT}" fill="#${EXPORT_COLORS.white}"/>
     <rect x="0" y="0" width="8" height="${HEADER_HEIGHT}" fill="#${EXPORT_COLORS.green}"/>
     <text x="30" y="31" font-family="Mulish, Aptos, Arial, sans-serif" font-size="20" font-weight="700" fill="#${EXPORT_COLORS.ink}">${escapeXml(scene.chartName)}</text>
-    <text x="30" y="53" font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" font-weight="700" letter-spacing="1.1" fill="#${EXPORT_COLORS.darkTeal}">${audienceLabel} • VERSION ${scene.chartVersion}</text>
+    <text x="30" y="53" font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" font-weight="700" letter-spacing="1.1" fill="#${EXPORT_COLORS.darkTeal}">${audienceLabel}</text>
     ${edgeMarkup}${nodeMarkup}
-    <text x="${PADDING}" y="${scene.height - 15}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" fill="#${EXPORT_COLORS.ink}">Generated ${escapeXml(generatedLabel)} • ${scene.nodes.length} cards${scene.groupedNodeCount ? ` • ${scene.groupedNodeCount} grouped entries` : ""}${scene.excludedNodeCount ? ` • ${scene.excludedNodeCount} excluded by audience profile` : ""}</text>
+    <text x="${PADDING}" y="${scene.height - 15}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" fill="#${EXPORT_COLORS.ink}">Generated ${escapeXml(generatedLabel)} • ${scene.nodes.length} cards${scene.groupedNodeCount ? ` • ${scene.groupedNodeCount} grouped entries` : ""}${scene.excludedNodeCount ? ` • ${scene.excludedNodeCount} excluded by audience profile` : ""}${scene.lastCurrentAt ? ` • Last Current v${scene.lastCurrentVersion ?? scene.chartVersion} ${escapeXml(new Date(scene.lastCurrentAt).toLocaleDateString("en-US"))}${scene.lastCurrentBy ? ` by ${escapeXml(scene.lastCurrentBy)}` : ""}` : ""}</text>
     </g>
   </svg>`;
 }
@@ -663,7 +687,8 @@ export function buildAccessibleTableCsv(
   const nameById = new Map(
     includedNodes.map((node) => [node.id, node.data.unit.name]),
   );
-  const publicHeaders = ["unit", "parent", "unitType", "positionTitle", "positionStatus", "effectiveDate"];
+  const lifecycleHeaders = ["chartLifecycle", "chartVersion", "lastCurrentAt", "lastCurrentBy"];
+  const publicHeaders = [...lifecycleHeaders, "unit", "parent", "unitType", "positionTitle", "positionStatus", "effectiveDate"];
   const internalHeaders = [
     "unitId",
     ...publicHeaders,
@@ -675,6 +700,10 @@ export function buildAccessibleTableCsv(
   const rows = includedNodes.map((node) => {
     const unit = node.data.unit;
     const publicValues = [
+      chart.status,
+      chart.version,
+      chart.lifecycle.lastCurrentAt ?? "",
+      chart.lifecycle.lastCurrentBy,
       unit.name,
       nameById.get(parentById.get(node.id) ?? "") ?? "Root",
       unit.type,

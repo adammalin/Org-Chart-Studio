@@ -78,9 +78,37 @@ test("a single scene drives metadata-rich internal and public SVG exports", () =
   assert.doesNotMatch(publicSvg, /Sample role holder/);
   assert.match(publicSvg, /Synthetic Laboratory Overview/);
   const publicTable = buildAccessibleTableCsv(chart, "public");
-  assert.match(publicTable, /^unit,parent,unitType/m);
+  assert.match(publicTable, /^chartLifecycle,chartVersion,lastCurrentAt,lastCurrentBy,unit,parent,unitType/m);
   assert.doesNotMatch(publicTable, /unit-lab|Sample role holder|source/i);
   assert.equal(safeExportFileStem("Example Directorate — Current!"), "example-directorate-current");
+});
+
+test("exports visibly carry chart lifecycle and the last Current approval record", () => {
+  const chart = seedChartDocuments()[0];
+  const currentChart = {
+    ...chart,
+    status: "current" as const,
+    version: 4,
+    lifecycle: {
+      statusChangedAt: "2026-08-04T14:00:00.000Z",
+      lastCurrentAt: "2026-08-04T14:00:00.000Z",
+      lastCurrentVersion: 4,
+      lastCurrentBy: "Synthetic Reviewer",
+      lastCurrentNote: "Synthetic approval fixture.",
+    },
+  };
+  const scene = buildChartExportScene(currentChart, "internal", generatedAt);
+  const svg = buildChartSvg(scene, "natural");
+  const table = buildAccessibleTableCsv(currentChart, "internal");
+
+  assert.equal(scene.chartStatus, "current");
+  assert.equal(scene.lastCurrentVersion, 4);
+  assert.equal(scene.lastCurrentBy, "Synthetic Reviewer");
+  assert.match(svg, /INTERNAL • CURRENT • VERSION 4/);
+  assert.match(svg, /Last Current v4/);
+  assert.match(svg, /Synthetic Reviewer/);
+  assert.match(table, /^unitId,chartLifecycle,chartVersion,lastCurrentAt,lastCurrentBy/m);
+  assert.match(table, /current,4,2026-08-04T14:00:00.000Z,Synthetic Reviewer/);
 });
 
 test("shared export scene includes editor-matching connection point circles", () => {
@@ -141,6 +169,7 @@ test("compact exports group terminal records and route level-three cards from th
   const svg = buildChartSvg(scene, "natural");
 
   assert.equal(scene.presentationMode, "compact");
+  assert.equal(scene.compactLayoutOrientation, "vertical");
   assert.ok(scene.groupedNodeCount > 0);
   assert.ok(scene.nodes.length < chart.nodes.length);
   assert.ok(scene.nodes.some((node) => node.compactEntries.length > 0));
@@ -178,6 +207,40 @@ test("compact exports group terminal records and route level-three cards from th
       );
     }
   }
+});
+
+test("horizontal compact exports use wide hierarchy rows and top-entry connectors", () => {
+  const chart = seedChartDocuments()[0];
+  const vertical = buildChartExportScene(
+    chart,
+    "internal",
+    generatedAt,
+    "separate",
+    "compact",
+    "vertical",
+  );
+  const horizontal = buildChartExportScene(
+    chart,
+    "internal",
+    generatedAt,
+    "separate",
+    "compact",
+    "horizontal",
+  );
+  const svg = buildChartSvg(horizontal, "presentation-wide");
+
+  assert.equal(horizontal.presentationMode, "compact");
+  assert.equal(horizontal.compactLayoutOrientation, "horizontal");
+  assert.equal(horizontal.groupedNodeCount, vertical.groupedNodeCount);
+  assert.ok(horizontal.width > vertical.width);
+  assert.ok(horizontal.height < vertical.height);
+  assert.ok(
+    horizontal.nodes
+      .filter((node) => node.hierarchyLevel >= 3)
+      .every((node) => node.targetSide === "top"),
+  );
+  assert.match(svg, /horizontal compact grouped presentation/);
+  assert.doesNotMatch(svg, /data-port-kind=/);
 });
 
 test("sibling relationships use separate source ports and connector lanes", () => {

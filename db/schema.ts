@@ -10,6 +10,7 @@ export const schemaStatements = [
     payload TEXT NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS charts_updated_at_idx ON charts(updated_at DESC)`,
+  `UPDATE charts SET status = 'current' WHERE status = 'approved'`,
   `CREATE TABLE IF NOT EXISTS source_records (
     id TEXT PRIMARY KEY,
     chart_id TEXT NOT NULL,

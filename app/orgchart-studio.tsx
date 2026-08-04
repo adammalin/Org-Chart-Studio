@@ -88,6 +88,7 @@ import {
   validateHierarchy,
   type ChartPresentationMode,
   type CompactDisplay,
+  type CompactLayoutOrientation,
   type OrgFlowNode,
   type OrganizationalUnit,
   type PositionStatus,
@@ -104,12 +105,16 @@ import {
   planningStateForNode,
 } from "../lib/chart-governance";
 import {
+  chartStatusDescriptions,
+  chartStatusLabels,
   storageSafeNodes,
   type ChartDocument,
   type ChartLibraryResponse,
+  type ChartStatus,
   type ChartVersion,
   type ChartVersionsResponse,
 } from "../lib/chart-library";
+import { currentReadiness } from "../lib/chart-lifecycle";
 import {
   aiIntakeBrief,
   importTemplateCsv,
@@ -171,6 +176,7 @@ type WorkspaceView =
   | "library"
   | "canvas"
   | "table"
+  | "review"
   | "sources"
   | "backups"
   | "history"
@@ -179,6 +185,25 @@ type WorkspaceView =
 type BackupScope = "all" | "selected";
 type ExportFormat = "svg" | "png" | "pdf" | "pptx";
 type PlanningFilter = "all" | PlanningState;
+type SourceReviewFilter = "all" | "cards" | "relationships";
+type LibraryStatusFilter = "active" | "all" | ChartStatus;
+
+interface LifecycleDialogState {
+  chartId: string;
+  targetStatus: ChartStatus;
+}
+
+interface DeleteChartDialogState {
+  chartId: string;
+  chartName: string;
+}
+
+interface ChartSourceReviewSummary {
+  chart: ChartDocument;
+  cardCount: number;
+  relationshipCount: number;
+  total: number;
+}
 
 interface OnboardingTourStep {
   eyebrow: string;
@@ -206,6 +231,7 @@ const CONNECTOR_ROUTING_EVENT = "orgchart-studio-connector-routing-change";
 const BACKUP_HEALTH_STORAGE_KEY = "orgchart-studio-backup-health";
 const ONBOARDING_STORAGE_KEY = "orgchart-studio-onboarding-v1";
 const PRESENTATION_STORAGE_KEY = "orgchart-studio-presentation-v1";
+const COMPACT_LAYOUT_STORAGE_KEY = "orgchart-studio-compact-layout-v1";
 
 const ONBOARDING_TOUR_STEPS: OnboardingTourStep[] = [
   {
@@ -220,23 +246,23 @@ const ONBOARDING_TOUR_STEPS: OnboardingTourStep[] = [
     eyebrow: "Step 1",
     title: "Move through the chart workflow",
     body:
-      "Use the workspace navigation to open the chart library, edit the selected chart, review sources, make backups, export, and inspect version history.",
+      "Use the workspace navigation to open the chart library, edit the selected chart, resolve imported cards and reporting lines in Review queue, make backups, export, and inspect version history.",
     target: "navigation",
     placement: "right",
   },
   {
     eyebrow: "Step 2",
-    title: "Choose a grouped or individual presentation",
+    title: "Choose grouped, vertical, horizontal, or individual cards",
     body:
-      "Compact groups keeps major units as cards and lists terminal lower-level assignments inside their parent group. Individual cards restores one card for every record. Switching views never removes chart data.",
+      "Compact groups keeps major units as cards and lists terminal assignments inside their parent group. Vertical is the default column stack; Horizontal uses wider hierarchy rows. Individual cards restores one card for every record. Switching views never removes chart data.",
     target: "presentation",
     placement: "bottom",
   },
   {
     eyebrow: "Step 3",
-    title: "Check the working chart state",
+    title: "Follow the chart lifecycle",
     body:
-      "The top bar identifies the active chart, version, validation result, and save state. “Not applied” means you are previewing an AI proposal—the saved chart is still unchanged.",
+      "The top bar shows Draft, In review, Current, or Archived alongside the saved version and validation result. Current means approved and in use; Archived is historical and read-only. “Not applied” means an AI proposal is still only a preview.",
     target: "chart-status",
     placement: "bottom",
   },
@@ -283,6 +309,13 @@ function storedPresentationMode(): ChartPresentationMode {
   return window.localStorage.getItem(PRESENTATION_STORAGE_KEY) === "individual"
     ? "individual"
     : "compact";
+}
+
+function storedCompactLayoutOrientation(): CompactLayoutOrientation {
+  if (typeof window === "undefined") return "vertical";
+  return window.localStorage.getItem(COMPACT_LAYOUT_STORAGE_KEY) === "horizontal"
+    ? "horizontal"
+    : "vertical";
 }
 
 function connectorRoutingSnapshot(): ConnectorRoutingMode {
@@ -666,6 +699,7 @@ function StudioWorkspace() {
   const [activeChartId, setActiveChartId] = useState("");
   const [libraryLoading, setLibraryLoading] = useState(true);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "proposal" | "error">("saved");
+  const [saveRetryRevision, setSaveRetryRevision] = useState(0);
   const [selectedId, setSelectedId] = useState("");
   const [selectedEdgeId, setSelectedEdgeId] = useState("");
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
@@ -673,6 +707,8 @@ function StudioWorkspace() {
   const [presentationMode, setPresentationMode] = useState<ChartPresentationMode>(
     storedPresentationMode,
   );
+  const [compactLayoutOrientation, setCompactLayoutOrientation] =
+    useState<CompactLayoutOrientation>(storedCompactLayoutOrientation);
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("respect-pins");
   const [moveBranchOnDrag, setMoveBranchOnDrag] = useState(true);
   const [marqueeSelectionEnabled, setMarqueeSelectionEnabled] = useState(false);
@@ -732,6 +768,15 @@ function StudioWorkspace() {
   const [undoStack, setUndoStack] = useState<EditorSnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<EditorSnapshot[]>([]);
   const [editorDialog, setEditorDialog] = useState<EditorDialogState | null>(null);
+  const [lifecycleDialog, setLifecycleDialog] = useState<LifecycleDialogState | null>(null);
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [lifecycleError, setLifecycleError] = useState("");
+  const [deleteChartDialog, setDeleteChartDialog] = useState<DeleteChartDialogState | null>(null);
+  const [deleteChartBusy, setDeleteChartBusy] = useState(false);
+  const [deleteChartError, setDeleteChartError] = useState("");
+  const [deleteChartConfirmation, setDeleteChartConfirmation] = useState("");
+  const [libraryStatusFilter, setLibraryStatusFilter] =
+    useState<LibraryStatusFilter>("active");
   const [mcpActivity, setMcpActivity] = useState<McpActivitySnapshot>(
     IDLE_MCP_ACTIVITY,
   );
@@ -754,6 +799,8 @@ function StudioWorkspace() {
   const [comparisonTargetId, setComparisonTargetId] = useState("");
   const [comparisonBusy, setComparisonBusy] = useState(false);
   const [planningFilter, setPlanningFilter] = useState<PlanningFilter>("all");
+  const [sourceReviewFilter, setSourceReviewFilter] =
+    useState<SourceReviewFilter>("all");
   const [onboardingStep, setOnboardingStep] = useState<number | null>(null);
   const [tourGeometry, setTourGeometry] = useState<TourGeometry>({
     target: null,
@@ -770,9 +817,20 @@ function StudioWorkspace() {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const onboardingDialogRef = useRef<HTMLElement | null>(null);
   const onboardingInitializedRef = useRef(false);
+  const handledMcpCompletionRevisionRef = useRef(0);
+  const mcpCompletionRefreshInFlightRef = useRef(0);
   const { fitView } = useReactFlow<OrgFlowNode>();
 
   const activeChart = charts.find((chart) => chart.id === activeChartId) ?? charts[0];
+  const activeChartReadOnly = activeChart?.status === "archived";
+  const visibleLibraryCharts = charts.filter((chart) => {
+    if (libraryStatusFilter === "all") return true;
+    if (libraryStatusFilter === "active") return chart.status !== "archived";
+    return chart.status === libraryStatusFilter;
+  });
+  const switchableCharts = charts.filter(
+    (chart) => chart.status !== "archived" || chart.id === activeChart?.id,
+  );
   const selectedBackupCharts = charts.filter((chart) =>
     backupSelectedChartIds.has(chart.id),
   );
@@ -786,7 +844,7 @@ function StudioWorkspace() {
   const unencryptedCloudBackupBlocked =
     backupProtection === "unencrypted" && Boolean(desktopStorage?.backupIsCloudSynced);
   const version = activeChart
-    ? `${activeChart.status.replace("_", " ").replace(/^./, (character) => character.toUpperCase())} v${activeChart.version}`
+    ? `${chartStatusLabels[activeChart.status]} v${activeChart.version}`
     : libraryLoading
       ? "Loading library"
       : "No chart selected";
@@ -802,6 +860,46 @@ function StudioWorkspace() {
         : null,
     [activeChart, charts, edges, nodes],
   );
+  const sourceReviewNodes = useMemo(
+    () =>
+      activeChartReadOnly ? [] : nodes.filter(
+        (flowNode) => flowNode.data.unit.sourceCertainty === "needs_review",
+      ),
+    [activeChartReadOnly, nodes],
+  );
+  const sourceReviewEdges = useMemo(
+    () => activeChartReadOnly
+      ? []
+      : edges.filter((edge) => edge.data?.sourceCertainty === "needs_review"),
+    [activeChartReadOnly, edges],
+  );
+  const sourceReviewSummaries = useMemo<ChartSourceReviewSummary[]>(
+    () =>
+      charts.filter((chart) => chart.status !== "archived").map((chart) => {
+        const chartNodes = chart.id === activeChartId ? nodes : chart.nodes;
+        const chartEdges = chart.id === activeChartId ? edges : chart.edges;
+        const cardCount = chartNodes.filter(
+          (flowNode) => flowNode.data.unit.sourceCertainty === "needs_review",
+        ).length;
+        const relationshipCount = chartEdges.filter(
+          (edge) => edge.data?.sourceCertainty === "needs_review",
+        ).length;
+        return {
+          chart,
+          cardCount,
+          relationshipCount,
+          total: cardCount + relationshipCount,
+        };
+      }),
+    [activeChartId, charts, edges, nodes],
+  );
+  const chartsNeedingSourceReview = sourceReviewSummaries.filter(
+    (summary) => summary.total > 0,
+  );
+  const portfolioSourceReviewCount = sourceReviewSummaries.reduce(
+    (total, summary) => total + summary.total,
+    0,
+  );
   const planningFilteredNodes = useMemo(
     () =>
       planningFilter === "all"
@@ -810,21 +908,19 @@ function StudioWorkspace() {
     [nodes, planningFilter],
   );
 
-  const effectiveComparisonTargetId = charts.some((chart) => chart.id === comparisonTargetId)
+  const comparisonCharts = charts.filter((chart) => chart.status !== "archived");
+  const effectiveComparisonTargetId = comparisonCharts.some((chart) => chart.id === comparisonTargetId)
     ? comparisonTargetId
-    : activeChart?.id ?? charts[0]?.id ?? "";
-  const effectiveComparisonSourceId = charts.some((chart) => chart.id === comparisonSourceId)
+    : comparisonCharts.find((chart) => chart.id === activeChart?.id)?.id ?? comparisonCharts[0]?.id ?? "";
+  const effectiveComparisonSourceId = comparisonCharts.some((chart) => chart.id === comparisonSourceId)
     ? comparisonSourceId
-    : charts.find((chart) => chart.id !== effectiveComparisonTargetId)?.id ?? "";
-  const comparisonSource = charts.find((chart) => chart.id === effectiveComparisonSourceId);
-  const comparisonTarget = charts.find((chart) => chart.id === effectiveComparisonTargetId);
-  const chartComparison = useMemo(
-    () =>
-      comparisonSource && comparisonTarget && comparisonSource.id !== comparisonTarget.id
-        ? compareChartDocuments(comparisonTarget, comparisonSource)
-        : null,
-    [comparisonSource, comparisonTarget],
-  );
+    : comparisonCharts.find((chart) => chart.id !== effectiveComparisonTargetId)?.id ?? "";
+  const comparisonSource = comparisonCharts.find((chart) => chart.id === effectiveComparisonSourceId);
+  const comparisonTarget = comparisonCharts.find((chart) => chart.id === effectiveComparisonTargetId);
+  const chartComparison =
+    comparisonSource && comparisonTarget && comparisonSource.id !== comparisonTarget.id
+      ? compareChartDocuments(comparisonTarget, comparisonSource)
+      : null;
 
   const saveBackupHealth = useCallback((next: BackupHealthState) => {
     setBackupHealth(next);
@@ -999,7 +1095,9 @@ function StudioWorkspace() {
       pendingAiProposal !== null ||
       pendingAiImportProposal !== null ||
       (mcpActivity.phase === "succeeded" && mcpActivity.completionKind === "review_ready");
-    if (reviewNeedsAttention) setOnboardingStep(null);
+    if (!reviewNeedsAttention) return;
+    const timer = window.setTimeout(() => setOnboardingStep(null), 0);
+    return () => window.clearTimeout(timer);
   }, [mcpActivity.completionKind, mcpActivity.phase, pendingAiImportProposal, pendingAiProposal]);
 
   useEffect(() => {
@@ -1073,6 +1171,10 @@ function StudioWorkspace() {
     };
   }, []);
 
+  useEffect(() => {
+    window.orgChartDesktop?.reportSaveState(saveState);
+  }, [saveState]);
+
   const changeConnectorRoutingMode = useCallback(
     (mode: ConnectorRoutingMode) => {
       window.localStorage.setItem(CONNECTOR_ROUTING_STORAGE_KEY, mode);
@@ -1093,8 +1195,25 @@ function StudioWorkspace() {
       setSelectedEdgeId("");
       setNotice(
         mode === "compact"
-          ? "Compact groups enabled. Major units remain cards, terminal level 4 assignments are listed inside their parent, and level 3 connectors enter from the left. Chart data is unchanged."
+          ? `Compact groups enabled in ${compactLayoutOrientation} mode. Major units remain cards and terminal level 4 assignments are listed inside their parent. Chart data is unchanged.`
           : "Individual cards enabled. Every chart record is shown as its own card using its saved position.",
+      );
+      window.requestAnimationFrame(() => {
+        void fitView({ duration: 420, padding: 0.14 });
+      });
+    },
+    [compactLayoutOrientation, fitView],
+  );
+
+  const changeCompactLayoutOrientation = useCallback(
+    (orientation: CompactLayoutOrientation) => {
+      window.localStorage.setItem(COMPACT_LAYOUT_STORAGE_KEY, orientation);
+      setCompactLayoutOrientation(orientation);
+      setSelectedEdgeId("");
+      setNotice(
+        orientation === "vertical"
+          ? "Vertical compact layout enabled. This is the original default: lower cards share aligned branch columns and level 3 connectors enter from the left. Chart data is unchanged."
+          : "Horizontal compact layout enabled. Lower cards spread across hierarchy rows with top-entry connectors for a wider, shorter chart. Chart data is unchanged.",
       );
       window.requestAnimationFrame(() => {
         void fitView({ duration: 420, padding: 0.14 });
@@ -1124,6 +1243,18 @@ function StudioWorkspace() {
 
   const openChart = useCallback(
     (chart: ChartDocument, nextView: WorkspaceView = "canvas") => {
+      if (chart.id === activeChartId && hydratedChartRef.current === chart.id) {
+        setWorkspaceView(nextView);
+        return;
+      }
+      if (hydratedChartRef.current && (saveState === "saving" || saveState === "error")) {
+        setNotice(
+          saveState === "saving"
+            ? "Wait for Saved before opening another chart. Your current change is still being written to local storage."
+            : "Resolve the Save issue or retry the save before opening another chart, so the latest change is not lost.",
+        );
+        return;
+      }
       hydratedChartRef.current = null;
       setActiveChartId(chart.id);
       setNodes(chart.nodes);
@@ -1143,8 +1274,15 @@ function StudioWorkspace() {
         void fitView({ duration: 420, padding: 0.14 });
       });
     },
-    [fitView, setEdges, setNodes],
+    [activeChartId, fitView, saveState, setEdges, setNodes],
   );
+
+  const retryCurrentSave = () => {
+    if (!activeChart || saveState !== "error") return;
+    setNotice("Retrying the current chart save…");
+    setSaveState("saving");
+    setSaveRetryRevision((revision) => revision + 1);
+  };
 
   const dismissMcpActivity = useCallback(async (activityId = mcpActivity.activityId) => {
     setDismissedMcpRevision(mcpActivity.revision);
@@ -1252,8 +1390,8 @@ function StudioWorkspace() {
     setNotice(noticeMessage);
   }, []);
 
-  const reviewMcpUpdate = useCallback(async () => {
-    if (!mcpActivity.chartId && !mcpActivity.proposalId) return;
+  const loadMcpReview = useCallback(async (activity: McpActivitySnapshot) => {
+    if (!activity.proposalId) return false;
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -1261,39 +1399,61 @@ function StudioWorkspace() {
     saveGenerationRef.current += 1;
     hydratedChartRef.current = null;
     try {
-      if (mcpActivity.completionKind === "review_ready" && mcpActivity.proposalId) {
-        if (mcpActivity.operation === "stage_normalized_import") {
-          setAiImportBusy("load");
-          const response = await fetch(
-            `/api/ai-import-proposals?proposalId=${encodeURIComponent(mcpActivity.proposalId)}`,
-            { cache: "no-store" },
-          );
-          const data = (await response.json()) as AiImportProposalResponse;
-          if (!response.ok || !data.proposal) {
-            throw new Error(data.error ?? "The AI import proposal could not be loaded.");
-          }
-          setPendingAiImportProposal(data.proposal);
-          setAiImportError("");
-          setWorkspaceView("sources");
-          setNotice(
-            `Reviewing ${data.proposal.proposed.nodes.length} proposed units. No chart has been created.`,
-          );
-          setDismissedMcpRevision(mcpActivity.revision);
-          return;
-        }
-        setAiProposalBusy("load");
+      if (activity.operation === "stage_normalized_import") {
+        setAiImportBusy("load");
         const response = await fetch(
-          `/api/ai-proposals?proposalId=${encodeURIComponent(mcpActivity.proposalId)}`,
+          `/api/ai-import-proposals?proposalId=${encodeURIComponent(activity.proposalId)}`,
           { cache: "no-store" },
         );
-        const data = (await response.json()) as AiProposalResponse & { error?: string };
+        const data = (await response.json()) as AiImportProposalResponse;
         if (!response.ok || !data.proposal) {
-          throw new Error(data.error ?? "The AI proposal could not be loaded.");
+          throw new Error(data.error ?? "The AI import proposal could not be loaded.");
         }
-        showAiProposal(data.proposal);
-        setDismissedMcpRevision(mcpActivity.revision);
-        return;
+        setPendingAiImportProposal(data.proposal);
+        setAiImportError("");
+        setWorkspaceView("sources");
+        setNotice(
+          `Reviewing ${data.proposal.proposed.nodes.length} proposed units. No chart has been created.`,
+        );
+        return true;
       }
+      setAiProposalBusy("load");
+      const response = await fetch(
+        `/api/ai-proposals?proposalId=${encodeURIComponent(activity.proposalId)}`,
+        { cache: "no-store" },
+      );
+      const data = (await response.json()) as AiProposalResponse & { error?: string };
+      if (!response.ok || !data.proposal) {
+        throw new Error(data.error ?? "The AI proposal could not be loaded.");
+      }
+      showAiProposal(data.proposal);
+      return true;
+    } catch (error) {
+      setSaveState("error");
+      setNotice(
+        error instanceof Error ? error.message : "The AI-assisted review could not be loaded.",
+      );
+      return false;
+    } finally {
+      setAiProposalBusy(null);
+      setAiImportBusy(null);
+    }
+  }, [showAiProposal]);
+
+  const reviewMcpUpdate = useCallback(async () => {
+    if (!mcpActivity.chartId && !mcpActivity.proposalId) return;
+    if (mcpActivity.completionKind === "review_ready" && mcpActivity.proposalId) {
+      const loaded = await loadMcpReview(mcpActivity);
+      if (loaded) setDismissedMcpRevision(mcpActivity.revision);
+      return;
+    }
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    saveGenerationRef.current += 1;
+    hydratedChartRef.current = null;
+    try {
       const response = await fetch("/api/charts", { cache: "no-store" });
       if (!response.ok) throw new Error("The updated chart library could not be loaded.");
       const data = (await response.json()) as ChartLibraryResponse;
@@ -1321,7 +1481,86 @@ function StudioWorkspace() {
       setAiProposalBusy(null);
       setAiImportBusy(null);
     }
-  }, [mcpActivity, openChart, showAiProposal]);
+  }, [loadMcpReview, mcpActivity, openChart]);
+
+  useEffect(() => {
+    if (
+      mcpActivity.phase !== "succeeded" ||
+      mcpActivity.revision <= handledMcpCompletionRevisionRef.current ||
+      mcpActivity.revision === mcpCompletionRefreshInFlightRef.current
+    ) {
+      return;
+    }
+
+    const activity = mcpActivity;
+    const revision = activity.revision;
+    mcpCompletionRefreshInFlightRef.current = revision;
+
+    const synchronizeCompletedActivity = async (attempt = 0): Promise<void> => {
+      try {
+        if (activity.completionKind === "review_ready" && activity.proposalId) {
+          const loaded = await loadMcpReview(activity);
+          if (!loaded) throw new Error("The review screen is not ready yet.");
+          setDismissedMcpRevision(revision);
+        } else {
+          const response = await fetch("/api/charts", { cache: "no-store" });
+          if (!response.ok) throw new Error("The updated chart library could not be loaded.");
+          const data = (await response.json()) as ChartLibraryResponse;
+          const updatedChart = activity.chartId
+            ? data.charts.find((chart) => chart.id === activity.chartId)
+            : null;
+          const refreshActiveChart =
+            updatedChart?.id === activeChartId &&
+            saveState === "saved" &&
+            pendingAiProposal === null &&
+            pendingAiImportProposal === null;
+
+          if (refreshActiveChart && updatedChart) {
+            hydratedChartRef.current = null;
+          }
+          setCharts(data.charts);
+          if (!activeChartId && updatedChart) {
+            openChart(updatedChart, "library");
+          } else if (refreshActiveChart && updatedChart) {
+            setNodes(updatedChart.nodes);
+            setEdges(updatedChart.edges);
+            setSelectedId((current) =>
+              updatedChart.nodes.some((node) => node.id === current)
+                ? current
+                : updatedChart.nodes[0]?.id ?? "",
+            );
+            setSelectedEdgeId("");
+            window.requestAnimationFrame(() => {
+              hydratedChartRef.current = updatedChart.id;
+            });
+          }
+          setNotice(
+            `${activity.label ?? "AI-assisted update"} completed. The chart library refreshed automatically${updatedChart ? ` and now includes ${updatedChart.name}` : ""}.`,
+          );
+        }
+        handledMcpCompletionRevisionRef.current = revision;
+        mcpCompletionRefreshInFlightRef.current = 0;
+      } catch {
+        if (attempt < 2) {
+          window.setTimeout(() => void synchronizeCompletedActivity(attempt + 1), 400);
+          return;
+        }
+        mcpCompletionRefreshInFlightRef.current = 0;
+      }
+    };
+
+    void synchronizeCompletedActivity();
+  }, [
+    activeChartId,
+    loadMcpReview,
+    mcpActivity,
+    openChart,
+    pendingAiImportProposal,
+    pendingAiProposal,
+    saveState,
+    setEdges,
+    setNodes,
+  ]);
 
   const loadAiActivities = useCallback(async (chartId: string) => {
     const response = await fetch(
@@ -1351,6 +1590,7 @@ function StudioWorkspace() {
         const data = (await response.json()) as {
           chart?: ChartDocument;
           rejected?: string;
+          returnedToDraft?: boolean;
           error?: string;
         };
         if (!response.ok) {
@@ -1396,7 +1636,7 @@ function StudioWorkspace() {
         setSaveState("saved");
         setNotice(
           action === "accept"
-            ? `Applied ${proposal.summary.total} reviewed AI change${proposal.summary.total === 1 ? "" : "s"} to ${resolvedChart.name}. Save a named version when this working draft is ready for a checkpoint.`
+            ? `Applied ${proposal.summary.total} reviewed AI change${proposal.summary.total === 1 ? "" : "s"} to ${resolvedChart.name}.${data.returnedToDraft ? ` Current v${proposal.current.version} remains preserved; the changed chart is now a Draft.` : " Save a named version when this working draft is ready for a checkpoint."}`
             : `Rejected the AI proposal. ${resolvedChart.name} was not changed.`,
         );
         void dismissMcpActivity();
@@ -1493,7 +1733,9 @@ function StudioWorkspace() {
         if (cancelled) return;
         setCharts(data.charts);
         const nextChart =
-          data.charts.find((chart) => chart.id === activeChartId) ?? data.charts[0];
+          data.charts.find((chart) => chart.id === activeChartId) ??
+          data.charts.find((chart) => chart.status !== "archived") ??
+          data.charts[0];
         if (nextChart) openChart(nextChart, "library");
       } catch {
         if (!cancelled) {
@@ -1515,6 +1757,10 @@ function StudioWorkspace() {
   useEffect(() => {
     const chartSnapshot = chartsRef.current.find((chart) => chart.id === activeChartId);
     if (!chartSnapshot || hydratedChartRef.current !== chartSnapshot.id) return;
+    if (chartSnapshot.status === "archived") {
+      setSaveState("saved");
+      return;
+    }
     const savedContent = JSON.stringify({
       nodes: storageSafeNodes(chartSnapshot.nodes),
       edges: chartSnapshot.edges,
@@ -1534,6 +1780,7 @@ function StudioWorkspace() {
       saveTimerRef.current = null;
       const chartToSave: ChartDocument = {
         ...chartSnapshot,
+        status: chartSnapshot.status === "current" ? "draft" : chartSnapshot.status,
         nodes,
         edges,
       };
@@ -1550,6 +1797,7 @@ function StudioWorkspace() {
           error?: string;
           currentVersion?: number;
           currentUpdatedAt?: string;
+          returnedToDraft?: boolean;
         };
         if (
           response.status === 409 &&
@@ -1567,6 +1815,11 @@ function StudioWorkspace() {
           current.map((chart) => (chart.id === data.chart!.id ? data.chart! : chart)),
         );
         setSaveState("saved");
+        if (data.returnedToDraft) {
+          setNotice(
+            `Editing began from Current v${chartSnapshot.version}. That approved checkpoint is preserved, and the working chart is now a Draft.`,
+          );
+        }
       } catch {
         if (saveGeneration === saveGenerationRef.current) setSaveState("error");
       }
@@ -1575,7 +1828,7 @@ function StudioWorkspace() {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [activeChartId, edges, nodes]);
+  }, [activeChartId, edges, nodes, saveRetryRevision]);
 
   const hiddenIds = useMemo(() => {
     const hidden = new Set<string>();
@@ -1613,8 +1866,14 @@ function StudioWorkspace() {
     [edges, nodes],
   );
   const compactLayoutNodes = useMemo(
-    () => arrangeCompactPresentation(nodes, edges, compactPresentation),
-    [compactPresentation, edges, nodes],
+    () =>
+      arrangeCompactPresentation(
+        nodes,
+        edges,
+        compactPresentation,
+        compactLayoutOrientation,
+      ),
+    [compactLayoutOrientation, compactPresentation, edges, nodes],
   );
   const compactPositionById = useMemo(
     () => new Map(compactLayoutNodes.map((flowNode) => [flowNode.id, flowNode.position])),
@@ -1698,8 +1957,9 @@ function StudioWorkspace() {
           height: Number(flowNode.style?.height) || NODE_HEIGHT,
           targetSide:
             presentationMode === "compact" &&
-            ((compactPresentation.levels.get(flowNode.id) ?? 1) >= 3 ||
-              compactPresentation.sidecarNodeIds.has(flowNode.id))
+            (compactPresentation.sidecarNodeIds.has(flowNode.id) ||
+              (compactLayoutOrientation === "vertical" &&
+                (compactPresentation.levels.get(flowNode.id) ?? 1) >= 3))
               ? "left"
               : "top",
         })),
@@ -1709,6 +1969,7 @@ function StudioWorkspace() {
     [
       compactPresentation.levels,
       compactPresentation.sidecarNodeIds,
+      compactLayoutOrientation,
       connectorRoutingMode,
       presentationMode,
       routingEdges,
@@ -1870,7 +2131,8 @@ function StudioWorkspace() {
       const level = compactPresentation.levels.get(flowNode.id) ?? 1;
       const targetSide: "top" | "left" =
         presentationMode === "compact" &&
-        (level >= 3 || compactPresentation.sidecarNodeIds.has(flowNode.id))
+        (compactPresentation.sidecarNodeIds.has(flowNode.id) ||
+          (compactLayoutOrientation === "vertical" && level >= 3))
           ? "left"
           : "top";
       return {
@@ -1906,6 +2168,7 @@ function StudioWorkspace() {
     compactPresentation.entriesByParent,
     compactPresentation.levels,
     compactPresentation.sidecarNodeIds,
+    compactLayoutOrientation,
     edges,
     nodes,
     presentationHiddenIds,
@@ -2018,6 +2281,7 @@ function StudioWorkspace() {
         activeChart.updatedAt,
         connectorRoutingMode,
         presentationMode,
+        compactLayoutOrientation,
       );
       return {
         scene,
@@ -2033,6 +2297,7 @@ function StudioWorkspace() {
     }
   }, [
     activeChart,
+    compactLayoutOrientation,
     connectorRoutingMode,
     edges,
     effectiveExportAudience,
@@ -2137,6 +2402,7 @@ function StudioWorkspace() {
 
   useEffect(() => {
     const handleHistoryShortcut = (event: KeyboardEvent) => {
+      if (activeChartReadOnly) return;
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z") return;
       if (
         event.target instanceof HTMLInputElement ||
@@ -2151,7 +2417,7 @@ function StudioWorkspace() {
     };
     window.addEventListener("keydown", handleHistoryShortcut);
     return () => window.removeEventListener("keydown", handleHistoryShortcut);
-  }, [redoChange, undoChange]);
+  }, [activeChartReadOnly, redoChange, undoChange]);
 
   useEffect(() => {
     if (!editorDialog) return;
@@ -2303,7 +2569,7 @@ function StudioWorkspace() {
       }
       setSaveState("saved");
       setNotice(
-        `Version ${versionItem.version} was restored as new version ${data.chart.version}.`,
+        `Version ${versionItem.version} was restored as Draft v${data.chart.version}. Any previous Current checkpoint remains preserved.`,
       );
       window.requestAnimationFrame(() => {
         void fitView({ duration: 420, padding: 0.14 });
@@ -2360,6 +2626,117 @@ function StudioWorkspace() {
     },
     [compactPresentation.listedNodeIds, compactPresentation.parentById, fitView, presentationMode],
   );
+
+  const resolveCardSourceReview = (
+    nodeId: string,
+    certainty: Exclude<SourceCertainty, "needs_review">,
+  ) => {
+    const reviewNode = nodes.find((flowNode) => flowNode.id === nodeId);
+    if (!reviewNode) return;
+    recordCurrentState(
+      `${certainty === "confirmed" ? "confirming" : "retaining as inferred"} ${reviewNode.data.unit.shortName}`,
+    );
+    setNodes((currentNodes) =>
+      currentNodes.map((flowNode) =>
+        flowNode.id === nodeId
+          ? {
+              ...flowNode,
+              data: {
+                ...flowNode.data,
+                unit: { ...flowNode.data.unit, sourceCertainty: certainty },
+              },
+            }
+          : flowNode,
+      ),
+    );
+    setNotice(
+      certainty === "confirmed"
+        ? `${reviewNode.data.unit.shortName} was marked Confirmed. Saving automatically…`
+        : `${reviewNode.data.unit.shortName} was retained as Inferred. Saving automatically…`,
+    );
+  };
+
+  const resolveRelationshipSourceReview = (
+    edgeId: string,
+    certainty: Exclude<SourceCertainty, "needs_review">,
+  ) => {
+    const reviewEdge = edges.find((edge) => edge.id === edgeId);
+    if (!reviewEdge) return;
+    const parent = nodes.find((flowNode) => flowNode.id === reviewEdge.source);
+    const child = nodes.find((flowNode) => flowNode.id === reviewEdge.target);
+    const relationshipLabel = `${parent?.data.unit.shortName ?? reviewEdge.source} → ${child?.data.unit.shortName ?? reviewEdge.target}`;
+    recordCurrentState(
+      `${certainty === "confirmed" ? "confirming" : "retaining as inferred"} ${relationshipLabel}`,
+    );
+    setEdges((currentEdges) =>
+      currentEdges.map((edge) =>
+        edge.id === edgeId
+          ? {
+              ...edge,
+              data: { ...edge.data, sourceCertainty: certainty },
+            }
+          : edge,
+      ),
+    );
+    setNotice(
+      certainty === "confirmed"
+        ? `${relationshipLabel} was marked Confirmed. Saving automatically…`
+        : `${relationshipLabel} was retained as Inferred. Saving automatically…`,
+    );
+  };
+
+  const correctRelationshipSourceReview = (edge: Edge) => {
+    const child = nodes.find((flowNode) => flowNode.id === edge.target);
+    setSelectedEdgeId(edge.id);
+    focusNode(edge.target);
+    setNotice(
+      `Correct ${child?.data.unit.shortName ?? "this reporting line"} with the Primary parent field in Selected unit details, then choose Save organizational changes.`,
+    );
+  };
+
+  const rejectAndRemoveCard = (nodeId: string) => {
+    const reviewNode = nodes.find((flowNode) => flowNode.id === nodeId);
+    const parentEdge = edges.find((edge) => edge.target === nodeId);
+    if (!reviewNode || !parentEdge) {
+      setNotice(
+        "The chart root cannot be removed from the review queue. Correct its source fields or delete the entire chart from the library.",
+      );
+      return;
+    }
+    const branchIds = descendantIds(nodeId, edges);
+    const branchDescription =
+      branchIds.size === 1
+        ? reviewNode.data.unit.shortName
+        : `${reviewNode.data.unit.shortName} and ${branchIds.size - 1} record${branchIds.size === 2 ? "" : "s"} below it`;
+    if (
+      !window.confirm(
+        `Reject and remove ${branchDescription}? This removes the record from the working draft. You can undo it while this chart remains open.`,
+      )
+    ) {
+      return;
+    }
+    recordCurrentState(`rejecting imported record ${reviewNode.data.unit.shortName}`);
+    setNodes((currentNodes) =>
+      currentNodes.filter((flowNode) => !branchIds.has(flowNode.id)),
+    );
+    setEdges((currentEdges) =>
+      currentEdges.filter(
+        (edge) => !branchIds.has(edge.source) && !branchIds.has(edge.target),
+      ),
+    );
+    setSelectedId(parentEdge.source);
+    setNotice(`${branchDescription} removed from the working draft. Saving automatically…`);
+  };
+
+  const openNextChartForSourceReview = () => {
+    if (!chartsNeedingSourceReview.length) return;
+    const currentIndex = chartsNeedingSourceReview.findIndex(
+      (summary) => summary.chart.id === activeChartId,
+    );
+    const nextSummary =
+      chartsNeedingSourceReview[(currentIndex + 1) % chartsNeedingSourceReview.length];
+    if (nextSummary) openChart(nextSummary.chart, "review");
+  };
 
   const handleSearch = (value: string) => {
     setSearchQuery(value);
@@ -2696,8 +3073,12 @@ function StudioWorkspace() {
 
   const updateChartMetadata = async (
     chart: ChartDocument,
-    patch: Partial<Pick<ChartDocument, "name" | "description" | "status">>,
+    patch: Partial<Pick<ChartDocument, "name" | "description">>,
   ) => {
+    if (chart.status === "archived") {
+      setNotice("Archived charts are read-only. Restore this chart as a Draft before editing it.");
+      return;
+    }
     const currentStructure = chart.id === activeChartId
       ? { nodes, edges }
       : { nodes: chart.nodes, edges: chart.edges };
@@ -2709,7 +3090,13 @@ function StudioWorkspace() {
       saveGenerationRef.current += 1;
     }
     try {
-      const chartToSave = { ...chart, ...patch, ...currentStructure };
+      const returnedToDraft = chart.status === "current";
+      const chartToSave = {
+        ...chart,
+        ...patch,
+        ...currentStructure,
+        status: returnedToDraft ? "draft" as const : chart.status,
+      };
       const sendSave = (candidate: ChartDocument) =>
         fetch("/api/charts", {
           method: "POST",
@@ -2737,9 +3124,88 @@ function StudioWorkspace() {
       setCharts((current) =>
         current.map((candidate) => candidate.id === data.chart!.id ? data.chart! : candidate),
       );
-      setNotice(`${data.chart.name} details were updated.`);
+      setNotice(
+        returnedToDraft
+          ? `Current v${chart.version} remains preserved. ${data.chart.name} is now a Draft because its details changed.`
+          : `${data.chart.name} details were updated.`,
+      );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Chart details could not be saved.");
+    }
+  };
+
+  const requestLifecycleTransition = (
+    chart: ChartDocument,
+    targetStatus: ChartStatus,
+  ) => {
+    if (chart.status === targetStatus) return;
+    if (chart.id === activeChartId && saveState !== "saved") {
+      setNotice("Wait for the active chart to show Saved before changing its lifecycle.");
+      return;
+    }
+    setLifecycleError("");
+    setLifecycleDialog({ chartId: chart.id, targetStatus });
+  };
+
+  const submitLifecycleTransition = async (form: HTMLFormElement) => {
+    if (!lifecycleDialog || lifecycleBusy) return;
+    const chart = charts.find((candidate) => candidate.id === lifecycleDialog.chartId);
+    if (!chart) return;
+    const formData = new FormData(form);
+    setLifecycleBusy(true);
+    setLifecycleError("");
+    try {
+      const response = await fetch("/api/charts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "transition_status",
+          chartId: chart.id,
+          targetStatus: lifecycleDialog.targetStatus,
+          expectedVersion: chart.version,
+          expectedUpdatedAt: chart.updatedAt,
+          currentBy: String(formData.get("currentBy") ?? "").trim(),
+          approvalNote: String(formData.get("approvalNote") ?? "").trim(),
+        }),
+      });
+      const data = (await response.json()) as {
+        chart?: ChartDocument;
+        version?: ChartVersion;
+        error?: string;
+      };
+      if (!response.ok || !data.chart) {
+        throw new Error(data.error ?? "The chart lifecycle could not be updated.");
+      }
+      setCharts((current) =>
+        current.map((candidate) => candidate.id === data.chart!.id ? data.chart! : candidate),
+      );
+      if (data.version && data.chart.id === activeChartId) {
+        await loadVersions(data.chart.id);
+      }
+      const targetStatus = lifecycleDialog.targetStatus;
+      setLifecycleDialog(null);
+      if (targetStatus === "archived" && chart.id === activeChartId) {
+        const nextChart = charts.find(
+          (candidate) => candidate.id !== chart.id && candidate.status !== "archived",
+        );
+        if (nextChart) openChart(nextChart, "library");
+        else setWorkspaceView("library");
+      }
+      setNotice(
+        targetStatus === "current"
+          ? `${data.chart.name} is now Current. Version ${data.chart.version} is the approved checkpoint.`
+          : targetStatus === "archived"
+            ? `${data.chart.name} is archived and read-only. It is hidden from the active library view.`
+            : targetStatus === "in_review"
+              ? `${data.chart.name} was submitted for review.`
+              : `${data.chart.name} is now a Draft and can be edited.`,
+      );
+    } catch (error) {
+      setLifecycleError(
+        error instanceof Error ? error.message : "The chart lifecycle could not be updated.",
+      );
+    } finally {
+      setLifecycleBusy(false);
     }
   };
 
@@ -2784,40 +3250,61 @@ function StudioWorkspace() {
   };
 
   const deleteChart = async (chart: ChartDocument) => {
-    const confirmed = window.confirm(
-      `Delete “${chart.name}”, its saved versions, and its stored source files? This cannot be undone.`,
-    );
-    if (!confirmed) return;
-    if (chart.id === activeChartId) {
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
-      saveGenerationRef.current += 1;
-    }
-    const response = await fetch("/api/charts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "delete", chartId: chart.id }),
-    });
-    if (!response.ok) {
-      setNotice("The chart could not be deleted.");
+    if (chart.status !== "archived") {
+      setNotice("Archive a chart before permanently deleting it.");
       return;
     }
-    const remaining = charts.filter((candidate) => candidate.id !== chart.id);
-    setCharts(remaining);
-    if (activeChartId === chart.id) {
-      if (remaining[0]) {
-        openChart(remaining[0], "library");
-      } else {
-        hydratedChartRef.current = null;
-        setNodes([]);
-        setEdges([]);
-        setSelectedId("");
-        setWorkspaceView("library");
+    setDeleteChartBusy(true);
+    try {
+      if (chart.id === activeChartId) {
+        if (saveTimerRef.current) {
+          clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = null;
+        }
+        saveGenerationRef.current += 1;
       }
+      const response = await fetch("/api/charts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "delete", chartId: chart.id }),
+      });
+      if (!response.ok) {
+        throw new Error("The chart could not be deleted.");
+      }
+      const remaining = charts.filter((candidate) => candidate.id !== chart.id);
+      setCharts(remaining);
+      if (activeChartId === chart.id) {
+        if (remaining[0]) {
+          openChart(remaining[0], "library");
+        } else {
+          hydratedChartRef.current = null;
+          setNodes([]);
+          setEdges([]);
+          setSelectedId("");
+          setWorkspaceView("library");
+        }
+      }
+      setDeleteChartDialog(null);
+      setDeleteChartConfirmation("");
+      setNotice(`${chart.name}, its saved versions, and its stored source files were deleted.`);
+    } catch (error) {
+      setDeleteChartError(error instanceof Error ? error.message : "The chart could not be deleted.");
+    } finally {
+      setDeleteChartBusy(false);
     }
-    setNotice(`${chart.name}, its saved versions, and its stored source files were deleted.`);
+  };
+
+  const submitPermanentDelete = () => {
+    if (!deleteChartDialog || deleteChartBusy) return;
+    const confirmation = deleteChartConfirmation.trim();
+    if (confirmation !== deleteChartDialog.chartName) {
+      setDeleteChartError("Type the complete chart name exactly to confirm permanent deletion.");
+      return;
+    }
+    const chart = charts.find((candidate) => candidate.id === deleteChartDialog.chartId);
+    if (!chart) return;
+    setDeleteChartError("");
+    void deleteChart(chart);
   };
 
   const createImportIntake = async () => {
@@ -3376,9 +3863,14 @@ function StudioWorkspace() {
         undefined,
         connectorRoutingMode,
         presentationMode,
+        compactLayoutOrientation,
       );
       const viewport = resolveExportViewport(scene, exportPreset);
-      const fileStem = `${safeExportFileStem(activeChart.name)}-v${activeChart.version}-${effectiveExportAudience}-${presentationMode}-${exportPreset}`;
+      const presentationFileLabel =
+        presentationMode === "compact"
+          ? `${presentationMode}-${compactLayoutOrientation}`
+          : presentationMode;
+      const fileStem = `${safeExportFileStem(activeChart.name)}-v${activeChart.version}-${activeChart.status}-${effectiveExportAudience}-${presentationFileLabel}-${exportPreset}`;
       if (format === "svg") {
         downloadBlob(
           new Blob([buildChartSvg(scene, exportPreset)], { type: "image/svg+xml;charset=utf-8" }),
@@ -3410,7 +3902,7 @@ function StudioWorkspace() {
         );
       }
       setNotice(
-        `${format.toUpperCase()} exported from version ${activeChart.version} using the ${effectiveExportAudience} audience, ${presentationMode === "compact" ? "Compact groups" : "Individual cards"} presentation, and ${EXPORT_PRESETS.find((preset) => preset.id === exportPreset)?.label ?? exportPreset} profile.`,
+        `${format.toUpperCase()} exported from version ${activeChart.version} using the ${effectiveExportAudience} audience, ${presentationMode === "compact" ? `Compact groups · ${compactLayoutOrientation === "vertical" ? "Vertical" : "Horizontal"}` : "Individual cards"} presentation, and ${EXPORT_PRESETS.find((preset) => preset.id === exportPreset)?.label ?? exportPreset} profile.`,
       );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "The chart export could not be created.");
@@ -3425,7 +3917,7 @@ function StudioWorkspace() {
       setNotice("Resolve blocking structural findings before exporting this chart.");
       return;
     }
-    const fileStem = `${safeExportFileStem(activeChart.name)}-v${activeChart.version}-${effectiveExportAudience}`;
+    const fileStem = `${safeExportFileStem(activeChart.name)}-v${activeChart.version}-${activeChart.status}-${effectiveExportAudience}`;
     downloadTextFile(
       buildAccessibleTableCsv(
         { ...activeChart, nodes, edges },
@@ -3465,6 +3957,21 @@ function StudioWorkspace() {
     onboardingStep === null || reviewNeedsAttention
       ? null
       : ONBOARDING_TOUR_STEPS[onboardingStep];
+  const visibleSourceReviewNodes =
+    sourceReviewFilter === "relationships" ? [] : sourceReviewNodes;
+  const visibleSourceReviewEdges =
+    sourceReviewFilter === "cards" ? [] : sourceReviewEdges;
+  const activeSourceReviewCount =
+    sourceReviewNodes.length + sourceReviewEdges.length;
+  const hasAnotherChartForSourceReview = chartsNeedingSourceReview.some(
+    (summary) => summary.chart.id !== activeChartId,
+  );
+  const lifecycleDialogChart = lifecycleDialog
+    ? charts.find((chart) => chart.id === lifecycleDialog.chartId) ?? null
+    : null;
+  const lifecycleReadiness = lifecycleDialogChart
+    ? currentReadiness(lifecycleDialogChart)
+    : null;
 
   return (
     <div
@@ -3564,12 +4071,17 @@ function StudioWorkspace() {
               value={activeChart?.id ?? ""}
               onChange={(event) => {
                 const chart = charts.find((candidate) => candidate.id === event.target.value);
-                if (chart) openChart(chart);
+                if (chart) openChart(chart, workspaceView === "review" ? "review" : "canvas");
               }}
-              disabled={libraryLoading || !charts.length}
+              disabled={
+                libraryLoading ||
+                !charts.length ||
+                saveState === "saving" ||
+                saveState === "error"
+              }
             >
               {!charts.length ? <option value="">No charts yet</option> : null}
-              {charts.map((chart) => (
+              {switchableCharts.map((chart) => (
                 <option key={chart.id} value={chart.id}>{chart.name}</option>
               ))}
             </select>
@@ -3584,6 +4096,15 @@ function StudioWorkspace() {
                   ? "Save issue"
                   : "Saved"}
           </span>
+          {saveState === "error" && activeChart ? (
+            <button
+              type="button"
+              className="save-retry-button"
+              onClick={retryCurrentSave}
+            >
+              Retry save
+            </button>
+          ) : null}
           <span className="validation-status">
             {!activeChart ? (
               <FolderOpen size={16} aria-hidden="true" />
@@ -3609,6 +4130,8 @@ function StudioWorkspace() {
               title={
                 saveState === "saving"
                   ? "Wait for the current save to finish before quitting"
+                  : saveState === "error"
+                    ? "A save issue needs attention before quitting"
                   : "Quit OrgChart Studio"
               }
             >
@@ -3651,6 +4174,26 @@ function StudioWorkspace() {
           >
             <Table size={19} aria-hidden="true" />
             <span>Accessible table</span>
+          </button>
+          <button
+            type="button"
+            className={workspaceView === "review" ? "is-active" : ""}
+            onClick={() => setWorkspaceView("review")}
+            disabled={!activeChart}
+          >
+            <ShieldWarning size={19} aria-hidden="true" />
+            <span>Review queue</span>
+            {portfolioSourceReviewCount ? (
+              <span
+                className="nav-count"
+                aria-label={`${portfolioSourceReviewCount} records need review across the library`}
+                title={`${portfolioSourceReviewCount} records need review across ${chartsNeedingSourceReview.length} chart${chartsNeedingSourceReview.length === 1 ? "" : "s"}`}
+              >
+                {portfolioSourceReviewCount > 99 ? "99+" : portfolioSourceReviewCount}
+              </span>
+            ) : (
+              <span className="nav-count nav-count--neutral">0</span>
+            )}
           </button>
           <button
             type="button"
@@ -3717,7 +4260,7 @@ function StudioWorkspace() {
         </div>
 
         <div className="sidebar__summary">
-          <p>Active draft</p>
+          <p>Active chart · {activeChart ? chartStatusLabels[activeChart.status] : "None"}</p>
           <strong>{activeChart?.name ?? (libraryLoading ? "Loading" : "No chart selected")}</strong>
           <span>{charts.length} charts managed</span>
           <span>{nodes.length} units</span>
@@ -3770,9 +4313,13 @@ function StudioWorkspace() {
                       {presentationMode === "compact" ? (
                         <span
                           className="presentation-control__status"
-                          title="Column stacks · fixed hierarchy rails · level 3 left entry"
+                          title={
+                            compactLayoutOrientation === "vertical"
+                              ? "Original default · column stacks · fixed hierarchy rails · level 3 left entry"
+                              : "Wide layout · hierarchy rows · top-entry connectors"
+                          }
                         >
-                          Auto arranged
+                          {compactLayoutOrientation === "vertical" ? "Vertical" : "Horizontal"}
                         </span>
                       ) : null}
                     </strong>
@@ -3800,13 +4347,45 @@ function StudioWorkspace() {
                   </div>
                 </div>
               </div>
-              {presentationMode === "individual" ? (
+              {presentationMode === "compact" ? (
+                <div className="compact-orientation-control">
+                  <span>
+                    <strong>Compact layout</strong>
+                    <small>
+                      {compactLayoutOrientation === "vertical"
+                        ? "Original column-stack layout"
+                        : "Wider hierarchy-row layout"}
+                    </small>
+                  </span>
+                  <div role="group" aria-label="Compact layout direction">
+                    <button
+                      type="button"
+                      className={compactLayoutOrientation === "vertical" ? "is-active" : ""}
+                      aria-pressed={compactLayoutOrientation === "vertical"}
+                      onClick={() => changeCompactLayoutOrientation("vertical")}
+                    >
+                      <Columns size={16} aria-hidden="true" />
+                      Vertical
+                    </button>
+                    <button
+                      type="button"
+                      className={compactLayoutOrientation === "horizontal" ? "is-active" : ""}
+                      aria-pressed={compactLayoutOrientation === "horizontal"}
+                      onClick={() => changeCompactLayoutOrientation("horizontal")}
+                    >
+                      <Rows size={16} aria-hidden="true" />
+                      Horizontal
+                    </button>
+                  </div>
+                </div>
+              ) : (
                 <div className="layout-control">
                   <div className="layout-control__field">
                     <label htmlFor="layout-mode">Card layout</label>
                     <select
                       id="layout-mode"
                       value={layoutMode}
+                      disabled={activeChartReadOnly}
                       onChange={(event) => setLayoutMode(event.target.value as LayoutMode)}
                       title="Choose how individual card positions are recalculated"
                     >
@@ -3820,7 +4399,7 @@ function StudioWorkspace() {
                     type="button"
                     className="button button--primary layout-control__run"
                     onClick={() => void runLayout()}
-                    disabled={isLayoutRunning}
+                    disabled={isLayoutRunning || activeChartReadOnly}
                   >
                     <ArrowsOut size={17} aria-hidden="true" />
                     {isLayoutRunning ? "Laying out…" : "Run layout"}
@@ -3831,6 +4410,7 @@ function StudioWorkspace() {
                     <select
                       id="connector-routing-mode"
                       value={connectorRoutingMode}
+                      disabled={activeChartReadOnly}
                       onChange={(event) =>
                         changeConnectorRoutingMode(
                           event.target.value as ConnectorRoutingMode,
@@ -3846,6 +4426,7 @@ function StudioWorkspace() {
                     type="button"
                     className="button button--branch-toggle"
                     aria-pressed={moveBranchOnDrag}
+                    disabled={activeChartReadOnly}
                     onClick={() => setMoveBranchOnDrag((current) => !current)}
                     title={
                       moveBranchOnDrag
@@ -3860,6 +4441,7 @@ function StudioWorkspace() {
                     type="button"
                     className="button button--selection-toggle"
                     aria-pressed={marqueeSelectionEnabled}
+                    disabled={activeChartReadOnly}
                     onClick={() => {
                       setMarqueeSelectionEnabled((current) => {
                         const next = !current;
@@ -3881,14 +4463,14 @@ function StudioWorkspace() {
                     Select area: {marqueeSelectionEnabled ? "On" : "Off"}
                   </button>
                 </div>
-              ) : null}
+              )}
               <div className="toolbar-actions" role="toolbar" aria-label="Chart actions">
                 <div className="toolbar-actions__history" role="group" aria-label="Change history">
                   <button
                     type="button"
                     className="button button--secondary button--history"
                     onClick={undoChange}
-                    disabled={!undoStack.length}
+                    disabled={!undoStack.length || activeChartReadOnly}
                     title="Undo organizational or presentation change"
                     aria-label="Undo organizational or presentation change"
                   >
@@ -3899,7 +4481,7 @@ function StudioWorkspace() {
                     type="button"
                     className="button button--secondary button--history"
                     onClick={redoChange}
-                    disabled={!redoStack.length}
+                    disabled={!redoStack.length || activeChartReadOnly}
                     title="Redo organizational or presentation change"
                     aria-label="Redo organizational or presentation change"
                   >
@@ -3928,7 +4510,18 @@ function StudioWorkspace() {
               </div>
             </div>
 
-            {presentationMode === "individual" && selectedCardCount > 1 ? (
+            {activeChartReadOnly ? (
+              <section className="archived-chart-banner" role="status">
+                <Archive size={20} aria-hidden="true" />
+                <span>
+                  <strong>Archived chart · read-only</strong>
+                  <small>Its versions, sources, and approval record are preserved. Restore it as a Draft to make changes.</small>
+                </span>
+                <button type="button" className="button button--secondary" onClick={() => activeChart && requestLifecycleTransition(activeChart, "draft")}>Restore as draft</button>
+              </section>
+            ) : null}
+
+            {presentationMode === "individual" && selectedCardCount > 1 && !activeChartReadOnly ? (
               <div
                 className="selection-arrange-toolbar"
                 role="toolbar"
@@ -4054,7 +4647,7 @@ function StudioWorkspace() {
                   type="button"
                   className="button button--secondary"
                   onClick={pinSelectedConnector}
-                  disabled={selectedEdgeRoute.manual || !selectedEdgeRoute.controls.length}
+                  disabled={activeChartReadOnly || selectedEdgeRoute.manual || !selectedEdgeRoute.controls.length}
                   title="Keep the current orthogonal connector corners in their present locations"
                 >
                   <PushPin size={16} aria-hidden="true" />
@@ -4064,7 +4657,7 @@ function StudioWorkspace() {
                   type="button"
                   className="button button--secondary"
                   onClick={resetSelectedConnector}
-                  disabled={!selectedEdgeRoute.manual}
+                  disabled={activeChartReadOnly || !selectedEdgeRoute.manual}
                   title="Remove manual corner positions and calculate this connector automatically"
                 >
                   <ArrowCounterClockwise size={16} aria-hidden="true" />
@@ -4077,11 +4670,11 @@ function StudioWorkspace() {
             ) : null}
 
             <div
-              className={`flow-surface ${marqueeSelectionEnabled ? "is-marquee-active" : ""} ${pendingAiProposal ? "is-ai-preview" : ""}`}
+              className={`flow-surface ${marqueeSelectionEnabled ? "is-marquee-active" : ""} ${pendingAiProposal ? "is-ai-preview" : ""} ${activeChartReadOnly ? "is-read-only" : ""}`}
             >
               <p id="canvas-selection-help" className="sr-only">
                 {presentationMode === "compact"
-                  ? "Compact groups is a presentation-only view. Terminal assignments are listed inside their parent cards, and level 3 connectors enter from the left. Switch to Individual cards to move cards or edit connector routes."
+                  ? `Compact groups is a presentation-only view. Terminal assignments are listed inside their parent cards. ${compactLayoutOrientation === "vertical" ? "The Vertical layout stacks lower cards in aligned columns with level 3 connectors entering from the left." : "The Horizontal layout spreads lower cards across hierarchy rows with connectors entering from the top."} Switch to Individual cards to move cards or edit connector routes.`
                   : marqueeSelectionEnabled
                   ? "Area selection is on. Drag on empty canvas to draw a selection rectangle. Cards touched by the rectangle become a movable group. Control-click or Command-click adds individual cards. Hold Space while dragging to pan."
                   : "Area selection is off. Control-click or Command-click adds individual cards to a selection. Turn on Select area to draw a selection rectangle around multiple cards."}
@@ -4093,7 +4686,7 @@ function StudioWorkspace() {
                 edgeTypes={edgeTypes}
                 onNodesChange={(changes) =>
                   onNodesChange(
-                    presentationMode === "compact"
+                    presentationMode === "compact" || activeChartReadOnly
                       ? changes.filter((change) => change.type === "select")
                       : changes,
                   )
@@ -4235,10 +4828,10 @@ function StudioWorkspace() {
                 minZoom={presentationMode === "compact" ? 0.08 : 0.22}
                 maxZoom={1.6}
                 nodesConnectable={false}
-                nodesDraggable={presentationMode === "individual" && !pendingAiProposal}
+                nodesDraggable={presentationMode === "individual" && !pendingAiProposal && !activeChartReadOnly}
                 deleteKeyCode={null}
                 selectionKeyCode={null}
-                selectionOnDrag={presentationMode === "individual" && marqueeSelectionEnabled}
+                selectionOnDrag={presentationMode === "individual" && marqueeSelectionEnabled && !activeChartReadOnly}
                 selectionMode={SelectionMode.Partial}
                 multiSelectionKeyCode={["Control", "Meta"]}
                 panOnDrag={presentationMode === "compact" || !marqueeSelectionEnabled}
@@ -4277,7 +4870,12 @@ function StudioWorkspace() {
               {presentationMode === "compact" ? (
                 <>
                   <span><Rows size={14} aria-hidden="true" /> Terminal assignments are listed inside their parent card</span>
-                  <span><TreeStructure size={14} aria-hidden="true" /> Level 3 cards use shared left-entry rails</span>
+                  <span>
+                    <TreeStructure size={14} aria-hidden="true" />
+                    {compactLayoutOrientation === "vertical"
+                      ? " Lower cards use aligned columns and shared left-entry rails"
+                      : " Lower cards use wide hierarchy rows and top-entry connectors"}
+                  </span>
                   <span><SquaresFour size={14} aria-hidden="true" /> Switch to Individual cards to move cards or edit lines</span>
                 </>
               ) : (
@@ -4302,6 +4900,304 @@ function StudioWorkspace() {
               )}
             </div>
           </section>
+        ) : workspaceView === "review" ? (
+          <section className="source-review-page" aria-labelledby="source-review-title">
+            <div className="source-review-heading">
+              <div>
+                <span className="eyebrow">Imported data verification</span>
+                <h1 id="source-review-title">Source review queue</h1>
+                <p>
+                  Resolve records marked Needs review in {activeChart?.name ?? "the active chart"}.
+                  Confirm means the record matches the original source; Keep inferred means it is
+                  reasonable but not explicit in that source.
+                </p>
+              </div>
+              <div className="source-review-heading__actions">
+                {hasAnotherChartForSourceReview ? (
+                  <button
+                    type="button"
+                    className="button button--secondary"
+                    onClick={openNextChartForSourceReview}
+                    disabled={saveState === "saving" || saveState === "error"}
+                  >
+                    Next chart with reviews
+                    <CaretRight size={16} aria-hidden="true" />
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  onClick={showVersionHistory}
+                >
+                  <ClockCounterClockwise size={16} aria-hidden="true" />
+                  Create named checkpoint
+                </button>
+              </div>
+            </div>
+
+            <div className="source-review-metrics" aria-label="Source review progress">
+              <div>
+                <span>Cards in this chart</span>
+                <strong>{sourceReviewNodes.length}</strong>
+              </div>
+              <div>
+                <span>Reporting lines</span>
+                <strong>{sourceReviewEdges.length}</strong>
+              </div>
+              <div>
+                <span>Charts remaining</span>
+                <strong>{chartsNeedingSourceReview.length}</strong>
+              </div>
+              <div>
+                <span>Library records remaining</span>
+                <strong>{portfolioSourceReviewCount}</strong>
+              </div>
+            </div>
+
+            <div className={`source-review-save source-review-save--${saveState}`} role="status">
+              <FloppyDisk size={20} aria-hidden="true" />
+              <span>
+                <strong>
+                  {saveState === "saving"
+                    ? "Saving this decision…"
+                    : saveState === "error"
+                      ? "This decision is not safely saved"
+                      : saveState === "proposal"
+                        ? "AI proposal is not applied"
+                        : "All current decisions are saved"}
+                </strong>
+                <small>
+                  {saveState === "error"
+                    ? "Keep the app open and resolve the save issue before closing."
+                    : "Changes save automatically. Wait for Saved before closing the app; use a named checkpoint when you want a restore point."}
+                </small>
+              </span>
+              {saveState === "error" ? (
+                <button
+                  type="button"
+                  className="button button--danger"
+                  onClick={retryCurrentSave}
+                >
+                  Retry save
+                </button>
+              ) : null}
+            </div>
+
+            <div className="source-review-toolbar">
+              <div role="group" aria-label="Filter source review queue">
+                {([
+                  ["all", "All"],
+                  ["cards", "Cards"],
+                  ["relationships", "Reporting lines"],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={sourceReviewFilter === value ? "is-active" : ""}
+                    aria-pressed={sourceReviewFilter === value}
+                    onClick={() => setSourceReviewFilter(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p>
+                Each decision is individual—there is no blanket Confirm all—so imported facts are
+                not approved without being checked.
+              </p>
+            </div>
+
+            {activeSourceReviewCount === 0 ? (
+              <div className="source-review-empty">
+                <ShieldCheck size={32} weight="fill" aria-hidden="true" />
+                <h2>This chart’s review queue is clear</h2>
+                <p>
+                  No cards or reporting lines in {activeChart?.name ?? "this chart"} are marked
+                  Needs review.
+                </p>
+                {activeChart?.status === "draft" ? (
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    onClick={() => requestLifecycleTransition(activeChart, "in_review")}
+                    disabled={saveState !== "saved"}
+                  >
+                    Submit chart for review
+                  </button>
+                ) : activeChart?.status === "in_review" ? (
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    onClick={() => requestLifecycleTransition(activeChart, "current")}
+                    disabled={saveState !== "saved" || Boolean(blockingFindings.length)}
+                  >
+                    Mark chart Current
+                  </button>
+                ) : activeChart?.status === "current" ? (
+                  <strong>Current v{activeChart.lifecycle.lastCurrentVersion ?? activeChart.version} is the approved checkpoint.</strong>
+                ) : null}
+                {hasAnotherChartForSourceReview ? (
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    onClick={openNextChartForSourceReview}
+                    disabled={saveState === "saving" || saveState === "error"}
+                  >
+                    Open next chart with reviews
+                    <CaretRight size={16} aria-hidden="true" />
+                  </button>
+                ) : null}
+              </div>
+            ) : visibleSourceReviewNodes.length || visibleSourceReviewEdges.length ? (
+              <div className="source-review-list">
+                {visibleSourceReviewNodes.map((flowNode) => {
+                  const parentEdge = edges.find((edge) => edge.target === flowNode.id);
+                  return (
+                    <article key={flowNode.id} className="source-review-item">
+                      <header>
+                        <span className="source-review-item__kind">Card</span>
+                        <span className="source-review-item__status">Needs review</span>
+                        <h2>{flowNode.data.unit.name}</h2>
+                        <p>
+                          {flowNode.data.unit.positionTitle} · {flowNode.data.unit.assignmentLabel}
+                        </p>
+                      </header>
+                      <dl>
+                        <div>
+                          <dt>Source note</dt>
+                          <dd>{flowNode.data.unit.source || "No source note supplied"}</dd>
+                        </div>
+                        <div>
+                          <dt>Source location</dt>
+                          <dd>{flowNode.data.unit.sourceLocator || "No page, slide, or row supplied"}</dd>
+                        </div>
+                        {flowNode.data.unit.reviewNote ? (
+                          <div>
+                            <dt>Question to resolve</dt>
+                            <dd>{flowNode.data.unit.reviewNote}</dd>
+                          </div>
+                        ) : null}
+                      </dl>
+                      <div className="source-review-item__actions">
+                        <button
+                          type="button"
+                          className="button button--primary"
+                          onClick={() => resolveCardSourceReview(flowNode.id, "confirmed")}
+                        >
+                          <Check size={16} weight="bold" aria-hidden="true" />
+                          Confirm
+                        </button>
+                        <button
+                          type="button"
+                          className="button button--secondary"
+                          onClick={() => resolveCardSourceReview(flowNode.id, "inferred")}
+                        >
+                          Keep inferred
+                        </button>
+                        <button
+                          type="button"
+                          className="button button--secondary"
+                          onClick={() => focusNode(flowNode.id)}
+                        >
+                          <PencilSimple size={16} aria-hidden="true" />
+                          Correct record
+                        </button>
+                        <button
+                          type="button"
+                          className="button button--danger"
+                          onClick={() => rejectAndRemoveCard(flowNode.id)}
+                          disabled={!parentEdge}
+                          title={
+                            parentEdge
+                              ? "Reject this imported record and remove its branch"
+                              : "The chart root cannot be removed here"
+                          }
+                        >
+                          <Trash size={16} aria-hidden="true" />
+                          Reject &amp; remove
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+
+                {visibleSourceReviewEdges.map((edge) => {
+                  const parent = nodes.find((flowNode) => flowNode.id === edge.source);
+                  const child = nodes.find((flowNode) => flowNode.id === edge.target);
+                  const sourceNote =
+                    typeof edge.data?.source === "string" ? edge.data.source : "";
+                  const sourceLocator =
+                    typeof edge.data?.sourceLocator === "string"
+                      ? edge.data.sourceLocator
+                      : "";
+                  const reviewNote =
+                    typeof edge.data?.reviewNote === "string" ? edge.data.reviewNote : "";
+                  return (
+                    <article key={edge.id} className="source-review-item source-review-item--relationship">
+                      <header>
+                        <span className="source-review-item__kind">Reporting line</span>
+                        <span className="source-review-item__status">Needs review</span>
+                        <h2>
+                          {parent?.data.unit.shortName ?? edge.source}
+                          <span aria-hidden="true"> → </span>
+                          {child?.data.unit.shortName ?? edge.target}
+                        </h2>
+                        <p>
+                          {String(edge.data?.relationshipType ?? "Primary supervisory relationship")}
+                        </p>
+                      </header>
+                      <dl>
+                        <div>
+                          <dt>Source note</dt>
+                          <dd>{sourceNote || "No separate relationship source note supplied"}</dd>
+                        </div>
+                        <div>
+                          <dt>Source location</dt>
+                          <dd>{sourceLocator || "No page, slide, or row supplied"}</dd>
+                        </div>
+                        {reviewNote ? (
+                          <div>
+                            <dt>Question to resolve</dt>
+                            <dd>{reviewNote}</dd>
+                          </div>
+                        ) : null}
+                      </dl>
+                      <div className="source-review-item__actions">
+                        <button
+                          type="button"
+                          className="button button--primary"
+                          onClick={() => resolveRelationshipSourceReview(edge.id, "confirmed")}
+                        >
+                          <Check size={16} weight="bold" aria-hidden="true" />
+                          Confirm line
+                        </button>
+                        <button
+                          type="button"
+                          className="button button--secondary"
+                          onClick={() => resolveRelationshipSourceReview(edge.id, "inferred")}
+                        >
+                          Keep inferred
+                        </button>
+                        <button
+                          type="button"
+                          className="button button--secondary"
+                          onClick={() => correctRelationshipSourceReview(edge)}
+                        >
+                          <TreeStructure size={16} aria-hidden="true" />
+                          Reject / change line
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="source-review-empty source-review-empty--filtered">
+                <h2>No matching review items</h2>
+                <p>Choose another filter to see the remaining records in this chart.</p>
+              </div>
+            )}
+          </section>
         ) : workspaceView === "table" ? (
           <section className="table-panel" aria-labelledby="table-title">
             <div className="table-panel__heading">
@@ -4312,13 +5208,13 @@ function StudioWorkspace() {
               </div>
               <div className="table-panel__actions">
                 <label>
-                  <span>Organization state</span>
+                  <span>Effective state</span>
                   <select
                     value={planningFilter}
                     onChange={(event) => setPlanningFilter(event.target.value as PlanningFilter)}
                   >
-                    <option value="all">Current and planned</option>
-                    <option value="current">Current only</option>
+                    <option value="all">In effect and planned</option>
+                    <option value="current">In effect now</option>
                     <option value="planned">Planned only</option>
                   </select>
                 </label>
@@ -4373,7 +5269,7 @@ function StudioWorkspace() {
                           </span>
                         </td>
                         <td>{flowNode.data.unit.effectiveDate}</td>
-                        <td>{planningStateForNode(flowNode) === "planned" ? "Planned" : "Current"}</td>
+                        <td>{planningStateForNode(flowNode) === "planned" ? "Planned" : "In effect"}</td>
                         <td>
                           {flowNode.data.unit.sourceCertainty === "needs_review"
                             ? "Needs review"
@@ -4418,36 +5314,58 @@ function StudioWorkspace() {
             <div className="library-metrics" aria-label="Chart library summary">
               <div><span>Total charts</span><strong>{charts.length}</strong></div>
               <div><span>Drafts</span><strong>{charts.filter((chart) => chart.status === "draft").length}</strong></div>
-              <div><span>Source records</span><strong>{charts.reduce((count, chart) => count + chart.sources.length, 0)}</strong></div>
-              <div><span>Storage</span><strong>{libraryLoading ? "Loading" : "Persistent"}</strong></div>
+              <div><span>In review</span><strong>{charts.filter((chart) => chart.status === "in_review").length}</strong></div>
+              <div><span>Current</span><strong>{charts.filter((chart) => chart.status === "current").length}</strong></div>
+              <div><span>Archived</span><strong>{charts.filter((chart) => chart.status === "archived").length}</strong></div>
+            </div>
+
+            <div className="library-status-filter" role="group" aria-label="Filter chart lifecycle">
+              {([
+                ["active", "Active"],
+                ["draft", "Draft"],
+                ["in_review", "In review"],
+                ["current", "Current"],
+                ["archived", "Archived"],
+                ["all", "All"],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={libraryStatusFilter === value ? "is-active" : ""}
+                  aria-pressed={libraryStatusFilter === value}
+                  onClick={() => setLibraryStatusFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+              <p>Chart lifecycle is authoritative; names and descriptions do not determine whether a chart is Current.</p>
             </div>
 
             {libraryLoading ? (
               <div className="library-empty" role="status">Loading chart library…</div>
-            ) : charts.length ? (
+            ) : visibleLibraryCharts.length ? (
               <div className="chart-card-grid">
-                {charts.map((chart) => (
+                {visibleLibraryCharts.map((chart) => (
                   <article
                     key={chart.id}
                     className={`chart-card ${chart.id === activeChartId ? "is-active" : ""}`}
                   >
                     <div className="chart-card__top">
                       <label className="chart-status-control">
-                        <span className="sr-only">Working status for {chart.name}</span>
+                        <span className="sr-only">Chart lifecycle for {chart.name}</span>
                         <select
                           value={chart.status}
                           onChange={(event) =>
-                            void updateChartMetadata(chart, {
-                              status: event.target.value as ChartDocument["status"],
-                            })
+                            requestLifecycleTransition(
+                              chart,
+                              event.target.value as ChartStatus,
+                            )
                           }
-                          aria-label={`Working status for ${chart.name}`}
+                          aria-label={`Chart lifecycle for ${chart.name}`}
                         >
                           <option value="draft">Draft</option>
-                          <option value="in_review">In review</option>
-                          {chart.status === "approved" ? (
-                            <option value="approved">Approved record</option>
-                          ) : null}
+                          <option value="in_review" disabled={chart.status !== "draft" && chart.status !== "in_review"}>In review</option>
+                          <option value="current" disabled={chart.status !== "in_review" && chart.status !== "current"}>Current</option>
                           <option value="archived">Archived</option>
                         </select>
                       </label>
@@ -4461,7 +5379,19 @@ function StudioWorkspace() {
                       <div><dt>Sources</dt><dd>{chart.sources.length}</dd></div>
                     </dl>
                     <div className="chart-card__updated">
-                      Updated {new Date(chart.updatedAt).toLocaleDateString()}
+                      <span>Updated {new Date(chart.updatedAt).toLocaleDateString()}</span>
+                      <span>Lifecycle changed {new Date(chart.lifecycle.statusChangedAt).toLocaleDateString()}</span>
+                      <span>{chartStatusDescriptions[chart.status]}</span>
+                      {chart.lifecycle.lastCurrentAt ? (
+                        <>
+                          <span>
+                            Last Current checkpoint: v{chart.lifecycle.lastCurrentVersion ?? chart.version}
+                            {chart.lifecycle.lastCurrentBy ? ` · ${chart.lifecycle.lastCurrentBy}` : ""}
+                            {` · ${new Date(chart.lifecycle.lastCurrentAt).toLocaleDateString()}`}
+                          </span>
+                          {chart.lifecycle.lastCurrentNote ? <span>Approval note: {chart.lifecycle.lastCurrentNote}</span> : null}
+                        </>
+                      ) : null}
                     </div>
                     <div className="chart-card__actions">
                       <button
@@ -4469,12 +5399,13 @@ function StudioWorkspace() {
                         className="button button--primary"
                         onClick={() => openChart(chart)}
                       >
-                        <FolderOpen size={16} aria-hidden="true" />Open
+                        <FolderOpen size={16} aria-hidden="true" />{chart.status === "archived" ? "View" : "Open"}
                       </button>
                       <button
                         type="button"
                         className="icon-button"
                         onClick={() => editChartDetails(chart)}
+                        disabled={chart.status === "archived"}
                         aria-label={`Edit name and description for ${chart.name}`}
                         title="Edit chart name and description"
                       >
@@ -4489,15 +5420,30 @@ function StudioWorkspace() {
                       >
                         <Copy size={17} aria-hidden="true" />
                       </button>
-                      <button
-                        type="button"
-                        className="icon-button icon-button--danger"
-                        onClick={() => void deleteChart(chart)}
-                        aria-label={`Delete ${chart.name}`}
-                        title="Delete chart and stored sources"
-                      >
-                        <Trash size={17} aria-hidden="true" />
-                      </button>
+                      {chart.status === "archived" ? (
+                        <>
+                          <button
+                            type="button"
+                            className="button button--secondary"
+                            onClick={() => requestLifecycleTransition(chart, "draft")}
+                          >
+                            Restore as draft
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-button icon-button--danger"
+                            onClick={() => {
+                              setDeleteChartError("");
+                              setDeleteChartConfirmation("");
+                              setDeleteChartDialog({ chartId: chart.id, chartName: chart.name });
+                            }}
+                            aria-label={`Permanently delete ${chart.name}`}
+                            title="Permanently delete archived chart, versions, and stored sources"
+                          >
+                            <Trash size={17} aria-hidden="true" />
+                          </button>
+                        </>
+                      ) : null}
                     </div>
                   </article>
                 ))}
@@ -4505,8 +5451,8 @@ function StudioWorkspace() {
             ) : (
               <div className="library-empty">
                 <FolderOpen size={30} aria-hidden="true" />
-                <h2>No organizational charts yet</h2>
-                <p>Create a blank chart or import a structured source file.</p>
+                <h2>{charts.length ? "No charts match this lifecycle filter" : "No organizational charts yet"}</h2>
+                <p>{charts.length ? "Choose another lifecycle filter to see more charts." : "Create a blank chart or import a structured source file."}</p>
               </div>
             )}
           </section>
@@ -4536,11 +5482,16 @@ function StudioWorkspace() {
                 <strong>{activeChart?.name ?? "No chart selected"}</strong>
               </div>
               <div><span>Saved version</span><strong>v{activeChart?.version ?? 0}</strong></div>
+              <div><span>Chart lifecycle</span><strong>{activeChart ? chartStatusLabels[activeChart.status] : "None"}</strong></div>
               <div><span>All units</span><strong>{nodes.length}</strong></div>
               <div><span>Public units</span><strong>{publicUnitCount}</strong></div>
               <div>
                 <span>Presentation</span>
-                <strong>{presentationMode === "compact" ? "Compact groups" : "Individual cards"}</strong>
+                <strong>
+                  {presentationMode === "compact"
+                    ? `Compact groups · ${compactLayoutOrientation === "vertical" ? "Vertical" : "Horizontal"}`
+                    : "Individual cards"}
+                </strong>
               </div>
             </div>
 
@@ -4556,7 +5507,7 @@ function StudioWorkspace() {
                 />
                 <ShieldCheck size={22} aria-hidden="true" />
                 <span>
-                  <strong>Internal working draft</strong>
+                  <strong>{activeChart?.status === "current" ? "Internal current record" : "Internal working copy"}</strong>
                   <small>Includes every unit and the current assignment labels.</small>
                 </span>
                 <b>{nodes.length} units</b>
@@ -4610,6 +5561,22 @@ function StudioWorkspace() {
               <div className="publication-warning publication-warning--blocking" role="alert">
                 <WarningDiamond size={20} aria-hidden="true" />
                 <p><strong>Audience profile needs attention.</strong> {exportProfileError}</p>
+              </div>
+            ) : null}
+
+            {activeChart && activeChart.status !== "current" ? (
+              <div className="publication-warning" role="status">
+                <WarningDiamond size={20} aria-hidden="true" />
+                <p>
+                  <strong>{chartStatusLabels[activeChart.status]} chart.</strong> Export remains available, but every visual file and table will be marked {chartStatusLabels[activeChart.status]}. Only Current means approved and authoritative.
+                </p>
+              </div>
+            ) : activeChart?.lifecycle.lastCurrentAt ? (
+              <div className="publication-warning publication-warning--current" role="status">
+                <ShieldCheck size={20} aria-hidden="true" />
+                <p>
+                  <strong>Current checkpoint v{activeChart.lifecycle.lastCurrentVersion ?? activeChart.version}.</strong> Marked Current by {activeChart.lifecycle.lastCurrentBy || "the accountable reviewer"} on {new Date(activeChart.lifecycle.lastCurrentAt).toLocaleDateString()}.
+                </p>
               </div>
             ) : null}
 
@@ -4743,17 +5710,21 @@ function StudioWorkspace() {
 
             <div className="version-save-card">
               <div>
-                <span className="eyebrow">Current working draft</span>
+                <span className="eyebrow">{activeChart ? `${chartStatusLabels[activeChart.status]} working record` : "No working record"}</span>
                 <h2>{activeChart?.name ?? "No active chart"}</h2>
                 <p>
-                  Autosave protects the open draft. A named version creates an immutable
-                  comparison and recovery point.
+                  {activeChart?.status === "current"
+                    ? "This Current chart already points to its approved immutable checkpoint. Editing it will begin a Draft."
+                    : activeChart?.status === "archived"
+                      ? "Archived charts are read-only. Restore a saved version to begin a new Draft without deleting history."
+                      : "Autosave protects the open working chart. A named version creates an immutable comparison and recovery point."}
                 </p>
               </div>
               <label className="editor-field">
                 <span>Change summary</span>
                 <input
                   value={versionSummary}
+                  disabled={activeChart?.status === "current" || activeChart?.status === "archived"}
                   maxLength={160}
                   onChange={(event) => setVersionSummary(event.target.value)}
                   placeholder="Example: Updated division leadership and reporting lines"
@@ -4763,7 +5734,7 @@ function StudioWorkspace() {
                 type="button"
                 className="button button--primary"
                 onClick={() => void saveVersionSnapshot()}
-                disabled={historyBusy !== null || !activeChart || blockingFindings.length > 0}
+                disabled={historyBusy !== null || !activeChart || blockingFindings.length > 0 || activeChart.status === "current" || activeChart.status === "archived"}
               >
                 <FloppyDisk size={17} aria-hidden="true" />
                 {historyBusy === "save" ? "Saving version…" : "Save named version"}
@@ -4809,7 +5780,7 @@ function StudioWorkspace() {
                         disabled={historyBusy !== null}
                       >
                         <ClockCounterClockwise size={16} aria-hidden="true" />
-                        Restore as new version
+                        Restore as Draft version
                       </button>
                     </article>
                   ))}
@@ -4818,8 +5789,8 @@ function StudioWorkspace() {
                 <div className="version-comparison" aria-live="polite">
                   {compareVersion && versionComparison ? (
                     <>
-                      <span className="eyebrow">Working draft compared with saved version</span>
-                      <h2>Current draft vs. version {compareVersion.version}</h2>
+                      <span className="eyebrow">Working chart compared with saved version</span>
+                      <h2>{activeChart ? chartStatusLabels[activeChart.status] : "Working chart"} vs. version {compareVersion.version}</h2>
                       <p>{compareVersion.label}</p>
                       <div className="comparison-metrics">
                         <div><span>Added</span><strong>{versionComparison.added.length}</strong></div>
@@ -5414,14 +6385,14 @@ function StudioWorkspace() {
                     <span>Source chart</span>
                     <select value={effectiveComparisonSourceId} onChange={(event) => setComparisonSourceId(event.target.value)}>
                       <option value="">Choose source</option>
-                      {charts.map((chart) => <option key={chart.id} value={chart.id}>{chart.name}</option>)}
+                      {comparisonCharts.map((chart) => <option key={chart.id} value={chart.id}>{chart.name}</option>)}
                     </select>
                   </label>
                   <label className="field-stack">
                     <span>Target chart</span>
                     <select value={effectiveComparisonTargetId} onChange={(event) => setComparisonTargetId(event.target.value)}>
                       <option value="">Choose target</option>
-                      {charts.map((chart) => <option key={chart.id} value={chart.id}>{chart.name}</option>)}
+                      {comparisonCharts.map((chart) => <option key={chart.id} value={chart.id}>{chart.name}</option>)}
                     </select>
                   </label>
                 </div>
@@ -5908,6 +6879,7 @@ function StudioWorkspace() {
                 type="button"
                 className="button button--secondary"
                 onClick={requestAddChildUnit}
+                disabled={activeChartReadOnly}
               >
                 <Plus size={16} aria-hidden="true" /> Add child
               </button>
@@ -5915,7 +6887,7 @@ function StudioWorkspace() {
                 type="button"
                 className="button button--danger"
                 onClick={deleteSelectedBranch}
-                disabled={!selectedParentEdge}
+                disabled={!selectedParentEdge || activeChartReadOnly}
                 title={
                   selectedParentEdge
                     ? "Delete this unit and its descendants"
@@ -5934,6 +6906,7 @@ function StudioWorkspace() {
                 saveUnitChanges(event.currentTarget);
               }}
             >
+              <fieldset className="unit-editor__fields" disabled={activeChartReadOnly}>
               <div className="unit-editor__identity">
                 <span>Stable unit ID</span>
                 <code>{selectedNode.id}</code>
@@ -6041,13 +7014,13 @@ function StudioWorkspace() {
                 />
               </label>
               <label className="editor-field">
-                <span>Organization state</span>
+                <span>Effective state</span>
                 <select
                   name="planningState"
                   defaultValue={selectedNode.data.unit.planningState ?? "current"}
                 >
-                  <option value="current">Current organization</option>
-                  <option value="planned">Planned or future state</option>
+                  <option value="current">In effect now</option>
+                  <option value="planned">Planned / future</option>
                 </select>
               </label>
               <label className="editor-field">
@@ -6099,6 +7072,7 @@ function StudioWorkspace() {
               <button type="submit" className="button button--primary button--full">
                 <FloppyDisk size={17} aria-hidden="true" /> Save organizational changes
               </button>
+              </fieldset>
             </form>
 
             <div className="presentation-state">
@@ -6115,6 +7089,7 @@ function StudioWorkspace() {
             <button
               type="button"
               className="button button--full button--secondary"
+              disabled={activeChartReadOnly}
               onClick={() => {
                 recordCurrentState(
                   selectedNode.data.pinned
@@ -6329,7 +7304,7 @@ function StudioWorkspace() {
                           <tr key={node.id}>
                             <th scope="row">{node.data.unit.name}</th>
                             <td>{parent?.data.unit.shortName ?? "Root"}</td>
-                            <td>{planningStateForNode(node) === "planned" ? `Planned · ${node.data.unit.effectiveDate}` : "Current"}</td>
+                            <td>{planningStateForNode(node) === "planned" ? `Planned · ${node.data.unit.effectiveDate}` : "In effect"}</td>
                             <td>
                               {node.data.unit.sourceCertainty === "needs_review" ? "Needs review" : node.data.unit.sourceCertainty === "inferred" ? "Inferred" : "Confirmed"}
                               {node.data.unit.sourceLocator ? ` · ${node.data.unit.sourceLocator}` : ""}
@@ -6487,6 +7462,164 @@ function StudioWorkspace() {
                 </button>
               </span>
             </footer>
+          </section>
+        </div>
+      ) : null}
+
+      {lifecycleDialog && lifecycleDialogChart ? (
+        <div className="editor-dialog-scrim">
+          <section
+            className="editor-dialog lifecycle-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="lifecycle-dialog-title"
+          >
+            <div className="editor-dialog__heading">
+              <div>
+                <span className="eyebrow">Chart lifecycle</span>
+                <h2 id="lifecycle-dialog-title">
+                  {lifecycleDialog.targetStatus === "current"
+                    ? "Mark this chart Current?"
+                    : lifecycleDialog.targetStatus === "archived"
+                      ? "Archive this chart?"
+                      : lifecycleDialog.targetStatus === "in_review"
+                        ? "Submit this chart for review?"
+                        : lifecycleDialogChart.status === "archived"
+                          ? "Restore this chart as a Draft?"
+                          : "Return this chart to Draft?"}
+                </h2>
+                <p>{chartStatusDescriptions[lifecycleDialog.targetStatus]}</p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setLifecycleDialog(null)}
+                aria-label="Close lifecycle dialog"
+                disabled={lifecycleBusy}
+              >
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
+
+            <form
+              className="editor-dialog__form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitLifecycleTransition(event.currentTarget);
+              }}
+            >
+              <div className="lifecycle-dialog__flow" aria-label="Chart lifecycle flow">
+                {(["draft", "in_review", "current", "archived"] as ChartStatus[]).map((status) => (
+                  <span
+                    key={status}
+                    className={status === lifecycleDialog.targetStatus ? "is-target" : status === lifecycleDialogChart.status ? "is-current" : ""}
+                  >
+                    {chartStatusLabels[status]}
+                  </span>
+                ))}
+              </div>
+
+              {lifecycleDialog.targetStatus === "current" ? (
+                <>
+                  <div className={`lifecycle-readiness ${lifecycleReadiness?.ready ? "is-ready" : "is-blocked"}`}>
+                    <strong>{lifecycleReadiness?.ready ? "Ready to mark Current" : "Not ready to mark Current"}</strong>
+                    <ul>
+                      <li>{lifecycleReadiness?.structuralBlockers ? `${lifecycleReadiness.structuralBlockers} blocking structure issues remain` : "Structure validation is clear"}</li>
+                      <li>{lifecycleReadiness?.reviewItems ? `${lifecycleReadiness.reviewItems} source review items remain` : "Review queue is clear"}</li>
+                      <li>A new immutable named checkpoint will be created automatically</li>
+                    </ul>
+                  </div>
+                  <label className="editor-field">
+                    <span>Reviewed and marked Current by</span>
+                    <input name="currentBy" required maxLength={120} autoFocus placeholder="Your name or accountable owner" />
+                  </label>
+                  <label className="editor-field">
+                    <span>Approval note <small>Optional</small></span>
+                    <textarea name="approvalNote" rows={3} maxLength={1000} placeholder="Record the review decision or applicable date." />
+                  </label>
+                </>
+              ) : lifecycleDialog.targetStatus === "archived" ? (
+                <div className="lifecycle-dialog__warning">
+                  <Archive size={22} aria-hidden="true" />
+                  <p>The chart will become read-only and disappear from the Active library view. Its versions, sources, and last Current approval record will remain available.</p>
+                </div>
+              ) : lifecycleDialog.targetStatus === "in_review" ? (
+                <div className="lifecycle-dialog__warning">
+                  <ShieldCheck size={22} aria-hidden="true" />
+                  <p>In review means the working chart has been submitted for verification. It is not yet approved or authoritative.</p>
+                </div>
+              ) : (
+                <div className="lifecycle-dialog__warning">
+                  <PencilSimple size={22} aria-hidden="true" />
+                  <p>The chart will be editable again. Any previous Current checkpoint and approval record remain preserved in version history.</p>
+                </div>
+              )}
+
+              {lifecycleError ? <p className="editor-dialog__error" role="alert">{lifecycleError}</p> : null}
+              <div className="editor-dialog__actions">
+                <button type="button" className="button button--secondary" onClick={() => setLifecycleDialog(null)} disabled={lifecycleBusy}>Cancel</button>
+                <button
+                  type="submit"
+                  className="button button--primary"
+                  disabled={lifecycleBusy || (lifecycleDialog.targetStatus === "current" && !lifecycleReadiness?.ready)}
+                >
+                  {lifecycleBusy
+                    ? "Saving lifecycle…"
+                    : lifecycleDialog.targetStatus === "current"
+                      ? "Create checkpoint and mark Current"
+                      : lifecycleDialog.targetStatus === "archived"
+                        ? "Archive chart"
+                        : lifecycleDialog.targetStatus === "in_review"
+                          ? "Submit for review"
+                          : "Restore as Draft"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
+
+      {deleteChartDialog ? (
+        <div className="editor-dialog-scrim">
+          <section className="editor-dialog delete-chart-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-chart-dialog-title">
+            <div className="editor-dialog__heading">
+              <div>
+                <span className="eyebrow">Archived chart · permanent action</span>
+                <h2 id="delete-chart-dialog-title">Permanently delete this chart?</h2>
+                <p>This removes the archived chart, every saved version, and all retained source files. It cannot be undone.</p>
+              </div>
+              <button type="button" className="icon-button" onClick={() => { setDeleteChartDialog(null); setDeleteChartConfirmation(""); }} aria-label="Close deletion dialog" disabled={deleteChartBusy}>
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
+            <form className="editor-dialog__form" onSubmit={(event) => { event.preventDefault(); submitPermanentDelete(); }}>
+              <label className="editor-field">
+                <span>Type the complete chart name to confirm</span>
+                <strong>{deleteChartDialog.chartName}</strong>
+                <input
+                  name="deleteChartConfirmation"
+                  autoComplete="off"
+                  autoFocus
+                  required
+                  value={deleteChartConfirmation}
+                  onChange={(event) => {
+                    setDeleteChartConfirmation(event.target.value);
+                    setDeleteChartError("");
+                  }}
+                />
+              </label>
+              {deleteChartError ? <p className="editor-dialog__error" role="alert">{deleteChartError}</p> : null}
+              <div className="editor-dialog__actions">
+                <button type="button" className="button button--secondary" onClick={() => { setDeleteChartDialog(null); setDeleteChartConfirmation(""); }} disabled={deleteChartBusy}>Cancel</button>
+                <button
+                  type="submit"
+                  className="button button--danger"
+                  disabled={deleteChartBusy || deleteChartConfirmation.trim() !== deleteChartDialog.chartName}
+                >
+                  {deleteChartBusy ? "Deleting…" : "Permanently delete chart"}
+                </button>
+              </div>
+            </form>
           </section>
         </div>
       ) : null}

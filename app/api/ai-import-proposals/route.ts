@@ -2,9 +2,10 @@ import { ensureSchema, getBindings } from "../../../db";
 import type { AiImportProposal } from "../../../lib/ai-import-review";
 import { auditChartQuality } from "../../../lib/chart-governance";
 import {
+  normalizeChartLifecycle,
+  normalizeChartStatus,
   storageSafeNodes,
   type ChartDocument,
-  type ChartStatus,
   type SourceRecord,
 } from "../../../lib/chart-library";
 import type { ImportIntakeFile, ImportIntakeStatus } from "../../../lib/import-intake";
@@ -17,7 +18,7 @@ interface ChartRow {
   id: string;
   name: string;
   description: string;
-  status: ChartStatus;
+  status: string;
   version: number;
   created_at: string;
   updated_at: string;
@@ -91,15 +92,25 @@ async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
 }
 
 function chartFromRow(row: ChartRow): ChartDocument {
-  const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges">;
+  const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges"> & {
+    lifecycle?: Partial<ChartDocument["lifecycle"]>;
+  };
+  const status = normalizeChartStatus(row.status);
   return {
     id: row.id,
     name: row.name,
     description: row.description,
-    status: row.status,
+    status,
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    lifecycle: normalizeChartLifecycle(
+      payload.lifecycle,
+      status,
+      row.updated_at,
+      row.version,
+      row.status === "approved",
+    ),
     nodes: payload.nodes,
     edges: payload.edges,
     sources: [],
@@ -134,7 +145,11 @@ function chartInsert(db: D1Database, chart: ChartDocument) {
       chart.version,
       chart.createdAt,
       chart.updatedAt,
-      JSON.stringify({ nodes: storageSafeNodes(chart.nodes), edges: chart.edges }),
+      JSON.stringify({
+        nodes: storageSafeNodes(chart.nodes),
+        edges: chart.edges,
+        lifecycle: chart.lifecycle,
+      }),
     );
 }
 
@@ -339,6 +354,7 @@ export async function POST(request: Request) {
       version: 1,
       createdAt: now,
       updatedAt: now,
+      lifecycle: normalizeChartLifecycle(null, "draft", now, 1),
       nodes: storageSafeNodes(stored.proposal.proposed.nodes),
       edges: stored.proposal.proposed.edges,
       sources: [normalizedSource, ...evidenceSources],

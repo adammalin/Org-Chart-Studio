@@ -10,9 +10,10 @@ import {
 import type { AiActivityRecord } from "../../../lib/ai-change-review";
 import {
   isRetiredExampleChartId,
+  normalizeChartLifecycle,
+  normalizeChartStatus,
   storageSafeNodes,
   type ChartDocument,
-  type ChartStatus,
   type ChartVersion,
   type SourceRecord,
 } from "../../../lib/chart-library";
@@ -29,7 +30,7 @@ interface ChartRow {
   id: string;
   name: string;
   description: string;
-  status: ChartStatus;
+  status: string;
   version: number;
   created_at: string;
   updated_at: string;
@@ -118,15 +119,25 @@ function sourceFromRow(row: SourceRow): SourceRecord {
 }
 
 function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
-  const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges">;
+  const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges"> & {
+    lifecycle?: Partial<ChartDocument["lifecycle"]>;
+  };
+  const status = normalizeChartStatus(row.status);
   return {
     id: row.id,
     name: row.name,
     description: row.description,
-    status: row.status,
+    status,
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    lifecycle: normalizeChartLifecycle(
+      payload.lifecycle,
+      status,
+      row.updated_at,
+      row.version,
+      row.status === "approved",
+    ),
     nodes: payload.nodes,
     edges: payload.edges,
     sources,
@@ -180,7 +191,11 @@ function chartInsert(db: D1Database, chart: ChartDocument) {
       chart.version,
       chart.createdAt,
       chart.updatedAt,
-      JSON.stringify({ nodes: storageSafeNodes(chart.nodes), edges: chart.edges }),
+      JSON.stringify({
+        nodes: storageSafeNodes(chart.nodes),
+        edges: chart.edges,
+        lifecycle: chart.lifecycle,
+      }),
     );
 }
 
@@ -598,6 +613,7 @@ export async function POST(request: Request) {
         status: "draft",
         createdAt: now,
         updatedAt: now,
+        lifecycle: normalizeChartLifecycle(original.lifecycle, "draft", now, original.version),
         nodes: storageSafeNodes(original.nodes),
         sources: restoredSources,
       };

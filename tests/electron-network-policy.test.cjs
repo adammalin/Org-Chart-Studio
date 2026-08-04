@@ -97,8 +97,13 @@ test("desktop quit control confirms before using the clean shutdown path", () =>
   );
 
   assert.match(preloadSource, /requestQuit:\s*\(\)\s*=>\s*ipcRenderer\.invoke\("app:request-quit"\)/);
+  assert.match(preloadSource, /reportSaveState:\s*\(state\)\s*=>\s*ipcRenderer\.send\("app:save-state",\s*state\)/);
   assert.match(mainSource, /ipcMain\.handle\("app:request-quit"/);
-  assert.match(mainSource, /buttons:\s*\["Cancel",\s*"Quit"\]/);
+  assert.match(mainSource, /ipcMain\.on\("app:save-state"/);
+  assert.match(mainSource, /rendererSaveState === "saving"/);
+  assert.match(mainSource, /Wait for Saved before closing OrgChart Studio/);
+  assert.match(mainSource, /Quit without latest change/);
+  assert.match(mainSource, /mainWindow\.on\("close"[\s\S]*requestUserQuit\(\)/);
   assert.match(mainSource, /local MCP connection/);
   assert.match(mainSource, /private local server/);
   assert.match(mainSource, /setImmediate\(\(\)\s*=>\s*void beginQuit\(\)\)/);
