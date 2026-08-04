@@ -75,6 +75,12 @@ test("macOS setup offers an optional least-privilege local MCP registration", ()
   const packageJson = readFileSync(path.join(projectRoot, "package.json"), "utf8");
 
   assert.match(setupSource, /Optional ChatGPT Desktop \/ Codex integration/);
+  assert.match(setupSource, /type y and press Return/);
+  assert.match(setupSource, /Install the local MCP integration\? \[y\/N\]/);
+  assert.match(setupSource, /y\|yes\) MCP_SETUP_CHOICE="install"/);
+  assert.match(setupSource, /Chart fields read through MCP enter that AI conversation/);
+  assert.match(setupSource, /not saved until you apply it in the app/);
+  assert.doesNotMatch(setupSource, /Install the local MCP integration\? \[Y\/n\]/);
   assert.match(setupSource, /configure-orgchart-mcp\.mjs/);
   assert.match(setupSource, /ORGCHART_SETUP_MCP/);
   assert.match(packageJson, /"mcp:start"/);

@@ -136,7 +136,7 @@ def build_pdf(output: Path) -> None:
     pdf.setFillColor(ENERGY)
     pdf.rect(0, PAGE_H - 172, PAGE_W, 6, stroke=0, fill=1)
 
-    draw_label(pdf, "ORNL workflow | macOS quick start | updated August 3, 2026", 40, 756, WHITE)
+    draw_label(pdf, "ORNL workflow | macOS quick start | updated August 4, 2026", 40, 756, WHITE)
     pdf.setFillColor(WHITE)
     pdf.setFont("Helvetica-Bold", 28)
     pdf.drawString(40, 716, "Install once.")
@@ -148,10 +148,10 @@ def build_pdf(output: Path) -> None:
     draw_label(pdf, "01  First install or update", 40, 594)
     y = draw_wrapped_text(
         pdf,
-        "Copy both commands below. No GitHub account or authentication is required. The second "
-        "command installs, builds, verifies, and launches OrgChart Studio. Setup also offers an "
-        "optional local ChatGPT Desktop / Codex MCP companion; restart that desktop client once "
-        "after accepting it.",
+        "Copy both commands below. No GitHub account or authentication is required. Setup explains "
+        "the optional local ChatGPT Desktop / Codex MCP companion. At its prompt, type y and press "
+        "Return to install it; pressing Return alone skips it. MCP works only while OrgChart Studio "
+        "is open. Restart that desktop client once after installation.",
         40,
         575,
         532,
@@ -169,12 +169,18 @@ def build_pdf(output: Path) -> None:
     ]
     draw_code_block(pdf, install_lines, 40, y - 5, 532, 108)
     pdf.setFillColor(SOFT_GREEN)
-    pdf.rect(40, y - 141, 532, 23, stroke=0, fill=1)
+    pdf.rect(40, y - 157, 532, 39, stroke=0, fill=1)
     pdf.setFillColor(ORNL_GREEN)
     pdf.setFont("Helvetica-Bold", 8.5)
     pdf.drawString(
         51,
-        y - 133,
+        y - 132,
+        "MCP PROMPT: type y and press Return to install the local AI companion.",
+    )
+    pdf.setFont("Helvetica-Bold", 7.9)
+    pdf.drawString(
+        51,
+        y - 147,
         "TO UPDATE LATER: quit OrgChart Studio, then run these same two commands again.",
     )
 
@@ -265,7 +271,7 @@ def build_pdf(output: Path) -> None:
     pdf.drawString(
         40,
         37,
-        "Managed Mac: follow approved software, data, and support processes. Use Command-Q to stop the app.",
+        "Managed Mac: follow approved processes. Use the red X or Command-Q to stop the app and local server.",
     )
     pdf.setFont("Helvetica", 7.1)
     pdf.drawString(

@@ -150,14 +150,22 @@ elif [[ "${MCP_SETUP_CHOICE}" == "ask" ]]; then
   if [[ -r /dev/tty && -w /dev/tty ]]; then
     print ""
     print "Optional ChatGPT Desktop / Codex integration"
-    print "This registers a local MCP companion. It works only while OrgChart Studio is open."
-    print "Read tools are automatic; tools that change a chart ask for approval."
-    print -n "Install the local MCP integration? [Y/n] " > /dev/tty
+    print "The local MCP companion lets ChatGPT Desktop or Codex use approved charts"
+    print "through OrgChart Studio while the desktop app is open. It can list and read"
+    print "charts, validate or import structured data, and propose reviewed changes."
+    print "Chart fields read through MCP enter that AI conversation. Use it only with"
+    print "charts approved for the ChatGPT or Codex environment you are using."
+    print "Read tools are automatic; tools that change a chart ask for approval, and"
+    print "a proposed chart replacement is not saved until you apply it in the app."
+    print ""
+    print "To install the local MCP integration, type y and press Return."
+    print "Pressing Return without typing y skips it; you can install it later."
+    print -n "Install the local MCP integration? [y/N] " > /dev/tty
     MCP_RESPONSE=""
     read -r MCP_RESPONSE < /dev/tty || MCP_RESPONSE=""
     case "${MCP_RESPONSE:l}" in
-      n|no) MCP_SETUP_CHOICE="skip" ;;
-      *) MCP_SETUP_CHOICE="install" ;;
+      y|yes) MCP_SETUP_CHOICE="install" ;;
+      *) MCP_SETUP_CHOICE="skip" ;;
     esac
   else
     MCP_SETUP_CHOICE="skip"
@@ -170,7 +178,9 @@ if [[ "${MCP_SETUP_CHOICE}" == "1" ||
   node "${PROJECT_ROOT}/scripts/configure-orgchart-mcp.mjs" install \
     --project-root "${PROJECT_ROOT}" \
     --config "${MCP_CONFIG_PATH}"
+  print "Local MCP integration installed."
   print "Restart ChatGPT Desktop or Codex once so it discovers OrgChart Studio MCP."
+  print "After restarting, open OrgChart Studio before asking the AI to use its tools."
 else
   print "Optional local MCP integration was not installed."
   print "Install it later with: npm run mcp:configure"

@@ -151,7 +151,7 @@ Pass when both formats can be recovered without destructive replacement and unen
 
 ## Test 7: optional local MCP companion
 
-1. During setup, accept the optional ChatGPT Desktop / Codex integration and restart that desktop client once.
+1. During setup, confirm the installer explains the local MCP boundary. At **Install the local MCP integration? [y/N]**, type `y` and press Return, then restart ChatGPT Desktop or Codex once.
 2. Open OrgChart Studio, then inspect MCP servers and confirm `orgchart_studio` is enabled.
 3. Call `list_charts` and verify it returns summaries without full node data. Call `get_chart` only on an approved test chart and confirm the current saved layout is returned.
 4. Call `validate_chart` and `list_chart_versions`; confirm neither changes the chart.
@@ -164,8 +164,8 @@ Pass when both formats can be recovered without destructive replacement and unen
 11. Trigger a synthetic failed write and confirm the receipt uses **AI edit needs attention** without changing chart data. Make a deliberately stale proposal and confirm it is rejected rather than overwriting newer work.
 12. Create and restore a selected-chart backup. Confirm the related AI review timeline is restored with its version links.
 13. Confirm write tools request approval and that delete, backup restore, source-file download, storage, passphrase, and publication tools are absent.
-12. Quit OrgChart Studio and confirm a tool reports that the desktop app must be opened. Reopen it and confirm tools reconnect with the new session.
-13. Run `npm run mcp:remove`, restart ChatGPT Desktop or Codex, and confirm only the OrgChart Studio server was removed. Run `npm run mcp:configure` to restore it if needed.
+14. Quit OrgChart Studio and confirm a tool reports that the desktop app must be opened. Reopen it and confirm tools reconnect with the new session.
+15. Run `npm run mcp:remove`, restart ChatGPT Desktop or Codex, and confirm only the OrgChart Studio server was removed. Run `npm run mcp:configure` to restore it if needed.
 
 Pass when MCP is local and on-demand, proposals cannot change saved data before Apply, field-level review is accurate, timeline/version links survive backup restore, stale writes are rejected, and no tool bypasses the normal chart/version workflow.
 

@@ -4,7 +4,7 @@ OrgChart Studio remains usable with Codex after the desktop source test is insta
 
 ## Use the optional local MCP companion
 
-1. Accept **Install the local MCP integration?** during setup, or later run `npm run mcp:configure` from the installed source folder.
+1. At **Install the local MCP integration? [y/N]** during setup, type `y` and press Return. Pressing Return alone skips it; install it later with `npm run mcp:configure` from the installed source folder.
 2. Restart ChatGPT Desktop or Codex once after registration.
 3. Open OrgChart Studio before asking the AI to use an OrgChart Studio tool. The MCP process connects only to the running app's loopback service with its per-launch token.
 4. Ask it to call `list_charts` before naming the stable chart ID. A complete `get_chart` result enters the AI conversation, so use that tool only for a chart approved for the AI environment in use.
