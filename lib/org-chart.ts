@@ -76,6 +76,18 @@ export interface OrgNodeData extends Record<string, unknown> {
 
 export type OrgFlowNode = Node<OrgNodeData, "orgUnit">;
 
+/**
+ * Removes source-document emphasis and footnote markers from visual labels.
+ * The stored organizational record remains unchanged for provenance and editing.
+ */
+export function cleanOrgChartDisplayText(value: string): string {
+  return value
+    .replace(/\\([*])/g, "$1")
+    .replace(/\*+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export const NODE_WIDTH = 248;
 export const NODE_HEIGHT = 132;
 export const COMPACT_ROOT_WIDTH = 720;

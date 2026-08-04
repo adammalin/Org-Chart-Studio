@@ -18,6 +18,17 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
+function fitTextPixels(
+  value: string,
+  preferredSize: number,
+  maximumWidth: number,
+  bold = false,
+): number {
+  const estimatedWidth = estimateExportTextWidth(value, preferredSize, bold);
+  if (estimatedWidth <= maximumWidth) return preferredSize;
+  return Math.max(2, preferredSize * (maximumWidth / estimatedWidth) * 0.9);
+}
+
 function drawNode(
   pptx: PptxGenJS,
   slide: PptxGenJS.Slide,
@@ -49,10 +60,29 @@ function drawNode(
       : node.status === "acting"
         ? EXPORT_COLORS.blue
         : EXPORT_COLORS.green;
-  const statusTextWidth = estimateExportTextWidth(node.statusText, 11, true);
+  const statusMaximumWidth = Math.max(56, node.width - (compact ? 56 : 48));
+  const statusTextWidth = Math.min(
+    statusMaximumWidth,
+    estimateExportTextWidth(node.statusText, 11, true),
+  );
   const statusRowStart = compact
     ? node.width / 2 - (8 + 7 + statusTextWidth) / 2
     : 20;
+  const titleTop = Math.min(
+    86,
+    Math.max(66, 39 + (node.nameLines.length - 1) * node.nameLineHeight + 18),
+  );
+  const positionTitleFontSize = fitTextPixels(
+    node.positionTitle,
+    12,
+    node.width - (compact ? 32 : 40),
+  );
+  const statusFontSize = fitTextPixels(
+    node.statusText,
+    11,
+    statusMaximumWidth,
+    true,
+  );
 
   slide.addShape(pptx.ShapeType.rect, {
     x,
@@ -93,35 +123,35 @@ function drawNode(
     bold: true,
     color: EXPORT_COLORS.green,
     charSpacing: font(1.2),
-    breakLine: false,
+    fit: "shrink",
     align: compact ? "center" : "left",
     objectName: `Unit type ${node.id}`,
   });
-  slide.addText(node.nameLines.join("\n"), {
+  slide.addText(node.name, {
     x: x + (compact ? 12 : 20) * scale,
     y: y + 34 * scale,
     w: Math.max(0.3, width - 32 * scale),
-    h: (node.nameLines.length > 1 ? 42 : 24) * scale,
+    h: Math.max(20 * scale, (titleTop - 38) * scale),
     margin: 0,
     fontFace: "Aptos Display",
-    fontSize: font(compact && node.hierarchyLevel === 1 ? 22 : 17),
+    fontSize: font(node.nameFontSize),
     bold: true,
     color: EXPORT_COLORS.ink,
-    breakLine: false,
+    fit: "shrink",
     valign: "middle",
     align: compact ? "center" : "left",
     objectName: `Unit name ${node.id}`,
   });
   slide.addText(node.positionTitle, {
     x: x + (compact ? 12 : 20) * scale,
-    y: y + (node.nameLines.length > 1 ? 80 : 66) * scale,
+    y: y + titleTop * scale,
     w: Math.max(0.3, width - 32 * scale),
     h: 18 * scale,
     margin: 0,
     fontFace: "Aptos",
-    fontSize: font(12),
+    fontSize: font(positionTitleFontSize),
     color: EXPORT_COLORS.ink,
-    breakLine: false,
+    fit: "shrink",
     align: compact ? "center" : "left",
     objectName: `Position title ${node.id}`,
   });
@@ -143,10 +173,10 @@ function drawNode(
     h: 18 * scale,
     margin: 0,
     fontFace: "Aptos",
-    fontSize: font(11),
+    fontSize: font(statusFontSize),
     bold: true,
     color: EXPORT_COLORS.ink,
-    breakLine: false,
+    fit: "shrink",
     objectName: `Position status ${node.id}`,
   });
   if (node.compactListStartY !== null) {
@@ -178,6 +208,10 @@ function drawNode(
     );
     node.compactEntries.forEach((entry, index) => {
       const rowY = headerY + (34 + index * 54) * scale;
+      const entryTextWidth = Math.max(48, node.width - 126);
+      const entryNameFontSize = fitTextPixels(entry.name, 10, entryTextWidth, true);
+      const entryRoleFontSize = fitTextPixels(entry.positionTitle, 8, entryTextWidth);
+      const entryStatusFontSize = fitTextPixels(entry.statusText, 8, 80, true);
       slide.addShape(pptx.ShapeType.line, {
         x,
         y: rowY,
@@ -193,9 +227,10 @@ function drawNode(
         h: 15 * scale,
         margin: 0,
         fontFace: "Aptos Display",
-        fontSize: font(10),
+        fontSize: font(entryNameFontSize),
         bold: true,
         color: EXPORT_COLORS.darkTeal,
+        fit: "shrink",
         objectName: `Compact entry name ${entry.id}`,
       });
       slide.addText(entry.positionTitle, {
@@ -205,8 +240,9 @@ function drawNode(
         h: 14 * scale,
         margin: 0,
         fontFace: "Aptos",
-        fontSize: font(8),
+        fontSize: font(entryRoleFontSize),
         color: EXPORT_COLORS.ink,
+        fit: "shrink",
         objectName: `Compact entry role ${entry.id}`,
       });
       const entryStatusColor =
@@ -231,7 +267,7 @@ function drawNode(
         h: 16 * scale,
         margin: 0,
         fontFace: "Aptos",
-        fontSize: font(8),
+        fontSize: font(entryStatusFontSize),
         bold: true,
         color: EXPORT_COLORS.ink,
         align: "right",
@@ -317,6 +353,7 @@ export async function buildChartPptx(
     fontSize: clamp(20 * scale * 72, 1, 400),
     bold: true,
     color: EXPORT_COLORS.ink,
+    fit: "shrink",
     objectName: "Chart title",
   });
   slide.addText(
@@ -332,6 +369,7 @@ export async function buildChartPptx(
       bold: true,
       color: EXPORT_COLORS.darkTeal,
       charSpacing: clamp(1.1 * scale * 72, 0.1, 400),
+      fit: "shrink",
       objectName: "Chart version label",
     },
   );
@@ -371,6 +409,7 @@ export async function buildChartPptx(
     fontFace: "Aptos",
     fontSize: clamp(10 * scale * 72, 1, 400),
     color: EXPORT_COLORS.ink,
+    fit: "shrink",
     objectName: "Chart export metadata",
   });
   slide.addNotes(

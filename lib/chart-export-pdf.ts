@@ -32,6 +32,20 @@ function pdfText(value: string, font: PDFFont): string {
   return value;
 }
 
+function fitPdfTextSize(
+  value: string,
+  font: PDFFont,
+  preferredSize: number,
+  maximumWidth: number,
+  minimumSize = 3,
+): number {
+  let size = preferredSize;
+  while (size > minimumSize && font.widthOfTextAtSize(value, size) > maximumWidth) {
+    size -= 0.25;
+  }
+  return Math.max(minimumSize, size);
+}
+
 function drawNode(
   page: PDFPage,
   node: ExportSceneNode,
@@ -104,26 +118,45 @@ function drawNode(
     color: color(EXPORT_COLORS.green),
   });
   node.nameLines.forEach((line, index) => {
-    const nameSize = Math.max(7, (compact && node.hierarchyLevel === 1 ? 22 : 17) * scale);
+    const nameSize = fitPdfTextSize(
+      line,
+      bold,
+      Math.max(5, node.nameFontSize * scale),
+      width - (compact ? 32 : 40) * scale,
+    );
     page.drawText(pdfText(line, bold), {
       x: compact ? centeredX(line, bold, nameSize) : x + 20 * scale,
-      y: mapY(node.y + 51 + index * 20),
+      y: mapY(node.y + 51 + index * node.nameLineHeight),
       size: nameSize,
       font: bold,
       color: color(EXPORT_COLORS.ink),
     });
   });
-  const positionTitleSize = Math.max(5, 12 * scale);
+  const positionTitleSize = fitPdfTextSize(
+    node.positionTitle,
+    regular,
+    Math.max(5, 12 * scale),
+    width - (compact ? 32 : 40) * scale,
+  );
+  const positionTitleY = Math.min(
+    98,
+    Math.max(78, 51 + (node.nameLines.length - 1) * node.nameLineHeight + 18),
+  );
   page.drawText(pdfText(node.positionTitle, regular), {
     x: compact
       ? centeredX(node.positionTitle, regular, positionTitleSize)
       : x + 20 * scale,
-    y: mapY(node.y + (node.nameLines.length > 1 ? 92 : 78)),
+    y: mapY(node.y + positionTitleY),
     size: positionTitleSize,
     font: regular,
     color: color(EXPORT_COLORS.ink),
   });
-  const statusTextSize = Math.max(5, 11 * scale);
+  const statusTextSize = fitPdfTextSize(
+    node.statusText,
+    bold,
+    Math.max(5, 11 * scale),
+    Math.max(24, (node.width - (compact ? 56 : 48)) * scale),
+  );
   const statusTextWidth = bold.widthOfTextAtSize(node.statusText, statusTextSize);
   const statusMarkerRadius = Math.max(1.8, 4 * scale);
   const statusGap = 7 * scale;
@@ -176,7 +209,29 @@ function drawNode(
     );
     node.compactEntries.forEach((entry, index) => {
       const rowTop = headerTop + 34 + index * 54;
-      const entryStatusSize = Math.max(4, 8 * scale);
+      const entryTextMaximumWidth = Math.max(24, (node.width - 138) * scale);
+      const entryStatusMaximumWidth = Math.max(
+        24,
+        Math.min(96, Math.max(56, node.width * 0.36)) * scale,
+      );
+      const entryNameSize = fitPdfTextSize(
+        entry.name,
+        bold,
+        Math.max(4, 10 * scale),
+        entryTextMaximumWidth,
+      );
+      const entryRoleSize = fitPdfTextSize(
+        entry.positionTitle,
+        regular,
+        Math.max(3.5, 8 * scale),
+        entryTextMaximumWidth,
+      );
+      const entryStatusSize = fitPdfTextSize(
+        entry.statusText,
+        bold,
+        Math.max(3.5, 8 * scale),
+        entryStatusMaximumWidth,
+      );
       const entryStatusWidth = bold.widthOfTextAtSize(entry.statusText, entryStatusSize);
       const entryStatusRight = x + width - 12 * scale;
       const entryStatusMarkerRadius = Math.max(1.4, 3.5 * scale);
@@ -189,14 +244,14 @@ function drawNode(
       page.drawText(pdfText(entry.name, bold), {
         x: x + 12 * scale,
         y: mapY(rowTop + 19),
-        size: Math.max(5, 10 * scale),
+        size: entryNameSize,
         font: bold,
         color: color(EXPORT_COLORS.darkTeal),
       });
       page.drawText(pdfText(entry.positionTitle, regular), {
         x: x + 12 * scale,
         y: mapY(rowTop + 36),
-        size: Math.max(4, 8 * scale),
+        size: entryRoleSize,
         font: regular,
         color: color(EXPORT_COLORS.ink),
       });

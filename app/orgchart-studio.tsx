@@ -79,6 +79,7 @@ import {
   NODE_WIDTH,
   arrangeCompactPresentation,
   arrangeSelectedNodes,
+  cleanOrgChartDisplayText,
   compactNodeDimensions,
   deriveCompactPresentation,
   descendantIds,
@@ -456,6 +457,11 @@ function editorSnapshot(
 
 function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
   const { unit } = data;
+  const displayName = cleanOrgChartDisplayText(unit.shortName || unit.name);
+  const displayPositionTitle = cleanOrgChartDisplayText(unit.positionTitle);
+  const displayStatus = unit.positionStatus === "filled"
+    ? cleanOrgChartDisplayText(unit.assignmentLabel)
+    : statusLabels[unit.positionStatus];
   const hasChildren = Boolean(data.childCount);
   const compactEntries = data.compactEntries ?? [];
   const sourceHandleCount = Math.max(0, data.sourcePortCount ?? data.childCount ?? 0);
@@ -466,7 +472,7 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
       className={`org-node org-node--${unit.type} ${
         selected ? "is-selected" : ""
       } ${data.isSearchMatch ? "is-search-match" : ""} ${data.aiChange ? `is-ai-${data.aiChange}` : ""} ${unit.planningState === "planned" ? "is-planned" : ""} ${unit.sourceCertainty === "needs_review" ? "needs-source-review" : ""} ${data.presentationMode === "compact" ? `is-compact is-level-${data.hierarchyLevel ?? 1}` : ""} ${data.compactSidecar ? "is-compact-sidecar" : ""} ${compactEntries.length ? "has-compact-list" : ""}`}
-      aria-label={`${unit.name}, ${unit.positionTitle}, ${statusLabels[unit.positionStatus]}`}
+      aria-label={`${cleanOrgChartDisplayText(unit.name)}, ${displayPositionTitle}, ${displayStatus}`}
       style={{
         width: data.visualWidth,
         height: data.visualHeight,
@@ -503,15 +509,11 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
           </span>
         ) : null}
       </div>
-      <h3>{unit.shortName}</h3>
-      <p>{unit.positionTitle}</p>
+      <h3 title={displayName}>{displayName}</h3>
+      <p title={displayPositionTitle}>{displayPositionTitle}</p>
       <div className={`org-node__status status--${unit.positionStatus}`}>
         <span className="status-marker" aria-hidden="true" />
-        <span>{
-          unit.positionStatus === "filled"
-            ? unit.assignmentLabel
-            : statusLabels[unit.positionStatus]
-        }</span>
+        <span title={displayStatus}>{displayStatus}</span>
       </div>
       {compactEntries.length ? (
         <div className="org-node__compact-roster">
@@ -532,14 +534,18 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
                     event.stopPropagation();
                     data.onSelectCompactEntry?.(entry.id);
                   }}
-                  aria-label={`Open ${entry.unit.name}`}
+                  aria-label={`Open ${cleanOrgChartDisplayText(entry.unit.name)}`}
                 >
-                  <strong>{entry.unit.shortName || entry.unit.name}</strong>
-                  <span>{entry.unit.positionTitle}</span>
+                  <strong title={cleanOrgChartDisplayText(entry.unit.shortName || entry.unit.name)}>
+                    {cleanOrgChartDisplayText(entry.unit.shortName || entry.unit.name)}
+                  </strong>
+                  <span title={cleanOrgChartDisplayText(entry.unit.positionTitle)}>
+                    {cleanOrgChartDisplayText(entry.unit.positionTitle)}
+                  </span>
                   <small className={`status--${entry.unit.positionStatus}`}>
                     <span className="status-marker" aria-hidden="true" />
                     {entry.unit.positionStatus === "filled"
-                      ? entry.unit.assignmentLabel
+                      ? cleanOrgChartDisplayText(entry.unit.assignmentLabel)
                       : statusLabels[entry.unit.positionStatus]}
                   </small>
                 </button>

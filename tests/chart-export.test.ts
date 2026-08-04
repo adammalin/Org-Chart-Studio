@@ -27,8 +27,10 @@ import { NODE_HEIGHT, NODE_WIDTH } from "../lib/org-chart";
 
 const generatedAt = "2026-07-31T20:00:00.000Z";
 
-test("export text fitting keeps long metadata inside its assigned column", () => {
+test("export text keeps complete long metadata in SVG and editable PowerPoint text boxes", async () => {
   const chart = seedChartDocuments()[0];
+  const fullLabel =
+    "A very long group and nonemployee assignment label that must remain inside the card";
   const longLabelChart = {
     ...chart,
     nodes: chart.nodes.map((node) => ({
@@ -37,8 +39,7 @@ test("export text fitting keeps long metadata inside its assigned column", () =>
         ...node.data,
         unit: {
           ...node.data.unit,
-          assignmentLabel:
-            "A very long group and nonemployee assignment label that must remain inside the card",
+          assignmentLabel: fullLabel,
         },
       },
     })),
@@ -51,16 +52,60 @@ test("export text fitting keeps long metadata inside its assigned column", () =>
     "compact",
   );
 
-  assert.ok(
-    scene.nodes.some((node) =>
-      node.compactEntries.some((entry) => entry.statusText.endsWith("…")),
-    ),
-  );
-  scene.nodes.forEach((node) => {
-    node.compactEntries.forEach((entry) => {
-      assert.ok(estimateExportTextWidth(entry.statusText, 8, true) <= 96);
-    });
-  });
+  assert.ok(scene.nodes.some((node) =>
+    node.compactEntries.some((entry) => entry.statusText === fullLabel),
+  ));
+  assert.ok(scene.nodes.every((node) =>
+    !node.statusText.includes("…") &&
+    node.compactEntries.every((entry) => !entry.statusText.includes("…")),
+  ));
+
+  const svg = buildChartSvg(scene, "natural");
+  assert.ok(svg.includes(fullLabel));
+  assert.ok(svg.includes(`data-full-text="${fullLabel}"`));
+  assert.doesNotMatch(svg, /…/);
+
+  const presentation = await buildChartPptx(scene, "presentation-wide");
+  const slideXml = strFromU8(unzipSync(presentation)["ppt/slides/slide1.xml"]);
+  assert.ok(slideXml.includes(fullLabel));
+  assert.match(slideXml, /<a:normAutofit\/>/);
+});
+
+test("screen-ready export labels remove imported asterisks without mutating source data", async () => {
+  const chart = seedChartDocuments()[0];
+  const markedChart = {
+    ...chart,
+    nodes: chart.nodes.map((node, index) => index === 0
+      ? {
+          ...node,
+          data: {
+            ...node.data,
+            unit: {
+              ...node.data.unit,
+              shortName: "**Business Assurance** Beverly Rausin** Linda Wallace",
+              positionTitle: "**Director**",
+              assignmentLabel: "**Erica Whitehead**",
+            },
+          },
+        }
+      : node),
+  };
+  const scene = buildChartExportScene(markedChart, "internal", generatedAt, "separate", "compact");
+  const exportedNode = scene.nodes.find((node) => node.id === chart.nodes[0].id)!;
+
+  assert.match(markedChart.nodes[0].data.unit.shortName, /\*\*/);
+  assert.equal(exportedNode.name, "Business Assurance Beverly Rausin Linda Wallace");
+  assert.equal(exportedNode.positionTitle, "Director");
+  assert.equal(exportedNode.statusText, "Erica Whitehead");
+
+  const svg = buildChartSvg(scene, "natural");
+  assert.doesNotMatch(svg, /\*\*/);
+  assert.match(svg, /Business Assurance Beverly Rausin Linda Wallace/);
+
+  const presentation = await buildChartPptx(scene, "presentation-wide");
+  const slideXml = strFromU8(unzipSync(presentation)["ppt/slides/slide1.xml"]);
+  assert.doesNotMatch(slideXml, /\*\*/);
+  assert.match(slideXml, /Business Assurance Beverly Rausin Linda Wallace/);
 });
 
 test("a single scene drives metadata-rich internal and public SVG exports", () => {

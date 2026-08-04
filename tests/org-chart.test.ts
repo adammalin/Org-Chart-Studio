@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   arrangeCompactPresentation,
   arrangeSelectedNodes,
+  cleanOrgChartDisplayText,
   deriveCompactPresentation,
   descendantIds,
   initialEdges,
@@ -13,6 +14,17 @@ import {
   translateBranchNodes,
   validateHierarchy,
 } from "../lib/org-chart";
+
+test("visual labels remove imported Markdown and footnote asterisks without changing words", () => {
+  assert.equal(
+    cleanOrgChartDisplayText("**Cost Price / Contract Closeout** Marcus McGee Ken Moore**"),
+    "Cost Price / Contract Closeout Marcus McGee Ken Moore",
+  );
+  assert.equal(
+    cleanOrgChartDisplayText("*Dual capacity   **Subcontractor"),
+    "Dual capacity Subcontractor",
+  );
+});
 
 test("the synthetic fixture is a valid acyclic hierarchy", () => {
   assert.deepEqual(validateHierarchy(initialNodes, initialEdges), []);
