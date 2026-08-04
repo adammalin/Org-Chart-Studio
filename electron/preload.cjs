@@ -16,4 +16,5 @@ contextBridge.exposeInMainWorld("orgChartDesktop", {
     ipcRenderer.invoke("backup:save-encrypted", { fileName, encryptedJson }),
   saveBackup: (fileName, backupJson, encrypted) =>
     ipcRenderer.invoke("backup:save", { fileName, backupJson, encrypted }),
+  requestQuit: () => ipcRenderer.invoke("app:request-quit"),
 });

@@ -253,6 +253,23 @@ function initializeStorageLocations() {
 }
 
 function registerStorageHandlers() {
+  ipcMain.handle("app:request-quit", async () => {
+    if (quitting) return true;
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: "warning",
+      title: `Quit ${APP_NAME}?`,
+      message: `Quit ${APP_NAME}?`,
+      detail:
+        "The app window, its local MCP connection, and its private local server will close. Changes already showing Saved and existing backups will remain on this computer.",
+      buttons: ["Cancel", "Quit"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+    if (result.response !== 1) return false;
+    setImmediate(() => void beginQuit());
+    return true;
+  });
   ipcMain.handle("storage:get-settings", () =>
     storageSettingsSnapshot(storageArguments()),
   );
@@ -529,6 +546,8 @@ function createMainWindow(url) {
         return {
           localOnly: location.hostname === '127.0.0.1',
           desktopBridge: window.orgChartDesktop?.isDesktop === true,
+          desktopQuitBridge: typeof window.orgChartDesktop?.requestQuit === 'function',
+          desktopQuitVisible: Boolean(document.querySelector('[data-desktop-quit]')),
           userAgentIncludesElectron: navigator.userAgent.includes('Electron'),
           externalRequestBlocked: await fetch('https://example.com/orgchart-network-test').then(() => false, () => true),
           chartLibraryVisible: document.body.textContent.includes('Organizational chart library'),

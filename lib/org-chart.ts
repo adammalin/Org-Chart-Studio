@@ -38,6 +38,7 @@ export interface OrgNodeData extends Record<string, unknown> {
   sourcePortCount?: number;
   targetPortOffset?: number;
   isSearchMatch?: boolean;
+  aiChange?: "added" | "changed";
   onToggleCollapse?: (id: string) => void;
 }
 

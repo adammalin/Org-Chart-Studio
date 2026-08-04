@@ -7,6 +7,7 @@ import {
   type BackupSourceFile,
   type LibraryBackup,
 } from "../../../lib/backup-format";
+import type { AiActivityRecord } from "../../../lib/ai-change-review";
 import {
   isRetiredExampleChartId,
   storageSafeNodes,
@@ -22,6 +23,7 @@ const MAX_CHARTS = 200;
 const MAX_TOTAL_NODES = 25_000;
 const MAX_SOURCE_FILES = 1_000;
 const MAX_VERSIONS = 5_000;
+const MAX_AI_ACTIVITIES = 10_000;
 
 interface ChartRow {
   id: string;
@@ -56,6 +58,22 @@ interface VersionRow {
   created_at: string;
   payload: string;
   restored_from_version: number | null;
+}
+
+interface ActivityRow {
+  id: string;
+  chart_id: string;
+  proposal_id: string;
+  operation: string;
+  status: "accepted" | "rejected";
+  summary: string;
+  change_count: number;
+  changed_node_ids: string;
+  changed_edge_ids: string;
+  created_at: string;
+  version_id: string | null;
+  version_number: number | null;
+  version_label: string | null;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -129,6 +147,24 @@ function versionFromRow(row: VersionRow): ChartVersion {
   };
 }
 
+function activityFromRow(row: ActivityRow): AiActivityRecord {
+  return {
+    id: row.id,
+    chartId: row.chart_id,
+    proposalId: row.proposal_id,
+    operation: row.operation,
+    status: row.status,
+    summary: row.summary,
+    changeCount: row.change_count,
+    changedNodeIds: JSON.parse(row.changed_node_ids) as string[],
+    changedEdgeIds: JSON.parse(row.changed_edge_ids) as string[],
+    createdAt: row.created_at,
+    versionId: row.version_id,
+    versionNumber: row.version_number,
+    versionLabel: row.version_label,
+  };
+}
+
 function chartInsert(db: D1Database, chart: ChartDocument) {
   return db
     .prepare(
@@ -192,6 +228,31 @@ function versionInsert(db: D1Database, version: ChartVersion) {
     );
 }
 
+function activityInsert(db: D1Database, activity: AiActivityRecord) {
+  return db
+    .prepare(
+      `INSERT INTO ai_activity_events
+        (id, chart_id, proposal_id, operation, status, summary, change_count,
+         changed_node_ids, changed_edge_ids, created_at, version_id, version_number, version_label)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      activity.id,
+      activity.chartId,
+      activity.proposalId,
+      activity.operation,
+      activity.status,
+      activity.summary,
+      activity.changeCount,
+      JSON.stringify(activity.changedNodeIds),
+      JSON.stringify(activity.changedEdgeIds),
+      activity.createdAt,
+      activity.versionId,
+      activity.versionNumber,
+      activity.versionLabel,
+    );
+}
+
 function noStoreJson(value: unknown, init: ResponseInit = {}) {
   const headers = new Headers(init.headers);
   headers.set("cache-control", "no-store, max-age=0");
@@ -202,10 +263,11 @@ function noStoreJson(value: unknown, init: ResponseInit = {}) {
 export async function GET(request: Request) {
   const { DB, SOURCE_FILES } = getBindings();
   await ensureSchema(DB);
-  const [chartResult, sourceResult, versionResult] = await Promise.all([
+  const [chartResult, sourceResult, versionResult, activityResult] = await Promise.all([
     DB.prepare("SELECT * FROM charts ORDER BY updated_at DESC").all<ChartRow>(),
     DB.prepare("SELECT * FROM source_records ORDER BY imported_at DESC").all<SourceRow>(),
     DB.prepare("SELECT * FROM chart_versions ORDER BY chart_id, version").all<VersionRow>(),
+    DB.prepare("SELECT * FROM ai_activity_events ORDER BY chart_id, created_at").all<ActivityRow>(),
   ]);
   const availableChartRows = chartResult.results.filter(
     (row) => !isRetiredExampleChartId(row.id),
@@ -238,6 +300,7 @@ export async function GET(request: Request) {
   const includedChartIds = new Set(chartRows.map((row) => row.id));
   const sourceRows = sourceResult.results.filter((row) => includedChartIds.has(row.chart_id));
   const versionRows = versionResult.results.filter((row) => includedChartIds.has(row.chart_id));
+  const activityRows = activityResult.results.filter((row) => includedChartIds.has(row.chart_id));
   const sourceFiles: BackupSourceFile[] = [];
   let sourceBytes = 0;
 
@@ -291,8 +354,10 @@ export async function GET(request: Request) {
     chartCount: charts.length,
     sourceFileCount: sourceFiles.length,
     versionCount: versionRows.length,
+    aiActivityCount: activityRows.length,
     charts,
     chartVersions: versionRows.map(versionFromRow),
+    aiActivities: activityRows.map(activityFromRow),
     sourceFiles,
   };
 
@@ -322,6 +387,7 @@ export async function POST(request: Request) {
 
   const backup = value;
   const chartVersions = backup.chartVersions ?? [];
+  const aiActivities = backup.aiActivities ?? [];
   const restorableCharts = backup.charts.filter(
     (chart) => !isRetiredExampleChartId(chart.id),
   );
@@ -344,7 +410,9 @@ export async function POST(request: Request) {
     totalNodes > MAX_TOTAL_NODES ||
     backup.sourceFiles.length > MAX_SOURCE_FILES ||
     chartVersions.length > MAX_VERSIONS ||
-    (backup.versionCount !== undefined && backup.versionCount !== chartVersions.length)
+    aiActivities.length > MAX_AI_ACTIVITIES ||
+    (backup.versionCount !== undefined && backup.versionCount !== chartVersions.length) ||
+    (backup.aiActivityCount !== undefined && backup.aiActivityCount !== aiActivities.length)
   ) {
     return noStoreJson(
       { error: "The backup exceeds the supported chart, unit, or source-file limits." },
@@ -398,6 +466,30 @@ export async function POST(request: Request) {
         { status: 422 },
       );
     }
+  }
+
+  const versionIds = new Set(chartVersions.map((version) => version.id));
+  const activityIds = new Set<string>();
+  for (const activity of aiActivities) {
+    if (
+      !activity.id ||
+      !activity.proposalId ||
+      !backupChartIds.has(activity.chartId) ||
+      (activity.status !== "accepted" && activity.status !== "rejected") ||
+      !activity.summary ||
+      !Number.isInteger(activity.changeCount) ||
+      activity.changeCount < 0 ||
+      !Array.isArray(activity.changedNodeIds) ||
+      !Array.isArray(activity.changedEdgeIds) ||
+      (activity.versionId !== null && !versionIds.has(activity.versionId)) ||
+      activityIds.has(activity.id)
+    ) {
+      return noStoreJson(
+        { error: "An AI activity record in the backup is malformed or duplicated." },
+        { status: 422 },
+      );
+    }
+    activityIds.add(activity.id);
   }
 
   const sourceFilesById = new Map(backup.sourceFiles.map((file) => [file.sourceId, file]));
@@ -469,6 +561,7 @@ export async function POST(request: Request) {
   const restoredCharts: ChartDocument[] = [];
   const statements: D1PreparedStatement[] = [];
   const writtenStorageKeys: string[] = [];
+  let restoredActivityCount = 0;
 
   try {
     for (const original of restorableCharts) {
@@ -514,17 +607,20 @@ export async function POST(request: Request) {
       const originalVersions = restorableVersions.filter(
         (version) => version.chartId === original.id,
       );
+      const restoredVersionIds = new Map<string, string>();
       if (originalVersions.length) {
-        originalVersions.forEach((version) =>
+        originalVersions.forEach((version) => {
+          const versionId = `version-${crypto.randomUUID()}`;
+          restoredVersionIds.set(version.id, versionId);
           statements.push(
             versionInsert(DB, {
               ...version,
-              id: `version-${crypto.randomUUID()}`,
+              id: versionId,
               chartId,
               nodes: storageSafeNodes(version.nodes),
             }),
-          ),
-        );
+          );
+        });
       } else {
         statements.push(
           versionInsert(DB, {
@@ -539,6 +635,26 @@ export async function POST(request: Request) {
           }),
         );
       }
+      const originalActivities = aiActivities.filter(
+        (activity) => activity.chartId === original.id,
+      );
+      originalActivities.forEach((activity) => {
+        const linkedVersionId = activity.versionId
+          ? restoredVersionIds.get(activity.versionId) ?? null
+          : null;
+        statements.push(
+          activityInsert(DB, {
+            ...activity,
+            id: `ai-event-${crypto.randomUUID()}`,
+            chartId,
+            proposalId: `restored-${activity.proposalId}`.slice(0, 240),
+            versionId: linkedVersionId,
+            versionNumber: linkedVersionId ? activity.versionNumber : null,
+            versionLabel: linkedVersionId ? activity.versionLabel : null,
+          }),
+        );
+      });
+      restoredActivityCount += originalActivities.length;
     }
     await DB.batch(statements);
   } catch (error) {
@@ -552,6 +668,7 @@ export async function POST(request: Request) {
       restoredChartCount: restoredCharts.length,
       restoredSourceFileCount: writtenStorageKeys.length,
       restoredVersionCount: restorableVersions.length || restoredCharts.length,
+      restoredAiActivityCount: restoredActivityCount,
       mode: "merge",
     },
     { status: 201 },

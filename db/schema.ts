@@ -38,4 +38,22 @@ export const schemaStatements = [
   )`,
   `CREATE INDEX IF NOT EXISTS chart_versions_chart_id_idx
     ON chart_versions(chart_id, version DESC)`,
+  `CREATE TABLE IF NOT EXISTS ai_activity_events (
+    id TEXT PRIMARY KEY,
+    chart_id TEXT NOT NULL,
+    proposal_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    status TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    change_count INTEGER NOT NULL DEFAULT 0,
+    changed_node_ids TEXT NOT NULL DEFAULT '[]',
+    changed_edge_ids TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    version_id TEXT,
+    version_number INTEGER,
+    version_label TEXT,
+    FOREIGN KEY (chart_id) REFERENCES charts(id) ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS ai_activity_events_chart_id_idx
+    ON ai_activity_events(chart_id, created_at DESC)`,
 ] as const;

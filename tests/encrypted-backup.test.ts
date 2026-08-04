@@ -22,6 +22,7 @@ function fixture(): LibraryBackup {
     chartCount: charts.length,
     sourceFileCount: 0,
     versionCount: 1,
+    aiActivityCount: 0,
     charts,
     chartVersions: [
       {
@@ -35,6 +36,7 @@ function fixture(): LibraryBackup {
         edges: charts[0].edges,
       },
     ],
+    aiActivities: [],
     sourceFiles: [],
   };
 }
@@ -74,6 +76,19 @@ test("legacy schema version 1 backups remain recognizable", async () => {
 
   assert.equal(decrypted.schemaVersion, 1);
   assert.equal(decrypted.chartVersions, undefined);
+});
+
+test("schema version 2 backups remain recognizable without AI activity records", async () => {
+  const current = fixture();
+  const previous: LibraryBackup = {
+    ...current,
+    schemaVersion: 2,
+    aiActivityCount: undefined,
+    aiActivities: undefined,
+  };
+  const opened = await openLibraryBackup(previous);
+  assert.equal(opened.backup.schemaVersion, 2);
+  assert.equal(opened.backup.aiActivities, undefined);
 });
 
 test("an encrypted library backup round-trips without changing chart data", async () => {

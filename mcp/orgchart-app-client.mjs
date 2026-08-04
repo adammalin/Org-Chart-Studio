@@ -142,6 +142,22 @@ export class OrgChartAppClient {
     );
   }
 
+  reportMcpActivity(body) {
+    return this.request("/api/ai-activity", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  stageChartProposal(chart) {
+    return this.request("/api/ai-proposals", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "stage", chart }),
+    });
+  }
+
   postJson(body) {
     return this.request("/api/charts", {
       method: "POST",

@@ -89,6 +89,7 @@ import {
   type ValidationFinding,
 } from "../lib/org-chart";
 import {
+  storageSafeNodes,
   type ChartDocument,
   type ChartLibraryResponse,
   type ChartVersion,
@@ -129,6 +130,18 @@ import {
   type RouteCornerAxis,
   type RouteCornerControl,
 } from "../lib/edge-routing";
+import {
+  IDLE_MCP_ACTIVITY,
+  type McpActivityResponse,
+  type McpActivitySnapshot,
+} from "../lib/mcp-activity";
+import type {
+  AiActivityHistoryResponse,
+  AiActivityRecord,
+  AiChangeCategory,
+  AiChartProposal,
+  AiProposalResponse,
+} from "../lib/ai-change-review";
 
 type LayoutMode = "preserve" | "branch" | "respect-pins" | "full";
 type WorkspaceView =
@@ -255,6 +268,7 @@ function edgeWithManualRoute(
 }
 
 interface RelationshipEdgeRenderData extends Record<string, unknown> {
+  aiChange?: "added" | "changed";
   route?: OrthogonalEdgeRoute;
   onCornerDragStart?: (
     edgeId: string,
@@ -289,9 +303,14 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
     <article
       className={`org-node org-node--${unit.type} ${
         selected ? "is-selected" : ""
-      } ${data.isSearchMatch ? "is-search-match" : ""}`}
+      } ${data.isSearchMatch ? "is-search-match" : ""} ${data.aiChange ? `is-ai-${data.aiChange}` : ""}`}
       aria-label={`${unit.name}, ${unit.positionTitle}, ${statusLabels[unit.positionStatus]}`}
     >
+      {data.aiChange ? (
+        <span className={`org-node__ai-change org-node__ai-change--${data.aiChange}`}>
+          AI {data.aiChange}
+        </span>
+      ) : null}
       <Handle
         id="parent"
         type="target"
@@ -404,13 +423,13 @@ function OrgRelationshipEdge({
   return (
     <>
       <path
-        className={`org-relationship-edge__halo ${selected ? "is-selected" : ""}`}
+        className={`org-relationship-edge__halo ${selected ? "is-selected" : ""} ${renderData?.aiChange ? `is-ai-${renderData.aiChange}` : ""}`}
         d={path}
       />
       <BaseEdge
         id={id}
         path={path}
-        className={selected ? "org-relationship-edge is-selected" : "org-relationship-edge"}
+        className={`org-relationship-edge ${selected ? "is-selected" : ""} ${renderData?.aiChange ? `is-ai-${renderData.aiChange}` : ""}`}
         style={{
           ...style,
           strokeLinecap: "square",
@@ -501,6 +520,7 @@ function StudioWorkspace() {
   const [storageBusy, setStorageBusy] = useState<"data" | "backup" | "restart" | null>(
     null,
   );
+  const [quitBusy, setQuitBusy] = useState(false);
   const [storageMessage, setStorageMessage] = useState("");
   const [versions, setVersions] = useState<ChartVersion[]>([]);
   const [versionSummary, setVersionSummary] = useState("");
@@ -513,6 +533,14 @@ function StudioWorkspace() {
   const [undoStack, setUndoStack] = useState<EditorSnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<EditorSnapshot[]>([]);
   const [editorDialog, setEditorDialog] = useState<EditorDialogState | null>(null);
+  const [mcpActivity, setMcpActivity] = useState<McpActivitySnapshot>(
+    IDLE_MCP_ACTIVITY,
+  );
+  const [dismissedMcpRevision, setDismissedMcpRevision] = useState(0);
+  const [pendingAiProposal, setPendingAiProposal] = useState<AiChartProposal | null>(null);
+  const [aiProposalBusy, setAiProposalBusy] = useState<"load" | "accept" | "reject" | null>(null);
+  const [aiReviewCategory, setAiReviewCategory] = useState<"all" | AiChangeCategory>("all");
+  const [aiActivities, setAiActivities] = useState<AiActivityRecord[]>([]);
   const hydratedChartRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveGenerationRef = useRef(0);
@@ -539,6 +567,30 @@ function StudioWorkspace() {
   useEffect(() => {
     chartsRef.current = charts;
   }, [charts]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      let nextDelay = 900;
+      try {
+        const response = await fetch("/api/ai-activity", { cache: "no-store" });
+        if (response.ok) {
+          const data = (await response.json()) as McpActivityResponse;
+          if (!cancelled) setMcpActivity(data.activity);
+          if (data.activity.phase === "working") nextDelay = 220;
+        }
+      } catch {
+        // The activity display is best-effort and never blocks chart editing.
+      }
+      if (!cancelled) timer = setTimeout(poll, nextDelay);
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -619,6 +671,188 @@ function StudioWorkspace() {
     [fitView, setEdges, setNodes],
   );
 
+  const dismissMcpActivity = useCallback(async (activityId = mcpActivity.activityId) => {
+    setDismissedMcpRevision(mcpActivity.revision);
+    if (!activityId) return;
+    try {
+      await fetch("/api/ai-activity", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "dismiss", activityId }),
+      });
+    } catch {
+      // The visual receipt is best-effort; proposal review remains available in this session.
+    }
+  }, [mcpActivity.activityId, mcpActivity.revision]);
+
+  const showAiProposal = useCallback(
+    (proposal: AiChartProposal) => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      saveGenerationRef.current += 1;
+      hydratedChartRef.current = null;
+      setPendingAiProposal(proposal);
+      setAiReviewCategory("all");
+      setActiveChartId(proposal.chartId);
+      setNodes(proposal.proposed.nodes);
+      setEdges(proposal.proposed.edges);
+      setSelectedId(proposal.summary.changedNodeIds[0] ?? proposal.proposed.nodes[0]?.id ?? "");
+      setSelectedEdgeId("");
+      setCollapsedIds(new Set());
+      setWorkspaceView("canvas");
+      setSaveState("saved");
+      setNotice(
+        `Previewing ${proposal.summary.total} proposed AI change${proposal.summary.total === 1 ? "" : "s"}. Nothing has been saved yet.`,
+      );
+      window.requestAnimationFrame(() => void fitView({ duration: 420, padding: 0.14 }));
+    },
+    [fitView, setEdges, setNodes],
+  );
+
+  const reviewMcpUpdate = useCallback(async () => {
+    if (!mcpActivity.chartId) return;
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    saveGenerationRef.current += 1;
+    hydratedChartRef.current = null;
+    try {
+      if (mcpActivity.completionKind === "review_ready" && mcpActivity.proposalId) {
+        setAiProposalBusy("load");
+        const response = await fetch(
+          `/api/ai-proposals?proposalId=${encodeURIComponent(mcpActivity.proposalId)}`,
+          { cache: "no-store" },
+        );
+        const data = (await response.json()) as AiProposalResponse & { error?: string };
+        if (!response.ok || !data.proposal) {
+          throw new Error(data.error ?? "The AI proposal could not be loaded.");
+        }
+        showAiProposal(data.proposal);
+        setDismissedMcpRevision(mcpActivity.revision);
+        return;
+      }
+      const response = await fetch("/api/charts", { cache: "no-store" });
+      if (!response.ok) throw new Error("The updated chart library could not be loaded.");
+      const data = (await response.json()) as ChartLibraryResponse;
+      const updatedChart = data.charts.find(
+        (chart) => chart.id === mcpActivity.chartId,
+      );
+      setCharts(data.charts);
+      if (!updatedChart) {
+        setNotice("The AI-updated chart is no longer available in the local library.");
+        setDismissedMcpRevision(mcpActivity.revision);
+        return;
+      }
+      openChart(updatedChart, "canvas");
+      setSaveState("saved");
+      setNotice(
+        `Loaded ${updatedChart.name} from the local database so you can review the AI-assisted update.`,
+      );
+      setDismissedMcpRevision(mcpActivity.revision);
+    } catch (error) {
+      setSaveState("error");
+      setNotice(
+        error instanceof Error ? error.message : "The AI-assisted update could not be loaded.",
+      );
+    } finally {
+      setAiProposalBusy(null);
+    }
+  }, [mcpActivity, openChart, showAiProposal]);
+
+  const loadAiActivities = useCallback(async (chartId: string) => {
+    const response = await fetch(
+      `/api/ai-proposals?chartId=${encodeURIComponent(chartId)}`,
+      { cache: "no-store" },
+    );
+    if (!response.ok) throw new Error("AI-assisted activity could not be loaded.");
+    const data = (await response.json()) as AiActivityHistoryResponse;
+    setAiActivities(data.activities);
+  }, []);
+
+  const resolveAiProposal = useCallback(
+    async (action: "accept" | "reject") => {
+      const proposal = pendingAiProposal;
+      if (!proposal || aiProposalBusy) return;
+      setAiProposalBusy(action);
+      try {
+        const response = await fetch("/api/ai-proposals", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action, proposalId: proposal.id }),
+        });
+        const data = (await response.json()) as {
+          chart?: ChartDocument;
+          rejected?: string;
+          error?: string;
+        };
+        if (!response.ok) {
+          if (response.status === 404 || response.status === 409) {
+            const libraryResponse = await fetch("/api/charts", { cache: "no-store" });
+            if (libraryResponse.ok) {
+              const library = (await libraryResponse.json()) as ChartLibraryResponse;
+              const currentChart = library.charts.find(
+                (chart) => chart.id === proposal.chartId,
+              );
+              setPendingAiProposal(null);
+              setCharts(library.charts);
+              if (currentChart) {
+                setNodes(currentChart.nodes);
+                setEdges(currentChart.edges);
+                setSelectedId(currentChart.nodes[0]?.id ?? "");
+                setSelectedEdgeId("");
+                window.requestAnimationFrame(() => {
+                  hydratedChartRef.current = currentChart.id;
+                  void fitView({ duration: 320, padding: 0.14 });
+                });
+              }
+            }
+          }
+          throw new Error(data.error ?? "The AI proposal could not be resolved.");
+        }
+        const resolvedChart = action === "accept" ? data.chart : proposal.current;
+        if (!resolvedChart) throw new Error("The applied chart was not returned by local storage.");
+        setPendingAiProposal(null);
+        setCharts((current) =>
+          current.map((chart) => (chart.id === resolvedChart.id ? resolvedChart : chart)),
+        );
+        setNodes(resolvedChart.nodes);
+        setEdges(resolvedChart.edges);
+        setSelectedId(resolvedChart.nodes[0]?.id ?? "");
+        setSelectedEdgeId("");
+        setSaveState("saved");
+        setNotice(
+          action === "accept"
+            ? `Applied ${proposal.summary.total} reviewed AI change${proposal.summary.total === 1 ? "" : "s"} to ${resolvedChart.name}. Save a named version when this working draft is ready for a checkpoint.`
+            : `Rejected the AI proposal. ${resolvedChart.name} was not changed.`,
+        );
+        await dismissMcpActivity();
+        await loadAiActivities(resolvedChart.id).catch(() => undefined);
+        window.requestAnimationFrame(() => {
+          hydratedChartRef.current = resolvedChart.id;
+          void fitView({ duration: 320, padding: 0.14 });
+        });
+      } catch (error) {
+        setNotice(
+          error instanceof Error ? error.message : "The AI proposal could not be resolved.",
+        );
+      } finally {
+        setAiProposalBusy(null);
+      }
+    },
+    [
+      aiProposalBusy,
+      dismissMcpActivity,
+      fitView,
+      loadAiActivities,
+      pendingAiProposal,
+      setEdges,
+      setNodes,
+    ],
+  );
+
   useEffect(() => {
     let cancelled = false;
     const loadLibrary = async () => {
@@ -651,6 +885,18 @@ function StudioWorkspace() {
   useEffect(() => {
     const chartSnapshot = chartsRef.current.find((chart) => chart.id === activeChartId);
     if (!chartSnapshot || hydratedChartRef.current !== chartSnapshot.id) return;
+    const savedContent = JSON.stringify({
+      nodes: storageSafeNodes(chartSnapshot.nodes),
+      edges: chartSnapshot.edges,
+    });
+    const editorContent = JSON.stringify({
+      nodes: storageSafeNodes(nodes),
+      edges,
+    });
+    if (savedContent === editorContent) {
+      setSaveState("saved");
+      return;
+    }
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     const saveGeneration = ++saveGenerationRef.current;
     setSaveState("saving");
@@ -668,8 +914,8 @@ function StudioWorkspace() {
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ action: "save", chart }),
           });
-        let response = await sendSave(chartToSave);
-        let data = (await response.json()) as {
+        const response = await sendSave(chartToSave);
+        const data = (await response.json()) as {
           chart?: ChartDocument;
           error?: string;
           currentVersion?: number;
@@ -677,16 +923,13 @@ function StudioWorkspace() {
         };
         if (
           response.status === 409 &&
-          saveGeneration === saveGenerationRef.current &&
-          data.currentUpdatedAt &&
-          data.currentVersion
+          saveGeneration === saveGenerationRef.current
         ) {
-          response = await sendSave({
-            ...chartToSave,
-            version: data.currentVersion,
-            updatedAt: data.currentUpdatedAt,
-          });
-          data = (await response.json()) as typeof data;
+          setSaveState("error");
+          setNotice(
+            "A newer local update was saved while you were editing. Review that update before making more changes; your older draft was not allowed to overwrite it.",
+          );
+          return;
         }
         if (!response.ok || !data.chart) throw new Error(data.error ?? "Save failed.");
         if (saveGeneration !== saveGenerationRef.current) return;
@@ -855,6 +1098,16 @@ function StudioWorkspace() {
     return offsets;
   }, [edgeRoutes, routingNodes]);
 
+  const aiPreviewMarks = useMemo(() => {
+    if (!pendingAiProposal || pendingAiProposal.chartId !== activeChartId) return null;
+    return {
+      addedNodes: new Set(pendingAiProposal.summary.addedNodeIds),
+      changedNodes: new Set(pendingAiProposal.summary.changedNodeIds),
+      addedEdges: new Set(pendingAiProposal.summary.addedEdgeIds),
+      changedEdges: new Set(pendingAiProposal.summary.changedEdgeIds),
+    };
+  }, [activeChartId, pendingAiProposal]);
+
   const displayNodes = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
 
@@ -867,6 +1120,11 @@ function StudioWorkspace() {
         childCount: edges.filter((edge) => edge.source === flowNode.id).length,
         sourcePortCount: sourcePortCounts.get(flowNode.id) ?? 0,
         targetPortOffset: targetPortOffsets.get(flowNode.id) ?? 0,
+        aiChange: aiPreviewMarks?.addedNodes.has(flowNode.id)
+          ? "added"
+          : aiPreviewMarks?.changedNodes.has(flowNode.id)
+            ? "changed"
+            : (undefined as "added" | "changed" | undefined),
         isSearchMatch:
           normalizedQuery.length > 1 &&
           [
@@ -878,7 +1136,7 @@ function StudioWorkspace() {
         onToggleCollapse: toggleCollapse,
       },
     }));
-  }, [collapsedIds, edges, hiddenIds, nodes, searchQuery, sourcePortCounts, targetPortOffsets, toggleCollapse]);
+  }, [aiPreviewMarks, collapsedIds, edges, hiddenIds, nodes, searchQuery, sourcePortCounts, targetPortOffsets, toggleCollapse]);
 
   const displayEdges = useMemo(
     () => {
@@ -894,6 +1152,11 @@ function StudioWorkspace() {
           targetHandle: route?.targetHandleId,
           data: {
             ...edge.data,
+            aiChange: aiPreviewMarks?.addedEdges.has(edge.id)
+              ? "added"
+              : aiPreviewMarks?.changedEdges.has(edge.id)
+                ? "changed"
+                : undefined,
             route,
             onCornerDragStart: startRouteCornerDrag,
             onCornerDrag: dragRouteCorner,
@@ -905,6 +1168,7 @@ function StudioWorkspace() {
     },
     [
       dragRouteCorner,
+      aiPreviewMarks,
       edgeRoutes,
       edges,
       finishRouteCornerDrag,
@@ -1110,12 +1374,22 @@ function StudioWorkspace() {
   const loadVersions = async (chartId: string) => {
     setHistoryBusy("load");
     try {
-      const response = await fetch(
-        `/api/charts?resource=versions&chartId=${encodeURIComponent(chartId)}`,
-        { cache: "no-store" },
-      );
+      const [response, activityResponse] = await Promise.all([
+        fetch(
+          `/api/charts?resource=versions&chartId=${encodeURIComponent(chartId)}`,
+          { cache: "no-store" },
+        ),
+        fetch(
+          `/api/ai-proposals?chartId=${encodeURIComponent(chartId)}`,
+          { cache: "no-store" },
+        ),
+      ]);
       if (!response.ok) throw new Error("Version history could not be loaded.");
       const data = (await response.json()) as ChartVersionsResponse;
+      if (activityResponse.ok) {
+        const activityData = (await activityResponse.json()) as AiActivityHistoryResponse;
+        setAiActivities(activityData.activities);
+      }
       setVersions(data.versions);
       setCompareVersionId((current) =>
         data.versions.some((versionItem) => versionItem.id === current)
@@ -1177,6 +1451,7 @@ function StudioWorkspace() {
         setVersions((current) => [data.version!, ...current]);
         setCompareVersionId(data.version.id);
       }
+      await loadAiActivities(data.chart.id).catch(() => undefined);
       setVersionSummary("");
       setSaveState("saved");
       setNotice(`Version ${data.chart.version} was saved: ${label}.`);
@@ -1925,6 +2200,21 @@ function StudioWorkspace() {
     }
   };
 
+  const requestDesktopQuit = async () => {
+    const bridge = window.orgChartDesktop;
+    if (!bridge || quitBusy || saveState === "saving") return;
+    setQuitBusy(true);
+    try {
+      const approved = await bridge.requestQuit();
+      if (!approved) setQuitBusy(false);
+    } catch (error) {
+      setQuitBusy(false);
+      setNotice(
+        error instanceof Error ? error.message : "The desktop app could not shut down.",
+      );
+    }
+  };
+
   const chooseBackupScope = (scope: BackupScope) => {
     setBackupScope(scope);
     if (scope === "selected" && !selectedBackupCharts.length && activeChart) {
@@ -2011,7 +2301,7 @@ function StudioWorkspace() {
       setUnencryptedBackupConfirmed(false);
       const protectionLabel = backupProtection === "encrypted" ? "Encrypted" : "Unencrypted";
       setBackupMessage(
-        `${protectionLabel} backup created with ${data.chartCount} charts, ${data.versionCount ?? 0} saved versions, and ${data.sourceFileCount} stored source files.${savedBackup ? ` Saved to ${savedBackup.path}.` : " Downloaded through the browser."}`,
+        `${protectionLabel} backup created with ${data.chartCount} charts, ${data.versionCount ?? 0} saved versions, ${data.aiActivityCount ?? 0} AI review records, and ${data.sourceFileCount} stored source files.${savedBackup ? ` Saved to ${savedBackup.path}.` : " Downloaded through the browser."}`,
       );
       setNotice(
         backupProtection === "encrypted"
@@ -2053,6 +2343,7 @@ function StudioWorkspace() {
         restoredChartCount?: number;
         restoredSourceFileCount?: number;
         restoredVersionCount?: number;
+        restoredAiActivityCount?: number;
         restoredCharts?: ChartDocument[];
         error?: string;
       };
@@ -2067,7 +2358,7 @@ function StudioWorkspace() {
       setBackupFile(null);
       setRestorePassphrase("");
       setBackupMessage(
-        `Restore merged ${result.restoredChartCount ?? 0} charts, ${result.restoredVersionCount ?? 0} saved versions, and ${result.restoredSourceFileCount ?? 0} source files as new drafts.`,
+        `Restore merged ${result.restoredChartCount ?? 0} charts, ${result.restoredVersionCount ?? 0} saved versions, ${result.restoredAiActivityCount ?? 0} AI review records, and ${result.restoredSourceFileCount ?? 0} source files as new drafts.`,
       );
       setNotice(
         `${opened.protection === "encrypted" ? "Encrypted" : "Unencrypted"} backup restored by merge. Existing charts were not changed or deleted.`,
@@ -2207,8 +2498,76 @@ function StudioWorkspace() {
     );
   };
 
+  const mcpActivityVisible =
+    mcpActivity.phase !== "idle" && mcpActivity.revision > dismissedMcpRevision;
+  const mcpActivityTitle =
+    mcpActivity.phase === "working"
+      ? "AI preparing changes"
+      : mcpActivity.phase === "succeeded"
+        ? mcpActivity.completionKind === "review_ready"
+          ? "AI changes ready"
+          : "AI edit saved"
+        : "AI edit needs attention";
+  const visibleAiChanges = pendingAiProposal
+    ? pendingAiProposal.changes.filter(
+        (change) => aiReviewCategory === "all" || change.category === aiReviewCategory,
+      )
+    : [];
+
   return (
-    <div className="studio-shell">
+    <div
+      className={`studio-shell${
+        mcpActivityVisible ? ` studio-shell--ai-${mcpActivity.phase}` : ""
+      }${pendingAiProposal ? " studio-shell--ai-review" : ""}`}
+    >
+      <div className="mcp-activity-frame" aria-hidden="true" />
+      {mcpActivityVisible ? (
+        <section
+          className={`mcp-activity-hud mcp-activity-hud--${mcpActivity.phase}`}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <span className="mcp-activity-hud__icon" aria-hidden="true">
+            {mcpActivity.phase === "succeeded" ? (
+              <Check size={18} weight="bold" />
+            ) : mcpActivity.phase === "failed" ? (
+              <WarningDiamond size={18} weight="bold" />
+            ) : (
+              <Robot size={18} weight="bold" />
+            )}
+          </span>
+          <span className="mcp-activity-hud__copy">
+            <small>Local MCP</small>
+            <strong>{mcpActivityTitle}</strong>
+            <span>
+              {mcpActivity.label ?? "Updating chart"}
+              {mcpActivity.chartName ? ` · ${mcpActivity.chartName}` : ""}
+            </span>
+          </span>
+          {mcpActivity.phase === "succeeded" && mcpActivity.chartId ? (
+            <button
+              type="button"
+              className="mcp-activity-hud__review"
+              onClick={() => void reviewMcpUpdate()}
+            >
+              {aiProposalBusy === "load"
+                ? "Loading…"
+                : mcpActivity.completionKind === "review_ready"
+                  ? "Review changes"
+                  : "Review update"}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="mcp-activity-hud__dismiss"
+            onClick={() => void dismissMcpActivity()}
+            aria-label="Dismiss AI activity"
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </section>
+      ) : null}
       <header className="topbar">
         <div className="product-mark" aria-label="ORNL OrgChart Studio">
           <span className="product-mark__tile" aria-hidden="true">
@@ -2269,6 +2628,23 @@ function StudioWorkspace() {
               ? `${blockingFindings.length} blocking`
               : "Structure valid"}
           </span>
+          {storageMode === "desktop" ? (
+            <button
+              type="button"
+              className="topbar__quit"
+              data-desktop-quit
+              onClick={() => void requestDesktopQuit()}
+              disabled={quitBusy || saveState === "saving"}
+              aria-label="Quit OrgChart Studio and stop its local server"
+              title={
+                saveState === "saving"
+                  ? "Wait for the current save to finish before quitting"
+                  : "Quit OrgChart Studio"
+              }
+            >
+              <X size={15} weight="bold" aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -2631,7 +3007,7 @@ function StudioWorkspace() {
             ) : null}
 
             <div
-              className={`flow-surface ${marqueeSelectionEnabled ? "is-marquee-active" : ""}`}
+              className={`flow-surface ${marqueeSelectionEnabled ? "is-marquee-active" : ""} ${pendingAiProposal ? "is-ai-preview" : ""}`}
             >
               <p id="canvas-selection-help" className="sr-only">
                 {marqueeSelectionEnabled
@@ -2781,6 +3157,7 @@ function StudioWorkspace() {
                 minZoom={0.22}
                 maxZoom={1.6}
                 nodesConnectable={false}
+                nodesDraggable={!pendingAiProposal}
                 deleteKeyCode={null}
                 selectionKeyCode={null}
                 selectionOnDrag={marqueeSelectionEnabled}
@@ -3374,6 +3751,50 @@ function StudioWorkspace() {
                 No saved versions are available for this chart yet.
               </div>
             )}
+
+            <section className="ai-activity-timeline" aria-labelledby="ai-activity-history-title">
+              <div className="ai-activity-timeline__heading">
+                <div>
+                  <span className="eyebrow">Human-reviewed local AI activity</span>
+                  <h2 id="ai-activity-history-title">AI-assisted change timeline</h2>
+                </div>
+                <p>
+                  Records Apply or Reject decisions. Accepted activity links to the next
+                  named version saved for this chart.
+                </p>
+              </div>
+              {aiActivities.length ? (
+                <ol>
+                  {aiActivities.map((activity) => (
+                    <li key={activity.id} className={`ai-activity-event is-${activity.status}`}>
+                      <span className="ai-activity-event__marker" aria-hidden="true">
+                        {activity.status === "accepted" ? <Check size={15} weight="bold" /> : <X size={15} weight="bold" />}
+                      </span>
+                      <div>
+                        <div className="ai-activity-event__meta">
+                          <strong>{activity.status === "accepted" ? "Applied" : "Rejected"}</strong>
+                          <time dateTime={activity.createdAt}>
+                            {new Date(activity.createdAt).toLocaleString()}
+                          </time>
+                        </div>
+                        <p>{activity.summary}</p>
+                        <span className="ai-activity-event__version">
+                          {activity.versionNumber
+                            ? `Included in version ${activity.versionNumber}: ${activity.versionLabel}`
+                            : activity.status === "accepted"
+                              ? "Awaiting the next named version"
+                              : "Saved chart was not changed"}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <div className="history-empty">
+                  No AI-assisted proposals have been applied or rejected for this chart.
+                </div>
+              )}
+            </section>
           </section>
         ) : (
           <section
@@ -4195,6 +4616,107 @@ function StudioWorkspace() {
           </>
         ) : null}
       </aside>
+
+      {pendingAiProposal ? (
+        <div className="ai-review-scrim">
+          <aside
+            className="ai-review-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ai-review-title"
+          >
+            <header className="ai-review-panel__header">
+              <div>
+                <span className="eyebrow">Local MCP · review required</span>
+                <h2 id="ai-review-title">Preview proposed changes</h2>
+                <p>
+                  The canvas shows the proposal. Highlighted cards and lines are temporary;
+                  the saved chart has not changed.
+                </p>
+              </div>
+              <span className="ai-review-panel__unsaved">Not saved</span>
+            </header>
+
+            <div className="ai-review-summary" aria-label="Proposed change summary">
+              <div><strong>{pendingAiProposal.summary.added}</strong><span>Added</span></div>
+              <div><strong>{pendingAiProposal.summary.changed}</strong><span>Changed</span></div>
+              <div><strong>{pendingAiProposal.summary.removed}</strong><span>Removed</span></div>
+              <p>{pendingAiProposal.summary.text}</p>
+            </div>
+
+            <div className="ai-review-filters" aria-label="Filter proposed changes">
+              {([
+                ["all", "All"],
+                ["chart", "Chart"],
+                ["unit", "Cards"],
+                ["relationship", "Lines"],
+                ["layout", "Layout"],
+              ] as const).map(([category, label]) => (
+                <button
+                  key={category}
+                  type="button"
+                  className={aiReviewCategory === category ? "is-active" : ""}
+                  onClick={() => setAiReviewCategory(category)}
+                  aria-pressed={aiReviewCategory === category}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="ai-review-change-list" aria-live="polite">
+              {visibleAiChanges.map((change) => (
+                <article key={change.id} className={`ai-review-change ai-review-change--${change.kind}`}>
+                  <div className="ai-review-change__heading">
+                    <span>{change.kind}</span>
+                    <strong>{change.entityLabel}</strong>
+                  </div>
+                  <h3>{change.fieldLabel}</h3>
+                  <dl>
+                    <div>
+                      <dt>Before</dt>
+                      <dd>{change.before ?? "Not present"}</dd>
+                    </div>
+                    <div>
+                      <dt>After</dt>
+                      <dd>{change.after ?? "Removed"}</dd>
+                    </div>
+                  </dl>
+                </article>
+              ))}
+              {!visibleAiChanges.length ? (
+                <p className="ai-review-change-list__empty">No changes in this category.</p>
+              ) : null}
+            </div>
+
+            <footer className="ai-review-panel__footer">
+              <p>
+                Applying updates the working draft and records this review. Save a named
+                version afterward to link the AI activity to a checkpoint.
+              </p>
+              <div>
+                <button
+                  type="button"
+                  className="button button--secondary ai-review-reject"
+                  onClick={() => void resolveAiProposal("reject")}
+                  disabled={aiProposalBusy !== null}
+                >
+                  {aiProposalBusy === "reject" ? "Rejecting…" : "Reject proposal"}
+                </button>
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={() => void resolveAiProposal("accept")}
+                  disabled={aiProposalBusy !== null}
+                >
+                  <Check size={17} weight="bold" aria-hidden="true" />
+                  {aiProposalBusy === "accept" ? "Applying…" : "Apply reviewed changes"}
+                </button>
+              </div>
+            </footer>
+          </aside>
+        </div>
+      ) : null}
 
       {editorDialog ? (
         <div className="editor-dialog-scrim">

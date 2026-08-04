@@ -85,3 +85,22 @@ test("desktop window keeps the Electron renderer isolated", () => {
   assert.match(source, /127\.0\.0\.1/);
   assert.match(source, /randomBytes\(32\)/);
 });
+
+test("desktop quit control confirms before using the clean shutdown path", () => {
+  const mainSource = readFileSync(
+    path.join(__dirname, "..", "electron", "main.cjs"),
+    "utf8",
+  );
+  const preloadSource = readFileSync(
+    path.join(__dirname, "..", "electron", "preload.cjs"),
+    "utf8",
+  );
+
+  assert.match(preloadSource, /requestQuit:\s*\(\)\s*=>\s*ipcRenderer\.invoke\("app:request-quit"\)/);
+  assert.match(mainSource, /ipcMain\.handle\("app:request-quit"/);
+  assert.match(mainSource, /buttons:\s*\["Cancel",\s*"Quit"\]/);
+  assert.match(mainSource, /local MCP connection/);
+  assert.match(mainSource, /private local server/);
+  assert.match(mainSource, /setImmediate\(\(\)\s*=>\s*void beginQuit\(\)\)/);
+  assert.match(mainSource, /removeMcpRuntime\(\);[\s\S]*await stopLocalServer\(\);/);
+});

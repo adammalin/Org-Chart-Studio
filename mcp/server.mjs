@@ -43,6 +43,55 @@ function toolFailure(error) {
   };
 }
 
+async function runWithWriteActivity(client, details, operation) {
+  const activityId = crypto.randomUUID();
+  await client
+    .reportMcpActivity({
+      action: "begin",
+      activityId,
+      operation: details.operation,
+      label: details.label,
+      chartId: details.chartId,
+      chartName: details.chartName,
+    })
+    .catch(() => undefined);
+  try {
+    const result = await operation();
+    const proposal = result?.proposal;
+    await client
+      .reportMcpActivity({
+        action: "complete",
+        activityId,
+        operation: details.operation,
+        label: details.label,
+        chartId: result?.chart?.id ?? proposal?.chartId ?? details.chartId,
+        chartName: result?.chart?.name ?? proposal?.chartName ?? details.chartName,
+        succeeded: true,
+        completionKind: proposal ? "review_ready" : "saved",
+        proposalId: proposal?.id,
+      })
+      .catch(() => undefined);
+    return result;
+  } catch (error) {
+    await client
+      .reportMcpActivity({
+        action: "complete",
+        activityId,
+        operation: details.operation,
+        label: details.label,
+        chartId: details.chartId,
+        chartName: details.chartName,
+        succeeded: false,
+        message:
+          error instanceof Error
+            ? error.message.slice(0, 240)
+            : "The local chart update did not complete.",
+      })
+      .catch(() => undefined);
+    throw error;
+  }
+}
+
 function registerTools(server, client) {
   server.registerTool(
     "list_charts",
@@ -210,7 +259,15 @@ function registerTools(server, client) {
     },
     async ({ name }) => {
       try {
-        const result = await client.postJson({ action: "create", name });
+        const result = await runWithWriteActivity(
+          client,
+          {
+            operation: "create_chart_draft",
+            label: "Creating chart draft",
+            chartName: name,
+          },
+          () => client.postJson({ action: "create", name }),
+        );
         return success(
           { chart: result.chart },
           `Created the local draft ${result.chart.name}.`,
@@ -240,7 +297,15 @@ function registerTools(server, client) {
     },
     async (input) => {
       try {
-        const result = await client.importNormalized({ ...input, validateOnly: false });
+        const result = await runWithWriteActivity(
+          client,
+          {
+            operation: "import_normalized_chart",
+            label: "Importing normalized chart",
+            chartName: input.chartName,
+          },
+          () => client.importNormalized({ ...input, validateOnly: false }),
+        );
         return success(
           { chart: result.chart, findings: result.findings },
           `Imported ${result.chart.name} as a new local draft with ${result.chart.nodes.length} units.`,
@@ -254,9 +319,9 @@ function registerTools(server, client) {
   server.registerTool(
     "replace_chart_draft",
     {
-      title: "Replace a working chart draft",
+      title: "Propose changes to a working chart",
       description:
-        "Save an explicitly reviewed complete ChartDocument over the matching local working draft. The chart ID, version, and updatedAt must still match, so stale writes are rejected. This does not create an immutable version.",
+        "Stage a complete ChartDocument for field-by-field human review in OrgChart Studio. The saved chart is not changed until a person applies the proposal. The chart ID, version, and updatedAt must still match, so stale proposals are rejected.",
       inputSchema: {
         chart: z.record(z.string(), z.unknown()),
       },
@@ -268,10 +333,19 @@ function registerTools(server, client) {
     },
     async ({ chart }) => {
       try {
-        const result = await client.postJson({ action: "save", chart });
+        const result = await runWithWriteActivity(
+          client,
+          {
+            operation: "replace_chart_draft",
+            label: "Updating working draft",
+            chartId: chart.id,
+            chartName: chart.name,
+          },
+          () => client.stageChartProposal(chart),
+        );
         return success(
-          { chart: result.chart },
-          `Saved the current working draft for ${result.chart.name}.`,
+          { proposal: result.proposal },
+          `Staged ${result.proposal.summary.total} proposed change${result.proposal.summary.total === 1 ? "" : "s"} for human review in OrgChart Studio. The saved chart has not changed.`,
         );
       } catch (error) {
         return toolFailure(error);
@@ -284,7 +358,7 @@ function registerTools(server, client) {
     {
       title: "Save an immutable chart version",
       description:
-        "Save an explicitly reviewed complete ChartDocument as a new immutable local version with a human-readable change summary.",
+        "Save the current matching working chart as a new immutable local version with a human-readable change summary. This does not apply fields from the supplied document; it uses the ID, version, and updatedAt as a stale-write guard.",
       inputSchema: {
         chart: z.record(z.string(), z.unknown()),
         label: z.string().min(3).max(160),
@@ -297,7 +371,23 @@ function registerTools(server, client) {
     },
     async ({ chart, label }) => {
       try {
-        const result = await client.postJson({ action: "snapshot", chart, label });
+        const result = await runWithWriteActivity(
+          client,
+          {
+            operation: "save_chart_version",
+            label: "Saving named chart version",
+            chartId: chart.id,
+            chartName: chart.name,
+          },
+          () =>
+            client.postJson({
+              action: "snapshot_current",
+              chartId: chart.id,
+              expectedVersion: chart.version,
+              expectedUpdatedAt: chart.updatedAt,
+              label,
+            }),
+        );
         return success(
           { chart: result.chart, version: result.version },
           `Saved ${result.chart.name} as version ${result.chart.version}: ${label}.`,

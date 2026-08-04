@@ -41,5 +41,6 @@ interface Window {
       backupJson: string,
       encrypted: boolean,
     ): Promise<DesktopBackupSaveResult>;
+    requestQuit(): Promise<boolean>;
   };
 }

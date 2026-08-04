@@ -156,12 +156,18 @@ Pass when both formats can be recovered without destructive replacement and unen
 3. Call `list_charts` and verify it returns summaries without full node data. Call `get_chart` only on an approved test chart and confirm the current saved layout is returned.
 4. Call `validate_chart` and `list_chart_versions`; confirm neither changes the chart.
 5. Validate a synthetic canonical CSV through `validate_normalized_import`, then approve `import_normalized_chart`. Confirm it creates a separate draft rather than overwriting an existing chart.
-6. Read that draft, make one reviewed change through `replace_chart_draft`, and save an immutable checkpoint through `save_chart_version`. Confirm the app UI shows the update and new version.
-7. Confirm write tools request approval and that delete, backup restore, source-file download, storage, passphrase, and publication tools are absent.
-8. Quit OrgChart Studio and confirm a tool reports that the desktop app must be opened. Reopen it and confirm tools reconnect with the new session.
-9. Run `npm run mcp:remove`, restart ChatGPT Desktop or Codex, and confirm only the OrgChart Studio server was removed. Run `npm run mcp:configure` to restore it if needed.
+6. Read that draft and make one change through `replace_chart_draft`. Confirm the MCP result says it was staged and that the saved chart remains unchanged.
+7. While the proposal is prepared, confirm the app shows a green edge cue plus **AI preparing changes** and names the operation. Meaning must remain clear without relying on color.
+8. Choose **Review changes**. Confirm the proposed canvas is read-only, changed cards and connectors have text/pattern cues, and the panel lists exact Before and After fields including additions/removals.
+9. Reject one proposal and confirm the saved chart remains unchanged. Stage it again, choose **Apply reviewed changes**, and confirm only the reviewed fields change.
+10. Open **Version history**. Confirm both review decisions appear in the AI-assisted timeline, the accepted item says it is awaiting a named version, then save a named version and confirm the item links to it.
+11. Trigger a synthetic failed write and confirm the receipt uses **AI edit needs attention** without changing chart data. Make a deliberately stale proposal and confirm it is rejected rather than overwriting newer work.
+12. Create and restore a selected-chart backup. Confirm the related AI review timeline is restored with its version links.
+13. Confirm write tools request approval and that delete, backup restore, source-file download, storage, passphrase, and publication tools are absent.
+12. Quit OrgChart Studio and confirm a tool reports that the desktop app must be opened. Reopen it and confirm tools reconnect with the new session.
+13. Run `npm run mcp:remove`, restart ChatGPT Desktop or Codex, and confirm only the OrgChart Studio server was removed. Run `npm run mcp:configure` to restore it if needed.
 
-Pass when MCP is local and on-demand, read and write boundaries are accurate, stale writes are rejected, the app remains the validated source of truth, and no tool bypasses the normal chart/version workflow.
+Pass when MCP is local and on-demand, proposals cannot change saved data before Apply, field-level review is accurate, timeline/version links survive backup restore, stale writes are rejected, and no tool bypasses the normal chart/version workflow.
 
 ## Keyboard and accessibility checks
 

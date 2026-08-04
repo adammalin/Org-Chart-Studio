@@ -173,6 +173,21 @@ function versionInsert(
     );
 }
 
+async function linkAcceptedAiActivity(
+  db: D1Database,
+  chartId: string,
+  version: ChartVersion,
+) {
+  await db
+    .prepare(
+      `UPDATE ai_activity_events
+       SET version_id = ?, version_number = ?, version_label = ?
+       WHERE chart_id = ? AND status = 'accepted' AND version_id IS NULL`,
+    )
+    .bind(version.id, version.version, version.label, chartId)
+    .run();
+}
+
 function sourceInsert(db: D1Database, source: SourceRecord) {
   return db
     .prepare(
@@ -504,6 +519,7 @@ export async function POST(request: Request) {
       | "duplicate"
       | "save"
       | "snapshot"
+      | "snapshot_current"
       | "restore_version"
       | "delete";
     name?: string;
@@ -511,6 +527,8 @@ export async function POST(request: Request) {
     chart?: ChartDocument;
     label?: string;
     versionId?: string;
+    expectedVersion?: number;
+    expectedUpdatedAt?: string;
   };
 
   if (body.action === "create") {
@@ -610,6 +628,16 @@ export async function POST(request: Request) {
       .bind(chart.id)
       .first<ChartRow>();
     if (!existing) return Response.json({ error: "Chart not found." }, { status: 404 });
+    if (chart.version !== existing.version || chart.updatedAt !== existing.updated_at) {
+      return Response.json(
+        {
+          error: "The working draft changed before the named version could be saved.",
+          currentVersion: existing.version,
+          currentUpdatedAt: existing.updated_at,
+        },
+        { status: 409 },
+      );
+    }
 
     const validation = validateEditableChart(chart);
     if (validation.error) return Response.json(validation, { status: 422 });
@@ -649,8 +677,75 @@ export async function POST(request: Request) {
     )
       .bind(nextChart.id, nextVersion)
       .first<VersionRow>();
+    const savedVersion = versionRow ? versionFromRow(versionRow) : null;
+    if (savedVersion) await linkAcceptedAiActivity(DB, nextChart.id, savedVersion);
     return Response.json(
-      { chart: nextChart, version: versionRow ? versionFromRow(versionRow) : null },
+      { chart: nextChart, version: savedVersion },
+      { status: 201 },
+    );
+  }
+
+  if (body.action === "snapshot_current" && body.chartId) {
+    const existing = await DB.prepare("SELECT * FROM charts WHERE id = ?")
+      .bind(body.chartId)
+      .first<ChartRow>();
+    if (!existing) return Response.json({ error: "Chart not found." }, { status: 404 });
+    if (
+      body.expectedVersion !== existing.version ||
+      body.expectedUpdatedAt !== existing.updated_at
+    ) {
+      return Response.json(
+        {
+          error: "The working draft changed before the named version could be saved.",
+          currentVersion: existing.version,
+          currentUpdatedAt: existing.updated_at,
+        },
+        { status: 409 },
+      );
+    }
+    const sourceResult = await DB.prepare(
+      "SELECT * FROM source_records WHERE chart_id = ? ORDER BY imported_at DESC",
+    )
+      .bind(body.chartId)
+      .all<SourceRow>();
+    const chart = chartFromRow(existing, sourceResult.results.map(sourceFromRow));
+    const validation = validateEditableChart(chart);
+    if (validation.error) return Response.json(validation, { status: 422 });
+    const latest = await DB.prepare(
+      "SELECT MAX(version) AS version FROM chart_versions WHERE chart_id = ?",
+    )
+      .bind(chart.id)
+      .first<{ version: number | null }>();
+    const nextVersion = Math.max(existing.version, latest?.version ?? 0) + 1;
+    const updatedAt = new Date().toISOString();
+    const label = body.label?.trim().slice(0, 160) || "Saved working version";
+    const nextChart: ChartDocument = {
+      ...chart,
+      version: nextVersion,
+      updatedAt,
+    };
+    const update = await DB.prepare(
+      `UPDATE charts SET version = ?, updated_at = ?
+       WHERE id = ? AND version = ? AND updated_at = ?`,
+    )
+      .bind(nextVersion, updatedAt, chart.id, existing.version, existing.updated_at)
+      .run();
+    if ((update.meta.changes ?? 0) !== 1) {
+      return Response.json(
+        { error: "The working draft changed before the named version could be saved." },
+        { status: 409 },
+      );
+    }
+    await versionInsert(DB, nextChart, label, updatedAt).run();
+    const versionRow = await DB.prepare(
+      "SELECT * FROM chart_versions WHERE chart_id = ? AND version = ?",
+    )
+      .bind(nextChart.id, nextVersion)
+      .first<VersionRow>();
+    const savedVersion = versionRow ? versionFromRow(versionRow) : null;
+    if (savedVersion) await linkAcceptedAiActivity(DB, nextChart.id, savedVersion);
+    return Response.json(
+      { chart: nextChart, version: savedVersion },
       { status: 201 },
     );
   }
@@ -738,6 +833,7 @@ export async function POST(request: Request) {
       sourceResult.results.map((source) => SOURCE_FILES.delete(source.storage_key)),
     );
     await DB.batch([
+      DB.prepare("DELETE FROM ai_activity_events WHERE chart_id = ?").bind(body.chartId),
       DB.prepare("DELETE FROM chart_versions WHERE chart_id = ?").bind(body.chartId),
       DB.prepare("DELETE FROM source_records WHERE chart_id = ?").bind(body.chartId),
       DB.prepare("DELETE FROM charts WHERE id = ?").bind(body.chartId),

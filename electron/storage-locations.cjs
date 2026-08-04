@@ -334,7 +334,7 @@ function validateUnencryptedBackup(backupJson) {
   }
   if (
     parsed?.format !== "orgchart-studio-library-backup" ||
-    ![1, 2].includes(parsed?.schemaVersion) ||
+    ![1, 2, 3].includes(parsed?.schemaVersion) ||
     !Array.isArray(parsed?.charts) ||
     !Array.isArray(parsed?.sourceFiles) ||
     parsed.chartCount !== parsed.charts.length ||

@@ -48,6 +48,7 @@ function chartFixture() {
 
 async function startFakeApp(token) {
   const chart = chartFixture();
+  const activityEvents = [];
   const server = http.createServer(async (request, response) => {
     response.setHeader("content-type", "application/json");
     if (request.headers["x-orgchart-desktop-token"] !== token) {
@@ -56,6 +57,46 @@ async function startFakeApp(token) {
       return;
     }
     const url = new URL(request.url, "http://127.0.0.1");
+    if (request.method === "POST" && url.pathname === "/api/ai-activity") {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const activity = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      activityEvents.push(activity);
+      response.end(JSON.stringify({ activity }));
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/ai-proposals") {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      assert.equal(body.action, "stage");
+      response.statusCode = 201;
+      response.end(
+        JSON.stringify({
+          proposal: {
+            id: "proposal-public-fixture",
+            chartId: chart.id,
+            chartName: chart.name,
+            operation: "replace_chart_draft",
+            status: "pending",
+            summary: {
+              total: 1,
+              added: 0,
+              changed: 1,
+              removed: 0,
+              changedNodeIds: ["unit-root"],
+              addedNodeIds: [],
+              removedNodeIds: [],
+              changedEdgeIds: [],
+              addedEdgeIds: [],
+              removedEdgeIds: [],
+              text: "1 field change across 1 unit and 0 relationships.",
+            },
+          },
+        }),
+      );
+      return;
+    }
     if (request.method === "GET" && url.searchParams.get("resource") === "validate") {
       response.end(
         JSON.stringify({
@@ -115,7 +156,7 @@ async function startFakeApp(token) {
     response.end(JSON.stringify({ error: "not found" }));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { server, port: server.address().port };
+  return { server, port: server.address().port, activityEvents };
 }
 
 test("local STDIO MCP exposes bounded tools and reaches only the authorized running app", async () => {
@@ -193,6 +234,30 @@ test("local STDIO MCP exposes bounded tools and reaches only the authorized runn
       },
     });
     assert.equal(importPreview.structuredContent.preview.rowCount, 1);
+
+    const created = await client.callTool({
+      name: "create_chart_draft",
+      arguments: { name: "Synthetic Activity Test" },
+    });
+    assert.equal(created.isError, undefined);
+    assert.equal(fake.activityEvents.length, 2);
+    assert.equal(fake.activityEvents[0].action, "begin");
+    assert.equal(fake.activityEvents[0].operation, "create_chart_draft");
+    assert.equal(fake.activityEvents[1].action, "complete");
+    assert.equal(fake.activityEvents[1].succeeded, true);
+    assert.equal(fake.activityEvents[1].chartId, "chart-public-fixture");
+
+    const proposed = structuredClone(chartFixture());
+    proposed.nodes[0].data.unit.assignmentLabel = "Synthetic replacement";
+    const staged = await client.callTool({
+      name: "replace_chart_draft",
+      arguments: { chart: proposed },
+    });
+    assert.equal(staged.isError, undefined);
+    assert.equal(staged.structuredContent.proposal.id, "proposal-public-fixture");
+    assert.match(staged.content[0].text, /saved chart has not changed/i);
+    assert.equal(fake.activityEvents.at(-1).completionKind, "review_ready");
+    assert.equal(fake.activityEvents.at(-1).proposalId, "proposal-public-fixture");
   } finally {
     await client.close();
     await new Promise((resolve) => fake.server.close(resolve));

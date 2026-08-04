@@ -1,7 +1,8 @@
 import type { ChartDocument, ChartVersion } from "./chart-library";
+import type { AiActivityRecord } from "./ai-change-review";
 
 export const LIBRARY_BACKUP_FORMAT = "orgchart-studio-library-backup" as const;
-export const LIBRARY_BACKUP_VERSION = 2 as const;
+export const LIBRARY_BACKUP_VERSION = 3 as const;
 export const ENCRYPTED_BACKUP_FORMAT = "orgchart-studio-encrypted-backup" as const;
 export const ENCRYPTED_BACKUP_VERSION = 1 as const;
 
@@ -23,14 +24,16 @@ export interface BackupSourceFile {
 
 export interface LibraryBackup {
   format: typeof LIBRARY_BACKUP_FORMAT;
-  schemaVersion: 1 | typeof LIBRARY_BACKUP_VERSION;
+  schemaVersion: 1 | 2 | typeof LIBRARY_BACKUP_VERSION;
   scope?: LibraryBackupScope;
   exportedAt: string;
   chartCount: number;
   sourceFileCount: number;
   versionCount?: number;
+  aiActivityCount?: number;
   charts: ChartDocument[];
   chartVersions?: ChartVersion[];
+  aiActivities?: AiActivityRecord[];
   sourceFiles: BackupSourceFile[];
 }
 
@@ -77,6 +80,7 @@ export function isLibraryBackup(value: unknown): value is LibraryBackup {
   return (
     candidate.format === LIBRARY_BACKUP_FORMAT &&
     (candidate.schemaVersion === 1 ||
+      candidate.schemaVersion === 2 ||
       candidate.schemaVersion === LIBRARY_BACKUP_VERSION) &&
     typeof candidate.exportedAt === "string" &&
     (candidate.scope === undefined ||
@@ -84,7 +88,8 @@ export function isLibraryBackup(value: unknown): value is LibraryBackup {
       candidate.scope === "selected") &&
     Array.isArray(candidate.charts) &&
     Array.isArray(candidate.sourceFiles) &&
-    (candidate.schemaVersion === 1 || Array.isArray(candidate.chartVersions))
+    (candidate.schemaVersion === 1 || Array.isArray(candidate.chartVersions)) &&
+    (candidate.schemaVersion !== 3 || Array.isArray(candidate.aiActivities))
   );
 }
 
