@@ -3762,138 +3762,151 @@ function StudioWorkspace() {
         {workspaceView === "canvas" ? (
           <section className="canvas-panel" aria-label="Interactive organizational chart">
             <div className="canvas-toolbar">
-              <div className="presentation-control" data-tour-target="presentation">
-                <span>
-                  <strong>Presentation</strong>
-                  <small>Changes the drawing, not the saved hierarchy</small>
-                </span>
-                <div role="group" aria-label="Chart presentation">
-                  <button
-                    type="button"
-                    className={presentationMode === "compact" ? "is-active" : ""}
-                    aria-pressed={presentationMode === "compact"}
-                    onClick={() => changePresentationMode("compact")}
-                  >
-                    <Rows size={16} aria-hidden="true" />
-                    Compact groups
-                  </button>
-                  <button
-                    type="button"
-                    className={presentationMode === "individual" ? "is-active" : ""}
-                    aria-pressed={presentationMode === "individual"}
-                    onClick={() => changePresentationMode("individual")}
-                  >
-                    <SquaresFour size={16} aria-hidden="true" />
-                    Individual cards
-                  </button>
+              <div className="canvas-toolbar__mode">
+                <div className="presentation-control" data-tour-target="presentation">
+                  <span>
+                    <strong>
+                      Presentation
+                      {presentationMode === "compact" ? (
+                        <span
+                          className="presentation-control__status"
+                          title="Column stacks · fixed hierarchy rails · level 3 left entry"
+                        >
+                          Auto arranged
+                        </span>
+                      ) : null}
+                    </strong>
+                    <small>Changes the drawing, not the saved hierarchy</small>
+                  </span>
+                  <div role="group" aria-label="Chart presentation">
+                    <button
+                      type="button"
+                      className={presentationMode === "compact" ? "is-active" : ""}
+                      aria-pressed={presentationMode === "compact"}
+                      onClick={() => changePresentationMode("compact")}
+                    >
+                      <Rows size={16} aria-hidden="true" />
+                      Compact groups
+                    </button>
+                    <button
+                      type="button"
+                      className={presentationMode === "individual" ? "is-active" : ""}
+                      aria-pressed={presentationMode === "individual"}
+                      onClick={() => changePresentationMode("individual")}
+                    >
+                      <SquaresFour size={16} aria-hidden="true" />
+                      Individual cards
+                    </button>
+                  </div>
                 </div>
               </div>
-              {presentationMode === "compact" ? (
-                <div className="compact-layout-receipt" aria-label="Compact layout rules">
-                  <TreeStructure size={20} aria-hidden="true" />
-                  <span>
-                    <strong>Auto arranged</strong>
-                    <small>Column stacks · fixed hierarchy rails · level 3 left entry</small>
-                  </span>
-                </div>
-              ) : (
+              {presentationMode === "individual" ? (
                 <div className="layout-control">
-                <label htmlFor="layout-mode">Layout mode</label>
-                <select
-                  id="layout-mode"
-                  value={layoutMode}
-                  onChange={(event) => setLayoutMode(event.target.value as LayoutMode)}
-                  title="Choose how individual card positions are recalculated"
-                >
-                  <option value="preserve">Preserve layout</option>
-                  <option value="branch">Selected branch</option>
-                  <option value="respect-pins">Respect pins</option>
-                  <option value="full">Full layout</option>
-                </select>
-                <button
-                  type="button"
-                  className="button button--primary"
-                  onClick={() => void runLayout()}
-                  disabled={isLayoutRunning}
-                >
-                  <ArrowsOut size={17} aria-hidden="true" />
-                  {isLayoutRunning ? "Laying out…" : "Run layout"}
-                </button>
-                <label htmlFor="connector-routing-mode">Connectors</label>
-                <select
-                  id="connector-routing-mode"
-                  value={connectorRoutingMode}
-                  onChange={(event) =>
-                    changeConnectorRoutingMode(
-                      event.target.value as ConnectorRoutingMode,
-                    )
-                  }
-                  title="Choose whether same-parent relationships may share a comb or always remain separate"
-                >
-                  <option value="separate">Separate lanes</option>
-                  <option value="combed">Sibling combs</option>
-                </select>
-                <button
-                  type="button"
-                  className="button button--branch-toggle"
-                  aria-pressed={moveBranchOnDrag}
-                  onClick={() => setMoveBranchOnDrag((current) => !current)}
-                  title={
-                    moveBranchOnDrag
-                      ? "Dragging a card moves and pins every card below it"
-                      : "Dragging moves and pins only the selected card"
-                  }
-                >
-                  <TreeStructure size={17} aria-hidden="true" />
-                  Move branch: {moveBranchOnDrag ? "On" : "Off"}
-                </button>
-                <button
-                  type="button"
-                  className="button button--selection-toggle"
-                  aria-pressed={marqueeSelectionEnabled}
-                  onClick={() => {
-                    setMarqueeSelectionEnabled((current) => {
-                      const next = !current;
-                      setNotice(
-                        next
-                          ? "Area selection enabled. Drag across the canvas to select every card the box touches; hold Space to pan."
-                          : "Area selection disabled. Dragging the canvas pans again; selected cards remain grouped until you click away.",
-                      );
-                      return next;
-                    });
-                  }}
-                  title={
-                    marqueeSelectionEnabled
-                      ? "Turn off area selection and restore drag-to-pan"
-                      : "Drag a rectangle across the canvas to select multiple cards"
-                  }
-                >
-                  <Selection size={17} aria-hidden="true" />
-                  Select area: {marqueeSelectionEnabled ? "On" : "Off"}
-                </button>
+                  <div className="layout-control__field">
+                    <label htmlFor="layout-mode">Card layout</label>
+                    <select
+                      id="layout-mode"
+                      value={layoutMode}
+                      onChange={(event) => setLayoutMode(event.target.value as LayoutMode)}
+                      title="Choose how individual card positions are recalculated"
+                    >
+                      <option value="preserve">Preserve layout</option>
+                      <option value="branch">Selected branch</option>
+                      <option value="respect-pins">Respect pins</option>
+                      <option value="full">Full layout</option>
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    className="button button--primary layout-control__run"
+                    onClick={() => void runLayout()}
+                    disabled={isLayoutRunning}
+                  >
+                    <ArrowsOut size={17} aria-hidden="true" />
+                    {isLayoutRunning ? "Laying out…" : "Run layout"}
+                  </button>
+                  <span className="layout-control__divider" aria-hidden="true" />
+                  <div className="layout-control__field">
+                    <label htmlFor="connector-routing-mode">Connectors</label>
+                    <select
+                      id="connector-routing-mode"
+                      value={connectorRoutingMode}
+                      onChange={(event) =>
+                        changeConnectorRoutingMode(
+                          event.target.value as ConnectorRoutingMode,
+                        )
+                      }
+                      title="Choose whether same-parent relationships may share a comb or always remain separate"
+                    >
+                      <option value="separate">Separate lanes</option>
+                      <option value="combed">Sibling combs</option>
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    className="button button--branch-toggle"
+                    aria-pressed={moveBranchOnDrag}
+                    onClick={() => setMoveBranchOnDrag((current) => !current)}
+                    title={
+                      moveBranchOnDrag
+                        ? "Dragging a card moves and pins every card below it"
+                        : "Dragging moves and pins only the selected card"
+                    }
+                  >
+                    <TreeStructure size={17} aria-hidden="true" />
+                    Move branch: {moveBranchOnDrag ? "On" : "Off"}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--selection-toggle"
+                    aria-pressed={marqueeSelectionEnabled}
+                    onClick={() => {
+                      setMarqueeSelectionEnabled((current) => {
+                        const next = !current;
+                        setNotice(
+                          next
+                            ? "Area selection enabled. Drag across the canvas to select every card the box touches; hold Space to pan."
+                            : "Area selection disabled. Dragging the canvas pans again; selected cards remain grouped until you click away.",
+                        );
+                        return next;
+                      });
+                    }}
+                    title={
+                      marqueeSelectionEnabled
+                        ? "Turn off area selection and restore drag-to-pan"
+                        : "Drag a rectangle across the canvas to select multiple cards"
+                    }
+                  >
+                    <Selection size={17} aria-hidden="true" />
+                    Select area: {marqueeSelectionEnabled ? "On" : "Off"}
+                  </button>
                 </div>
-              )}
-              <div className="toolbar-actions">
-                <button
-                  type="button"
-                  className="button button--secondary button--history"
-                  onClick={undoChange}
-                  disabled={!undoStack.length}
-                  title="Undo organizational or presentation change"
-                >
-                  <ArrowCounterClockwise size={17} aria-hidden="true" />
-                  Undo
-                </button>
-                <button
-                  type="button"
-                  className="button button--secondary button--history"
-                  onClick={redoChange}
-                  disabled={!redoStack.length}
-                  title="Redo organizational or presentation change"
-                >
-                  <ArrowClockwise size={17} aria-hidden="true" />
-                  Redo
-                </button>
+              ) : null}
+              <div className="toolbar-actions" role="toolbar" aria-label="Chart actions">
+                <div className="toolbar-actions__history" role="group" aria-label="Change history">
+                  <button
+                    type="button"
+                    className="button button--secondary button--history"
+                    onClick={undoChange}
+                    disabled={!undoStack.length}
+                    title="Undo organizational or presentation change"
+                    aria-label="Undo organizational or presentation change"
+                  >
+                    <ArrowCounterClockwise size={17} aria-hidden="true" />
+                    <span className="button-label">Undo</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--secondary button--history"
+                    onClick={redoChange}
+                    disabled={!redoStack.length}
+                    title="Redo organizational or presentation change"
+                    aria-label="Redo organizational or presentation change"
+                  >
+                    <ArrowClockwise size={17} aria-hidden="true" />
+                    <span className="button-label">Redo</span>
+                  </button>
+                </div>
                 <button
                   type="button"
                   className="button button--secondary"
