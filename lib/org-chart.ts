@@ -17,6 +17,10 @@ export type UnitType = (typeof UNIT_TYPES)[number];
 
 export type PositionStatus = "filled" | "acting" | "vacant";
 
+export type PlanningState = "current" | "planned";
+
+export type SourceCertainty = "confirmed" | "inferred" | "needs_review";
+
 export interface OrganizationalUnit {
   id: string;
   name: string;
@@ -27,6 +31,10 @@ export interface OrganizationalUnit {
   positionStatus: PositionStatus;
   effectiveDate: string;
   source: string;
+  sourceLocator?: string;
+  sourceCertainty?: SourceCertainty;
+  reviewNote?: string;
+  planningState?: PlanningState;
   publicationVisibility: "internal" | "public";
 }
 

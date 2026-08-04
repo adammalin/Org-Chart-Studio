@@ -420,20 +420,20 @@ function createMainWindow(url) {
         const waitFor = async (predicate, label, timeoutMs = 8000) => {
           const deadline = Date.now() + timeoutMs;
           while (Date.now() < deadline) {
-            const value = predicate();
+            const value = await predicate();
             if (value) return value;
             await new Promise((resolve) => setTimeout(resolve, 50));
           }
           throw new Error('Timed out waiting for ' + label + '.');
         };
-        const signalProposalReady = async (proposal, activityId) => {
+        const signalProposalReady = async (proposal, activityId, operation = 'replace_chart_draft') => {
           await fetch('/api/ai-activity', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               action: 'complete',
               activityId,
-              operation: 'replace_chart_draft',
+              operation,
               label: 'Reviewing synthetic proposal',
               chartId: proposal.chartId,
               chartName: proposal.chartName,
@@ -453,6 +453,18 @@ function createMainWindow(url) {
           return waitFor(
             () => document.querySelector('.ai-review-panel'),
             'the AI proposal panel'
+          );
+        };
+        const openImportReview = async (proposal, activityId) => {
+          await signalProposalReady(proposal, activityId, 'stage_normalized_import');
+          const reviewButton = await waitFor(
+            () => document.querySelector('.mcp-activity-hud__review'),
+            'the AI import review receipt'
+          );
+          reviewButton.click();
+          return waitFor(
+            () => document.querySelector('.ai-import-review-panel'),
+            'the AI import review panel'
           );
         };
         const buttonReceivesPointer = (button) => {
@@ -616,11 +628,81 @@ function createMainWindow(url) {
           { cache: 'no-store' }
         );
         const evidenceDownloadText = await evidenceDownload.text();
+        const sourceIntakeForm = new FormData();
+        sourceIntakeForm.set('name', 'Synthetic AI import intake');
+        sourceIntakeForm.set(
+          'evidence',
+          new File(['synthetic staged evidence'], 'staged-source.pdf', { type: 'application/pdf' })
+        );
+        const sourceIntake = await fetch('/api/import-intakes', {
+          method: 'POST',
+          body: sourceIntakeForm
+        }).then((response) => response.json());
+        const stagedNormalizedCsv = [
+          'id,name,shortName,type,parentId,positionTitle,assignmentLabel,positionStatus,effectiveDate,publicationVisibility,source,sourceLocator,sourceCertainty,reviewNote,planningState',
+          'staged-root,Staged Organization,Staged Organization,division,,Director,Position vacant,vacant,October 1 2026,internal,Synthetic staged evidence,Slide 1,inferred,Confirm the source connector,planned'
+        ].join('\\n');
+        const stagedImport = await fetch('/api/ai-import-proposals', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'stage',
+            chartName: 'Synthetic staged AI chart',
+            format: 'csv',
+            contents: stagedNormalizedCsv,
+            intakeId: sourceIntake.intake.id
+          })
+        }).then((response) => response.json());
+        await openImportReview(stagedImport.proposal, 'electron-smoke-ai-import');
+        const rejectImportButton = document.querySelector('[data-ai-import-action="reject"]');
+        const createImportButton = document.querySelector('[data-ai-import-action="accept"]');
+        const importButtonsClickable =
+          rejectImportButton instanceof HTMLButtonElement &&
+          !rejectImportButton.disabled &&
+          buttonReceivesPointer(rejectImportButton) &&
+          createImportButton instanceof HTMLButtonElement &&
+          !createImportButton.disabled &&
+          buttonReceivesPointer(createImportButton);
+        createImportButton.click();
+        await waitFor(
+          () => !document.querySelector('.ai-import-review-panel'),
+          'the accepted AI import panel to close'
+        );
+        const stagedImportedChart = await fetch('/api/charts', { cache: 'no-store' })
+          .then((response) => response.json())
+          .then((library) => library.charts.find((chart) => chart.name === 'Synthetic staged AI chart'));
+        const stagedImportRoundTrip =
+          stagedImportedChart.sources.length === 2 &&
+          stagedImportedChart.nodes[0].data.unit.sourceLocator === 'Slide 1' &&
+          stagedImportedChart.nodes[0].data.unit.sourceCertainty === 'inferred' &&
+          stagedImportedChart.nodes[0].data.unit.planningState === 'planned';
+        const importedIntakeDiscardResponse = await fetch('/api/import-intakes', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'discard', intakeId: sourceIntake.intake.id })
+        });
+        const stagedEvidenceSource = stagedImportedChart.sources.find(
+          (source) => source.sourceType === 'guided_extraction'
+        );
+        const stagedEvidenceAfterDiscardAttempt = await fetch(
+          '/api/charts?resource=source&sourceId=' + encodeURIComponent(stagedEvidenceSource.id),
+          { cache: 'no-store' }
+        );
         const importedDeleted = await fetch('/api/charts', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ action: 'delete', chartId: imported.chart.id })
         }).then((response) => response.json());
+        const stagedImportedDeleted = await fetch('/api/charts', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'delete', chartId: stagedImportedChart.id })
+        }).then((response) => response.json());
+        const intakesAfterStagedDelete = await fetch('/api/import-intakes', { cache: 'no-store' })
+          .then((response) => response.json());
+        const importedIntakeMetadataCleaned = !intakesAfterStagedDelete.intakes.some(
+          (intake) => intake.id === sourceIntake.intake.id
+        );
         const deleted = await fetch('/api/charts', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -661,6 +743,33 @@ function createMainWindow(url) {
           }),
           false
         );
+        const aiControlNavigation = [...document.querySelectorAll('.sidebar button')].find(
+          (button) => button.textContent.includes('Local AI control')
+        );
+        aiControlNavigation.click();
+        await waitFor(
+          () => document.body.textContent.includes('Local AI control center'),
+          'the local AI control center'
+        );
+        const pauseAiButton = [...document.querySelectorAll('.ai-control-panel button')].find(
+          (button) => button.textContent.includes('Pause local AI access')
+        );
+        pauseAiButton.click();
+        const pausedControl = await waitFor(async () => {
+          const state = await fetch('/api/mcp-control', { cache: 'no-store' }).then((response) => response.json());
+          return state.control.paused ? state.control : null;
+        }, 'local AI access to pause');
+        const resumeAiButton = await waitFor(
+          () => [...document.querySelectorAll('.ai-control-panel button')].find(
+            (button) => button.textContent.includes('Resume local AI access')
+          ),
+          'the resume local AI button'
+        );
+        resumeAiButton.click();
+        const resumedControl = await waitFor(async () => {
+          const state = await fetch('/api/mcp-control', { cache: 'no-store' }).then((response) => response.json());
+          return state.control.paused ? null : state.control;
+        }, 'local AI access to resume');
         return {
           localOnly: location.hostname === '127.0.0.1',
           desktopBridge: window.orgChartDesktop?.isDesktop === true,
@@ -695,6 +804,15 @@ function createMainWindow(url) {
             applyButtonClickable,
           aiProposalRejectRoundTrip: rejectRoundTrip,
           aiProposalApplyRoundTrip: applyRoundTrip,
+          aiImportButtonsClickable: importButtonsClickable,
+          stagedAiImportRoundTrip:
+            stagedImportRoundTrip &&
+            importedIntakeDiscardResponse.status === 409 &&
+            stagedEvidenceAfterDiscardAttempt.ok &&
+            stagedImportedDeleted.deleted === stagedImportedChart.id &&
+            importedIntakeMetadataCleaned,
+          mcpControlRoundTrip:
+            pausedControl.paused === true && resumedControl.paused === false,
           assistedImportRoundTrip:
             intakePreview.preview.rowCount === 2 &&
             imported.chart.sources.length === 2 &&

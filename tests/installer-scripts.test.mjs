@@ -103,7 +103,8 @@ test("bundled quick-start has a second page for the reviewed local AI workflow",
 
   assert.equal(guide.getPageCount(), 2);
   assert.match(generatorSource, /Use the orgchart_studio MCP server/);
-  assert.match(generatorSource, /AI proposes\. You review\. The app remains the source of truth\./);
+  assert.match(generatorSource, /AI stages edits and imports\. You decide\. The app remains the source of truth\./);
+  assert.match(generatorSource, /Validate and stage a new-chart import/);
   assert.match(generatorSource, /Bypass review for chart replacement/);
   assert.match(generatorSource, /not ChatGPT web/);
 });

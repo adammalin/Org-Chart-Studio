@@ -20,6 +20,10 @@ export const importColumns = [
   "effectiveDate",
   "publicationVisibility",
   "source",
+  "sourceLocator",
+  "sourceCertainty",
+  "reviewNote",
+  "planningState",
 ] as const;
 
 export type ImportRow = Record<(typeof importColumns)[number], string>;
@@ -194,6 +198,10 @@ function workforceRosterRows(matrix: string[][]): {
       ]
         .filter(Boolean)
         .join("; "),
+      sourceLocator: "Workforce roster row",
+      sourceCertainty: "confirmed",
+      reviewNote: "",
+      planningState: "current",
     } satisfies ImportRow;
   });
 
@@ -295,6 +303,10 @@ function rowsFromSourceManifest(value: unknown): ImportRow[] | null {
       effectiveDate: String(unit.effectiveDate ?? ""),
       publicationVisibility: String(unit.publicationVisibility ?? ""),
       source: String(unit.source ?? ""),
+      sourceLocator: String(unit.sourceLocator ?? ""),
+      sourceCertainty: String(unit.sourceCertainty ?? ""),
+      reviewNote: String(unit.reviewNote ?? ""),
+      planningState: String(unit.planningState ?? ""),
     };
   });
 }
@@ -344,6 +356,23 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
         message: `Row ${rowNumber} has unsupported positionStatus ${row.positionStatus}.`,
       });
     }
+    if (
+      row.sourceCertainty &&
+      !["confirmed", "inferred", "needs_review"].includes(row.sourceCertainty)
+    ) {
+      findings.push({
+        code: "INVALID_SOURCE_CERTAINTY",
+        severity: "blocking",
+        message: `Row ${rowNumber} has unsupported sourceCertainty ${row.sourceCertainty}.`,
+      });
+    }
+    if (row.planningState && !["current", "planned"].includes(row.planningState)) {
+      findings.push({
+        code: "INVALID_PLANNING_STATE",
+        severity: "blocking",
+        message: `Row ${rowNumber} has unsupported planningState ${row.planningState}.`,
+      });
+    }
   });
 
   const parentById = new Map(rows.map((row) => [row.id, row.parentId]));
@@ -391,6 +420,13 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
             : "vacant") as PositionStatus,
           effectiveDate: row.effectiveDate || "Current",
           source: row.source || "Structured import pending review",
+          sourceLocator: row.sourceLocator,
+          sourceCertainty:
+            row.sourceCertainty === "inferred" || row.sourceCertainty === "needs_review"
+              ? row.sourceCertainty
+              : "confirmed",
+          reviewNote: row.reviewNote,
+          planningState: row.planningState === "planned" ? "planned" : "current",
           publicationVisibility:
             row.publicationVisibility === "public" ? "public" : "internal",
         },
@@ -404,7 +440,15 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
       source: row.parentId,
       target: row.id,
       type: "smoothstep",
-      data: { relationshipType: "primary supervisory" },
+      data: {
+        relationshipType: "primary supervisory",
+        sourceLocator: row.sourceLocator,
+        sourceCertainty:
+          row.sourceCertainty === "inferred" || row.sourceCertainty === "needs_review"
+            ? row.sourceCertainty
+            : "confirmed",
+        reviewNote: row.reviewNote,
+      },
     }));
 
   findings.push(...validateHierarchy(nodes, edges));
@@ -538,7 +582,7 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
 }
 
 export function importTemplateCsv(): string {
-  return `${importColumns.join(",")}\nroot-001,Example Organization,Example Organization,laboratory,,Laboratory Director,Position vacant,vacant,Current,internal\nunit-001,Example Directorate,Example Directorate,directorate,root-001,Director,Position vacant,vacant,Current,internal\n`;
+  return `${importColumns.join(",")}\nroot-001,Example Organization,Example Organization,laboratory,,Laboratory Director,Position vacant,vacant,Current,internal,Synthetic example,Synthetic row 1,confirmed,,current\nunit-001,Example Directorate,Example Directorate,directorate,root-001,Director,Position vacant,vacant,Current,internal,Synthetic example,Synthetic row 2,confirmed,,current\n`;
 }
 
 export function aiIntakeBrief(): string {
@@ -552,7 +596,7 @@ Inspect the supplied organizational-chart PowerPoint, Word document, PDF, image,
 
 ## Two-pass workflow
 
-1. First, summarize what you can read and list every ambiguous connector, cropped label, duplicate name, uncertain leader assignment, and inferred unit type. Ask the human to resolve those questions. Do not produce import-ready JSON while material ambiguity remains.
+1. First, summarize what you can read and list every ambiguous connector, cropped label, duplicate name, uncertain leader assignment, and inferred unit type. Ask the human to resolve those questions. Do not label materially ambiguous content as confirmed; a review proposal may carry it as needs_review only when the human deliberately wants an unresolved draft.
 2. After the human confirms the mapping, produce the final normalized JSON array described below. The human will attach both this JSON and the original source in OrgChart Studio and review the validation preview before creating a draft.
 
 ## Required output
@@ -569,6 +613,10 @@ ${JSON.stringify(Object.fromEntries(importColumns.map((column) => [column, ""]))
 - type must be one of: ${UNIT_TYPES.join(", ")}.
 - positionStatus must be filled, acting, or vacant.
 - publicationVisibility must be internal or public; use internal when the source does not establish approval for public display.
+- sourceLocator should identify the supporting slide, page, worksheet row, or other precise location when available.
+- sourceCertainty must be confirmed, inferred, or needs_review. Use needs_review rather than hiding an unresolved source issue.
+- reviewNote should concisely state the unresolved question or inference; otherwise leave it empty.
+- planningState must be current or planned. A planned unit must have a meaningful future effectiveDate.
 - Keep assignmentLabel empty or use Position vacant when a person is not supplied.
 - Preserve source wording. Do not invent people, titles, units, dates, or reporting relationships.
 - When a staff roster supplies Full Name and Supervisor Full Name, use those columns for reporting relationships and tolerate middle-initial differences only when the match is unique.
@@ -592,6 +640,10 @@ ${JSON.stringify(
       effectiveDate: "Current",
       publicationVisibility: "internal",
       source: "Synthetic example",
+      sourceLocator: "Synthetic example row 1",
+      sourceCertainty: "confirmed",
+      reviewNote: "",
+      planningState: "current",
     },
   ],
   null,

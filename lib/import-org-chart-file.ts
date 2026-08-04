@@ -22,6 +22,10 @@ const headerAliases: Record<(typeof importColumns)[number], string[]> = {
   effectiveDate: ["effectivedate", "effective", "asofdate", "date"],
   publicationVisibility: ["publicationvisibility", "visibility", "audience"],
   source: ["source", "provenance", "sourcenote", "notes"],
+  sourceLocator: ["sourcelocator", "locator", "slide", "page", "sourceref"],
+  sourceCertainty: ["sourcecertainty", "certainty", "confidence", "reviewstatus"],
+  reviewNote: ["reviewnote", "reviewquestion", "ambiguity", "uncertaintynote"],
+  planningState: ["planningstate", "organizationstate", "orgstate", "scenario"],
 };
 
 function decodeXml(value: string): string {

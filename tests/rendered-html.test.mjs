@@ -30,6 +30,13 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.match(bundle, /data-ai-proposal-action/);
   assert.match(bundle, /did not answer within 15 seconds/);
   assert.match(bundle, /AI-assisted change timeline/);
+  assert.match(bundle, /Local AI control center/);
+  assert.match(bundle, /Source intake bundles/);
+  assert.match(bundle, /Review proposed chart import/);
+  assert.match(bundle, /Chart quality report/);
+  assert.match(bundle, /Compare and propose merge/);
+  assert.match(bundle, /Backup health/);
+  assert.match(bundle, /Planned or future state/);
   assert.match(bundle, /Quit OrgChart Studio and stop its local server/);
   assert.match(bundle, /Wait for the current save to finish before quitting/);
   assert.match(bundle, /Select area/);

@@ -26,6 +26,21 @@ test("CSV parsing preserves commas and escaped quotes inside quoted fields", () 
   assert.equal(rows[0].assignmentLabel, 'Taylor "T.J." Example');
 });
 
+test("normalized imports retain source locators, uncertainty, and planned state", () => {
+  const preview = parseImportFile(
+    "provenance.csv",
+    [
+      "id,name,shortName,type,parentId,positionTitle,assignmentLabel,positionStatus,effectiveDate,publicationVisibility,source,sourceLocator,sourceCertainty,reviewNote,planningState",
+      "root,Example Organization,Example,division,,Director,Position vacant,vacant,October 1 2026,internal,Reviewed slide,Slide 2,inferred,Connector should be confirmed,planned",
+    ].join("\n"),
+  );
+
+  assert.equal(preview.nodes[0].data.unit.sourceLocator, "Slide 2");
+  assert.equal(preview.nodes[0].data.unit.sourceCertainty, "inferred");
+  assert.equal(preview.nodes[0].data.unit.reviewNote, "Connector should be confirmed");
+  assert.equal(preview.nodes[0].data.unit.planningState, "planned");
+});
+
 test("workforce roster CSV maps staff and resolves supervisor middle initials", () => {
   const preview = parseImportFile(
     "staff-roster.csv",

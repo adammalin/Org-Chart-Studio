@@ -10,6 +10,8 @@ import {
 } from "../../../lib/chart-library";
 import { parseImportBytes } from "../../../lib/import-org-chart-file";
 import { validateHierarchy } from "../../../lib/org-chart";
+import { auditChartQuality } from "../../../lib/chart-governance";
+import type { ImportIntakeStatus } from "../../../lib/import-intake";
 
 interface ChartRow {
   id: string;
@@ -44,6 +46,26 @@ interface VersionRow {
   created_at: string;
   payload: string;
   restored_from_version: number | null;
+}
+
+interface IntakeRow {
+  id: string;
+  name: string;
+  status: ImportIntakeStatus;
+  created_at: string;
+  updated_at: string;
+  chart_id: string | null;
+}
+
+interface IntakeFileRow {
+  id: string;
+  intake_id: string;
+  file_name: string;
+  content_type: string;
+  file_size: number;
+  checksum: string;
+  storage_key: string;
+  created_at: string;
 }
 
 const chartStatuses: ChartStatus[] = ["draft", "in_review", "approved", "archived"];
@@ -338,6 +360,25 @@ export async function POST(request: Request) {
       .filter((value): value is File => value instanceof File && value.size > 0);
     const chartName = String(formData.get("chartName") ?? "").trim();
     const validateOnly = formData.get("validateOnly") === "1";
+    const intakeId = String(formData.get("intakeId") ?? "").trim();
+    const [intake, intakeFileResult] = intakeId
+      ? await Promise.all([
+          DB.prepare("SELECT * FROM import_intakes WHERE id = ? AND status = 'pending'")
+            .bind(intakeId)
+            .first<IntakeRow>(),
+          DB.prepare("SELECT * FROM import_intake_files WHERE intake_id = ? ORDER BY created_at")
+            .bind(intakeId)
+            .all<IntakeFileRow>(),
+        ])
+      : [null, { results: [] as IntakeFileRow[] }];
+
+    if (intakeId && !intake) {
+      return Response.json(
+        { error: "The selected source intake is unavailable or already used." },
+        { status: 409 },
+      );
+    }
+    const intakeFiles = intakeFileResult.results;
 
     if (!(file instanceof File) || !chartName) {
       return Response.json(
@@ -354,7 +395,7 @@ export async function POST(request: Request) {
         { status: 413 },
       );
     }
-    if (evidenceFiles.length > 10) {
+    if (evidenceFiles.length + intakeFiles.length > 10) {
       return Response.json(
         { error: "Attach no more than 10 source evidence files per import." },
         { status: 413 },
@@ -378,7 +419,9 @@ export async function POST(request: Request) {
         { status: 415 },
       );
     }
-    const evidenceSize = evidenceFiles.reduce((total, evidence) => total + evidence.size, 0);
+    const evidenceSize =
+      evidenceFiles.reduce((total, evidence) => total + evidence.size, 0) +
+      intakeFiles.reduce((total, evidence) => total + evidence.file_size, 0);
     if (file.size + evidenceSize > 25_000_000) {
       return Response.json(
         { error: "The normalized data and source evidence files exceed the 25 MB intake limit." },
@@ -396,6 +439,11 @@ export async function POST(request: Request) {
         { status: 422 },
       );
     }
+    const quality = auditChartQuality(preview.nodes, preview.edges);
+    preview = {
+      ...preview,
+      findings: [...preview.findings, ...quality.findings],
+    };
     if (preview.rowCount > 5_000) {
       return Response.json(
         { error: "This human-test build is limited to 5,000 units per imported chart." },
@@ -422,7 +470,10 @@ export async function POST(request: Request) {
           rowCount: preview.rowCount,
           findings: preview.findings,
         },
-        evidenceFileNames: evidenceFiles.map((evidence) => evidence.name),
+        evidenceFileNames: [
+          ...intakeFiles.map((evidence) => evidence.file_name),
+          ...evidenceFiles.map((evidence) => evidence.name),
+        ],
       });
     }
 
@@ -467,6 +518,22 @@ export async function POST(request: Request) {
         return { bytes, source: sourceRecord };
       }),
     );
+    const intakeEvidenceItems = intakeFiles.map((evidence) => {
+      const sourceRecord: SourceRecord = {
+        id: `source-${crypto.randomUUID()}`,
+        chartId,
+        fileName: evidence.file_name,
+        contentType: evidence.content_type,
+        fileSize: evidence.file_size,
+        checksum: evidence.checksum,
+        storageKey: evidence.storage_key,
+        sourceType: "guided_extraction",
+        importedAt: now,
+        rowCount: 0,
+        warningCount: 0,
+      };
+      return { source: sourceRecord };
+    });
     const chart: ChartDocument = {
       id: chartId,
       name: chartName,
@@ -477,7 +544,11 @@ export async function POST(request: Request) {
       updatedAt: now,
       nodes: preview.nodes,
       edges: preview.edges,
-      sources: [source, ...evidenceItems.map((item) => item.source)],
+      sources: [
+        source,
+        ...intakeEvidenceItems.map((item) => item.source),
+        ...evidenceItems.map((item) => item.source),
+      ],
     };
 
     try {
@@ -500,7 +571,15 @@ export async function POST(request: Request) {
         versionInsert(DB, chart, `Imported from ${file.name}`, now),
         sourceInsert(DB, source),
       ];
+      intakeEvidenceItems.forEach((item) => statements.push(sourceInsert(DB, item.source)));
       evidenceItems.forEach((item) => statements.push(sourceInsert(DB, item.source)));
+      if (intake) {
+        statements.push(
+          DB.prepare(
+            "UPDATE import_intakes SET status = 'imported', chart_id = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+          ).bind(chartId, now, intake.id),
+        );
+      }
       await DB.batch(statements);
     } catch (error) {
       await Promise.all(
@@ -836,6 +915,10 @@ export async function POST(request: Request) {
       DB.prepare("DELETE FROM ai_activity_events WHERE chart_id = ?").bind(body.chartId),
       DB.prepare("DELETE FROM chart_versions WHERE chart_id = ?").bind(body.chartId),
       DB.prepare("DELETE FROM source_records WHERE chart_id = ?").bind(body.chartId),
+      DB.prepare(
+        "DELETE FROM import_intake_files WHERE intake_id IN (SELECT id FROM import_intakes WHERE chart_id = ?)",
+      ).bind(body.chartId),
+      DB.prepare("DELETE FROM import_intakes WHERE chart_id = ?").bind(body.chartId),
       DB.prepare("DELETE FROM charts WHERE id = ?").bind(body.chartId),
     ]);
     return Response.json({ deleted: body.chartId });

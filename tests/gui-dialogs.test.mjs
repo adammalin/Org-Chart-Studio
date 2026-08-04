@@ -26,3 +26,10 @@ test("AI proposal review keeps actionable buttons and failures inside its modal"
   assert.match(workspaceSource, /className="ai-review-panel__error" role="alert"/);
   assert.match(workspaceSource, /controller\.abort\(\), 15_000/);
 });
+
+test("AI imports require an in-app create or reject decision", () => {
+  assert.match(workspaceSource, /aria-labelledby="ai-import-review-title"/);
+  assert.match(workspaceSource, /data-ai-import-action="reject"/);
+  assert.match(workspaceSource, /data-ai-import-action="accept"/);
+  assert.match(workspaceSource, /Nothing has been added to the library/);
+});

@@ -44,6 +44,11 @@ function toolFailure(error) {
 }
 
 async function runWithWriteActivity(client, details, operation) {
+  await client.authorizeTool({
+    toolName: details.operation,
+    chartId: details.chartId,
+    mode: "write",
+  });
   const activityId = crypto.randomUUID();
   await client
     .reportMcpActivity({
@@ -110,6 +115,7 @@ function registerTools(server, client) {
     },
     async ({ includeArchived }) => {
       try {
+        await client.authorizeTool({ toolName: "list_charts", mode: "read" });
         const { charts } = await client.listCharts();
         const summaries = charts
           .filter((chart) => includeArchived || chart.status !== "archived")
@@ -139,6 +145,7 @@ function registerTools(server, client) {
     },
     async ({ chartId }) => {
       try {
+        await client.authorizeTool({ toolName: "get_chart", chartId, mode: "read" });
         const { charts } = await client.listCharts();
         const chart = charts.find((candidate) => candidate.id === chartId);
         if (!chart) throw new Error("The requested chart was not found.");
@@ -167,6 +174,7 @@ function registerTools(server, client) {
     },
     async ({ chartId }) => {
       try {
+        await client.authorizeTool({ toolName: "validate_chart", chartId, mode: "read" });
         const result = await client.validateChart(chartId);
         return success(
           result,
@@ -195,6 +203,7 @@ function registerTools(server, client) {
     },
     async ({ chartId }) => {
       try {
+        await client.authorizeTool({ toolName: "list_chart_versions", chartId, mode: "read" });
         const { versions } = await client.listVersions(chartId);
         const summaries = versions.map((version) => ({
           id: version.id,
@@ -233,10 +242,51 @@ function registerTools(server, client) {
     },
     async (input) => {
       try {
+        await client.authorizeTool({ toolName: "validate_normalized_import", mode: "read" });
         const result = await client.importNormalized({ ...input, validateOnly: true });
         return success(
           result,
           `Validated ${result.preview.rowCount} normalized rows without creating a chart.`,
+        );
+      } catch (error) {
+        return toolFailure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_import_intakes",
+    {
+      title: "List pending source intakes",
+      description:
+        "List local pending source-evidence intakes by name and file metadata. File bytes are not returned. Use an intake ID when staging normalized data so the reviewed chart retains the originals locally.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      try {
+        await client.authorizeTool({ toolName: "list_import_intakes", mode: "read" });
+        const { intakes } = await client.listImportIntakes();
+        const pending = intakes
+          .filter((intake) => intake.status === "pending")
+          .map((intake) => ({
+            id: intake.id,
+            name: intake.name,
+            createdAt: intake.createdAt,
+            files: intake.files.map((file) => ({
+              fileName: file.fileName,
+              contentType: file.contentType,
+              fileSize: file.fileSize,
+              checksum: file.checksum,
+            })),
+          }));
+        return success(
+          { intakes: pending },
+          `Found ${pending.length} pending source intake${pending.length === 1 ? "" : "s"}.`,
         );
       } catch (error) {
         return toolFailure(error);
@@ -309,6 +359,45 @@ function registerTools(server, client) {
         return success(
           { chart: result.chart, findings: result.findings },
           `Imported ${result.chart.name} as a new local draft with ${result.chart.nodes.length} units.`,
+        );
+      } catch (error) {
+        return toolFailure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "stage_normalized_import",
+    {
+      title: "Stage a normalized chart import",
+      description:
+        "Preferred AI import path. Stage validated normalized CSV or JSON as a temporary new-chart proposal for field, source, uncertainty, and quality review inside OrgChart Studio. Nothing is added to the chart library until a person chooses Create chart. Optionally associate a pending source intake so its original files remain local evidence.",
+      inputSchema: {
+        chartName: z.string().min(1).max(160),
+        format: z.enum(["csv", "json"]),
+        contents: z.string().min(1).max(4_500_000),
+        intakeId: z.string().min(1).max(200).optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      try {
+        const result = await runWithWriteActivity(
+          client,
+          {
+            operation: "stage_normalized_import",
+            label: "Preparing chart import for review",
+            chartName: input.chartName,
+          },
+          () => client.stageImportProposal(input),
+        );
+        return success(
+          { proposal: result.proposal },
+          `Staged ${result.proposal.proposed.nodes.length} units for in-app import review. No chart has been created.`,
         );
       } catch (error) {
         return toolFailure(error);
@@ -405,7 +494,7 @@ export function createOrgChartMcpServer(options = {}) {
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
       instructions:
-        "OrgChart Studio data is local and user-controlled. Call list_charts before get_chart or any write. Only read a complete chart when the user identifies it and understands that returned fields enter the AI conversation. Validate normalized imports before importing. Before writes, read the current chart and preserve its id, version, and updatedAt. Never invent reporting relationships or source facts. Do not delete charts, restore backups, or change storage settings; this server exposes no such tools.",
+        "OrgChart Studio data is local and user-controlled. Respect the app's MCP pause and selected-chart scope. Call list_charts before get_chart or any existing-chart write. Only read a complete chart when the user identifies it and understands that returned fields enter the AI conversation. For new legacy charts, list pending source intakes when relevant, validate normalized data, and prefer stage_normalized_import so a person reviews it in the app before creation. Before existing-chart writes, read the current chart and preserve its id, version, and updatedAt. Preserve source locators, certainty labels, review notes, and planned/current state. Never invent reporting relationships or source facts. Do not delete charts, restore backups, download source files, or change storage settings; this server exposes no such tools.",
     },
   );
   registerTools(server, client);

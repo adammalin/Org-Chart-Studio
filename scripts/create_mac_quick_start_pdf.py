@@ -367,15 +367,15 @@ def build_pdf(output: Path) -> None:
     pdf.drawString(40, 714, "Use AI with")
     pdf.drawString(40, 682, "OrgChart Studio.")
     pdf.setFont("Helvetica", 11.2)
-    pdf.drawString(40, 653, "AI proposes. You review. The app remains the source of truth.")
+    pdf.drawString(40, 653, "AI stages edits and imports. You decide. The app remains the source of truth.")
     draw_ai_header_flow(pdf)
 
-    draw_label(pdf, "01  Before the first AI edit", 40, 594)
+    draw_label(pdf, "01  Before the first AI edit or import", 40, 594)
     setup_cards = [
         ("1", "INSTALL", "At the MCP prompt, type y and press Return."),
         ("2", "RESTART", "Restart ChatGPT Desktop or Codex once."),
         ("3", "OPEN APP", "OrgChart Studio must be running first."),
-        ("4", "CONFIRM", "Check Settings > MCP servers or type /mcp."),
+        ("4", "SCOPE", "In AI & MCP control, resume and allow charts."),
     ]
     for index, (number, title, note) in enumerate(setup_cards):
         draw_numbered_card(
@@ -436,8 +436,8 @@ def build_pdf(output: Path) -> None:
             ORNL_GREEN,
             "MCP CAN",
             [
-                "List and read approved charts",
-                "Validate or import structured data",
+                "List allowed charts and intake metadata",
+                "Validate and stage a new-chart import",
                 "Stage reviewed draft changes",
                 "Save a matching named version",
             ],

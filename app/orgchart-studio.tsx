@@ -84,10 +84,18 @@ import {
   type OrgFlowNode,
   type OrganizationalUnit,
   type PositionStatus,
+  type PlanningState,
   type SelectionArrangement,
+  type SourceCertainty,
   type UnitType,
   type ValidationFinding,
 } from "../lib/org-chart";
+import {
+  auditChartQuality,
+  compareChartDocuments,
+  mergeSourceIntoTarget,
+  planningStateForNode,
+} from "../lib/chart-governance";
 import {
   storageSafeNodes,
   type ChartDocument,
@@ -142,6 +150,12 @@ import type {
   AiChartProposal,
   AiProposalResponse,
 } from "../lib/ai-change-review";
+import type {
+  AiImportProposal,
+  AiImportProposalResponse,
+} from "../lib/ai-import-review";
+import type { ImportIntake, ImportIntakesResponse } from "../lib/import-intake";
+import type { McpControlResponse, McpControlState } from "../lib/mcp-control";
 
 type LayoutMode = "preserve" | "branch" | "respect-pins" | "full";
 type WorkspaceView =
@@ -151,12 +165,43 @@ type WorkspaceView =
   | "sources"
   | "backups"
   | "history"
+  | "ai"
   | "exports";
 type BackupScope = "all" | "selected";
 type ExportFormat = "svg" | "png" | "pdf" | "pptx";
+type PlanningFilter = "all" | PlanningState;
+
+interface BackupHealthState {
+  reminderDays: 7 | 14 | 30 | 90;
+  lastBackupAt: string | null;
+  lastBackupChartCount: number;
+  lastBackupEncrypted: boolean;
+  lastRestoreVerifiedAt: string | null;
+}
 
 const CONNECTOR_ROUTING_STORAGE_KEY = "orgchart-studio-connector-routing-mode";
 const CONNECTOR_ROUTING_EVENT = "orgchart-studio-connector-routing-change";
+const BACKUP_HEALTH_STORAGE_KEY = "orgchart-studio-backup-health";
+
+const defaultBackupHealth: BackupHealthState = {
+  reminderDays: 30,
+  lastBackupAt: null,
+  lastBackupChartCount: 0,
+  lastBackupEncrypted: true,
+  lastRestoreVerifiedAt: null,
+};
+
+function storedBackupHealth(): BackupHealthState {
+  if (typeof window === "undefined") return defaultBackupHealth;
+  try {
+    const stored = window.localStorage.getItem(BACKUP_HEALTH_STORAGE_KEY);
+    return stored
+      ? { ...defaultBackupHealth, ...(JSON.parse(stored) as BackupHealthState) }
+      : defaultBackupHealth;
+  } catch {
+    return defaultBackupHealth;
+  }
+}
 
 function connectorRoutingSnapshot(): ConnectorRoutingMode {
   const storedMode = window.localStorage.getItem(CONNECTOR_ROUTING_STORAGE_KEY);
@@ -303,13 +348,19 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
     <article
       className={`org-node org-node--${unit.type} ${
         selected ? "is-selected" : ""
-      } ${data.isSearchMatch ? "is-search-match" : ""} ${data.aiChange ? `is-ai-${data.aiChange}` : ""}`}
+      } ${data.isSearchMatch ? "is-search-match" : ""} ${data.aiChange ? `is-ai-${data.aiChange}` : ""} ${unit.planningState === "planned" ? "is-planned" : ""} ${unit.sourceCertainty === "needs_review" ? "needs-source-review" : ""}`}
       aria-label={`${unit.name}, ${unit.positionTitle}, ${statusLabels[unit.positionStatus]}`}
     >
       {data.aiChange ? (
         <span className={`org-node__ai-change org-node__ai-change--${data.aiChange}`}>
           AI {data.aiChange}
         </span>
+      ) : null}
+      {unit.planningState === "planned" ? (
+        <span className="org-node__planning-state">Planned</span>
+      ) : null}
+      {unit.sourceCertainty === "needs_review" ? (
+        <span className="org-node__source-review">Needs review</span>
       ) : null}
       <Handle
         id="parent"
@@ -497,6 +548,11 @@ function StudioWorkspace() {
   const [importName, setImportName] = useState("");
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importEvidenceFiles, setImportEvidenceFiles] = useState<File[]>([]);
+  const [importIntakes, setImportIntakes] = useState<ImportIntake[]>([]);
+  const [importIntakeId, setImportIntakeId] = useState("");
+  const [intakeName, setIntakeName] = useState("");
+  const [intakeFiles, setIntakeFiles] = useState<File[]>([]);
+  const [intakeBusy, setIntakeBusy] = useState(false);
   const [importFindings, setImportFindings] = useState<ValidationFinding[]>([]);
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [importReviewed, setImportReviewed] = useState(false);
@@ -513,6 +569,8 @@ function StudioWorkspace() {
   const [backupFile, setBackupFile] = useState<File | null>(null);
   const [backupBusy, setBackupBusy] = useState<"export" | "restore" | null>(null);
   const [backupMessage, setBackupMessage] = useState("");
+  const [backupHealth, setBackupHealth] = useState<BackupHealthState>(storedBackupHealth);
+  const [backupClock, setBackupClock] = useState(0);
   const [desktopStorage, setDesktopStorage] = useState<DesktopStorageSettings | null>(null);
   const [storageMode, setStorageMode] = useState<"loading" | "desktop" | "browser">(
     "browser",
@@ -538,10 +596,20 @@ function StudioWorkspace() {
   );
   const [dismissedMcpRevision, setDismissedMcpRevision] = useState(0);
   const [pendingAiProposal, setPendingAiProposal] = useState<AiChartProposal | null>(null);
+  const [pendingAiImportProposal, setPendingAiImportProposal] =
+    useState<AiImportProposal | null>(null);
   const [aiProposalBusy, setAiProposalBusy] = useState<"load" | "accept" | "reject" | null>(null);
   const [aiProposalError, setAiProposalError] = useState("");
+  const [aiImportBusy, setAiImportBusy] = useState<"load" | "accept" | "reject" | null>(null);
+  const [aiImportError, setAiImportError] = useState("");
   const [aiReviewCategory, setAiReviewCategory] = useState<"all" | AiChangeCategory>("all");
   const [aiActivities, setAiActivities] = useState<AiActivityRecord[]>([]);
+  const [mcpControl, setMcpControl] = useState<McpControlState | null>(null);
+  const [mcpControlBusy, setMcpControlBusy] = useState(false);
+  const [comparisonSourceId, setComparisonSourceId] = useState("");
+  const [comparisonTargetId, setComparisonTargetId] = useState("");
+  const [comparisonBusy, setComparisonBusy] = useState(false);
+  const [planningFilter, setPlanningFilter] = useState<PlanningFilter>("all");
   const hydratedChartRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveGenerationRef = useRef(0);
@@ -557,6 +625,13 @@ function StudioWorkspace() {
   const selectedBackupCharts = charts.filter((chart) =>
     backupSelectedChartIds.has(chart.id),
   );
+  const backupAgeDays = backupHealth.lastBackupAt
+    ? Math.max(
+        0,
+        Math.floor((backupClock - Date.parse(backupHealth.lastBackupAt)) / 86_400_000),
+      )
+    : null;
+  const backupIsDue = backupAgeDays === null || backupAgeDays >= backupHealth.reminderDays;
   const unencryptedCloudBackupBlocked =
     backupProtection === "unencrypted" && Boolean(desktopStorage?.backupIsCloudSynced);
   const version = activeChart
@@ -568,6 +643,98 @@ function StudioWorkspace() {
   useEffect(() => {
     chartsRef.current = charts;
   }, [charts]);
+
+  const activeQualityReport = useMemo(
+    () =>
+      activeChart
+        ? auditChartQuality(nodes, edges, charts, activeChart.id)
+        : null,
+    [activeChart, charts, edges, nodes],
+  );
+  const planningFilteredNodes = useMemo(
+    () =>
+      planningFilter === "all"
+        ? nodes
+        : nodes.filter((node) => planningStateForNode(node) === planningFilter),
+    [nodes, planningFilter],
+  );
+
+  const effectiveComparisonTargetId = charts.some((chart) => chart.id === comparisonTargetId)
+    ? comparisonTargetId
+    : activeChart?.id ?? charts[0]?.id ?? "";
+  const effectiveComparisonSourceId = charts.some((chart) => chart.id === comparisonSourceId)
+    ? comparisonSourceId
+    : charts.find((chart) => chart.id !== effectiveComparisonTargetId)?.id ?? "";
+  const comparisonSource = charts.find((chart) => chart.id === effectiveComparisonSourceId);
+  const comparisonTarget = charts.find((chart) => chart.id === effectiveComparisonTargetId);
+  const chartComparison = useMemo(
+    () =>
+      comparisonSource && comparisonTarget && comparisonSource.id !== comparisonTarget.id
+        ? compareChartDocuments(comparisonTarget, comparisonSource)
+        : null,
+    [comparisonSource, comparisonTarget],
+  );
+
+  const saveBackupHealth = useCallback((next: BackupHealthState) => {
+    setBackupHealth(next);
+    setBackupClock(Date.now());
+    window.localStorage.setItem(BACKUP_HEALTH_STORAGE_KEY, JSON.stringify(next));
+  }, []);
+
+  useEffect(() => {
+    const updateClock = () => setBackupClock(Date.now());
+    const initialTimer = window.setTimeout(updateClock, 0);
+    const interval = window.setInterval(updateClock, 60_000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  const loadImportIntakes = useCallback(async () => {
+    const response = await fetch("/api/import-intakes", { cache: "no-store" });
+    if (!response.ok) throw new Error("Source intakes could not be loaded.");
+    const data = (await response.json()) as ImportIntakesResponse;
+    setImportIntakes(data.intakes);
+  }, []);
+
+  const loadMcpControl = useCallback(async () => {
+    const response = await fetch("/api/mcp-control", { cache: "no-store" });
+    if (!response.ok) throw new Error("Local AI controls could not be loaded.");
+    const data = (await response.json()) as McpControlResponse;
+    setMcpControl(data.control);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadImportIntakes().catch(() => undefined);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadImportIntakes]);
+
+  useEffect(() => {
+    if (workspaceView !== "ai") return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      try {
+        const response = await fetch("/api/mcp-control", { cache: "no-store" });
+        if (response.ok && !cancelled) {
+          const data = (await response.json()) as McpControlResponse;
+          setMcpControl(data.control);
+        }
+      } catch {
+        // The control center remains usable after the next successful local poll.
+      }
+      if (!cancelled) timer = setTimeout(poll, 1_200);
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [workspaceView]);
+
 
   useEffect(() => {
     let cancelled = false;
@@ -715,7 +882,7 @@ function StudioWorkspace() {
   );
 
   const reviewMcpUpdate = useCallback(async () => {
-    if (!mcpActivity.chartId) return;
+    if (!mcpActivity.chartId && !mcpActivity.proposalId) return;
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -724,6 +891,25 @@ function StudioWorkspace() {
     hydratedChartRef.current = null;
     try {
       if (mcpActivity.completionKind === "review_ready" && mcpActivity.proposalId) {
+        if (mcpActivity.operation === "stage_normalized_import") {
+          setAiImportBusy("load");
+          const response = await fetch(
+            `/api/ai-import-proposals?proposalId=${encodeURIComponent(mcpActivity.proposalId)}`,
+            { cache: "no-store" },
+          );
+          const data = (await response.json()) as AiImportProposalResponse;
+          if (!response.ok || !data.proposal) {
+            throw new Error(data.error ?? "The AI import proposal could not be loaded.");
+          }
+          setPendingAiImportProposal(data.proposal);
+          setAiImportError("");
+          setWorkspaceView("sources");
+          setNotice(
+            `Reviewing ${data.proposal.proposed.nodes.length} proposed units. No chart has been created.`,
+          );
+          setDismissedMcpRevision(mcpActivity.revision);
+          return;
+        }
         setAiProposalBusy("load");
         const response = await fetch(
           `/api/ai-proposals?proposalId=${encodeURIComponent(mcpActivity.proposalId)}`,
@@ -762,6 +948,7 @@ function StudioWorkspace() {
       );
     } finally {
       setAiProposalBusy(null);
+      setAiImportBusy(null);
     }
   }, [mcpActivity, openChart, showAiProposal]);
 
@@ -864,6 +1051,59 @@ function StudioWorkspace() {
       setEdges,
       setNodes,
     ],
+  );
+
+  const resolveAiImportProposal = useCallback(
+    async (action: "accept" | "reject") => {
+      const proposal = pendingAiImportProposal;
+      if (!proposal || aiImportBusy) return;
+      setAiImportBusy(action);
+      setAiImportError("");
+      const controller = new AbortController();
+      const requestTimeout = window.setTimeout(() => controller.abort(), 15_000);
+      try {
+        const response = await fetch("/api/ai-import-proposals", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action, proposalId: proposal.id }),
+          signal: controller.signal,
+        });
+        const data = (await response.json()) as AiImportProposalResponse;
+        if (!response.ok) {
+          throw new Error(data.error ?? "The AI import proposal could not be resolved.");
+        }
+        setPendingAiImportProposal(null);
+        void dismissMcpActivity();
+        if (action === "reject") {
+          setNotice(`Rejected the proposed import for ${proposal.chartName}. No chart was created.`);
+          return;
+        }
+        if (!data.chart) throw new Error("The new chart was not returned by local storage.");
+        const libraryResponse = await fetch("/api/charts", { cache: "no-store" });
+        const library = libraryResponse.ok
+          ? ((await libraryResponse.json()) as ChartLibraryResponse)
+          : { charts: [...chartsRef.current, data.chart] };
+        setCharts(library.charts);
+        openChart(data.chart, "sources");
+        await loadImportIntakes().catch(() => undefined);
+        setNotice(
+          `Created ${data.chart.name} from the reviewed AI import with ${data.chart.sources.length} retained source record${data.chart.sources.length === 1 ? "" : "s"}.`,
+        );
+      } catch (error) {
+        const message =
+          error instanceof DOMException && error.name === "AbortError"
+            ? "The local app did not answer within 15 seconds. The import remains unsaved; try again or restart OrgChart Studio."
+            : error instanceof Error
+              ? error.message
+              : "The AI import proposal could not be resolved.";
+        setAiImportError(message);
+        setNotice(message);
+      } finally {
+        window.clearTimeout(requestTimeout);
+        setAiImportBusy(null);
+      }
+    },
+    [aiImportBusy, dismissMcpActivity, loadImportIntakes, openChart, pendingAiImportProposal],
   );
 
   useEffect(() => {
@@ -1627,6 +1867,14 @@ function StudioWorkspace() {
       effectiveDate:
         String(formData.get("effectiveDate") ?? "").trim() || "Current",
       source: String(formData.get("source") ?? "").trim() || "User-edited draft",
+      sourceLocator: String(formData.get("sourceLocator") ?? "").trim(),
+      sourceCertainty: String(
+        formData.get("sourceCertainty") ?? "confirmed",
+      ) as SourceCertainty,
+      reviewNote: String(formData.get("reviewNote") ?? "").trim(),
+      planningState: String(
+        formData.get("planningState") ?? "current",
+      ) as PlanningState,
       publicationVisibility: String(
         formData.get("publicationVisibility") ?? "internal",
       ) as "internal" | "public",
@@ -1731,6 +1979,10 @@ function StudioWorkspace() {
           positionStatus: "vacant",
           effectiveDate: "Current",
           source: "User-created draft",
+          sourceLocator: "",
+          sourceCertainty: "confirmed",
+          reviewNote: "",
+          planningState: "current",
           publicationVisibility: "internal",
         },
       },
@@ -2019,10 +2271,124 @@ function StudioWorkspace() {
     setNotice(`${chart.name}, its saved versions, and its stored source files were deleted.`);
   };
 
+  const createImportIntake = async () => {
+    if (!intakeName.trim() || !intakeFiles.length || intakeBusy) {
+      setNotice("Name the intake and choose at least one PowerPoint, Word, PDF, PNG, or JPEG source file.");
+      return;
+    }
+    setIntakeBusy(true);
+    try {
+      const formData = new FormData();
+      formData.set("name", intakeName.trim());
+      intakeFiles.forEach((file) => formData.append("evidence", file));
+      const response = await fetch("/api/import-intakes", { method: "POST", body: formData });
+      const data = (await response.json()) as { intake?: ImportIntake; error?: string };
+      if (!response.ok || !data.intake) {
+        throw new Error(data.error ?? "The source intake could not be created.");
+      }
+      setImportIntakes((current) => [data.intake!, ...current]);
+      setImportIntakeId(data.intake.id);
+      setIntakeName("");
+      setIntakeFiles([]);
+      setNotice(
+        `${data.intake.name} is ready. Its ${data.intake.files.length} original source file${data.intake.files.length === 1 ? " is" : "s are"} retained locally and can be linked to an AI or manual import.`,
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The source intake could not be created.");
+    } finally {
+      setIntakeBusy(false);
+    }
+  };
+
+  const discardImportIntake = async (intake: ImportIntake) => {
+    if (!window.confirm(`Discard the unused source intake “${intake.name}” and its retained files?`)) return;
+    setIntakeBusy(true);
+    try {
+      const response = await fetch("/api/import-intakes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "discard", intakeId: intake.id }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "The source intake could not be discarded.");
+      setImportIntakes((current) => current.filter((candidate) => candidate.id !== intake.id));
+      setImportIntakeId((current) => (current === intake.id ? "" : current));
+      setNotice(`${intake.name} and its unused local source files were discarded.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The source intake could not be discarded.");
+    } finally {
+      setIntakeBusy(false);
+    }
+  };
+
+  const updateMcpControl = async (
+    patch: Partial<Pick<McpControlState, "paused" | "chartScope" | "allowedChartIds">>,
+  ) => {
+    const current = mcpControl ?? {
+      paused: false,
+      chartScope: "all" as const,
+      allowedChartIds: [],
+      revision: 0,
+      events: [],
+    };
+    setMcpControlBusy(true);
+    try {
+      const response = await fetch("/api/mcp-control", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "configure", ...current, ...patch }),
+      });
+      const data = (await response.json()) as McpControlResponse & { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Local AI controls could not be updated.");
+      setMcpControl(data.control);
+      setNotice(
+        data.control.paused
+          ? "Local AI access is paused. MCP reads and writes are blocked until you resume it."
+          : data.control.chartScope === "selected"
+            ? `Local AI access is limited to ${data.control.allowedChartIds.length} selected chart${data.control.allowedChartIds.length === 1 ? "" : "s"}.`
+            : "Local AI access is active for charts you explicitly ask the assistant to use.",
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Local AI controls could not be updated.");
+    } finally {
+      setMcpControlBusy(false);
+    }
+  };
+
+  const stageChartMerge = async () => {
+    if (!comparisonSource || !comparisonTarget || !chartComparison || comparisonBusy) return;
+    if (!chartComparison.totalChanges) {
+      setNotice("These two charts have no structural, content, or layout differences to merge.");
+      return;
+    }
+    setComparisonBusy(true);
+    try {
+      const proposed = mergeSourceIntoTarget(comparisonTarget, comparisonSource);
+      const response = await fetch("/api/ai-proposals", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "stage", chart: proposed }),
+      });
+      const data = (await response.json()) as AiProposalResponse & { error?: string };
+      if (!response.ok || !data.proposal) {
+        throw new Error(data.error ?? "The chart merge proposal could not be staged.");
+      }
+      showAiProposal(data.proposal);
+      setNotice(
+        `Previewing ${comparisonSource.name} as a merge proposal for ${comparisonTarget.name}. The target is unchanged until Apply.`,
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The chart merge proposal could not be staged.");
+    } finally {
+      setComparisonBusy(false);
+    }
+  };
+
   const importFormData = (validateOnly: boolean) => {
     const formData = new FormData();
     if (importFile) formData.set("file", importFile);
     importEvidenceFiles.forEach((file) => formData.append("evidence", file));
+    if (importIntakeId) formData.set("intakeId", importIntakeId);
     formData.set("chartName", importName.trim());
     if (validateOnly) formData.set("validateOnly", "1");
     return formData;
@@ -2088,12 +2454,14 @@ function StudioWorkspace() {
       setImportName("");
       setImportFile(null);
       setImportEvidenceFiles([]);
+      setImportIntakeId("");
       setImportPreview(null);
       setImportReviewed(false);
       setNotice(
         `${data.chart.name} was imported as a draft with ${data.chart.sources.length} immutable source record${data.chart.sources.length === 1 ? "" : "s"}.`,
       );
       openChart(data.chart, "sources");
+      await loadImportIntakes().catch(() => undefined);
     } catch {
       setNotice("The import could not be completed. No partial chart was created.");
     } finally {
@@ -2316,6 +2684,12 @@ function StudioWorkspace() {
       setBackupMessage(
         `${protectionLabel} backup created with ${data.chartCount} charts, ${data.versionCount ?? 0} saved versions, ${data.aiActivityCount ?? 0} AI review records, and ${data.sourceFileCount} stored source files.${savedBackup ? ` Saved to ${savedBackup.path}.` : " Downloaded through the browser."}`,
       );
+      saveBackupHealth({
+        ...backupHealth,
+        lastBackupAt: new Date().toISOString(),
+        lastBackupChartCount: data.chartCount,
+        lastBackupEncrypted: backupProtection === "encrypted",
+      });
       setNotice(
         backupProtection === "encrypted"
           ? savedBackup
@@ -2325,6 +2699,10 @@ function StudioWorkspace() {
             ? "Unencrypted backup saved to the configured local folder. Anyone with the file can read its contents."
             : "Unencrypted backup downloaded. Anyone with the file can read its contents.",
       );
+      saveBackupHealth({
+        ...backupHealth,
+        lastRestoreVerifiedAt: new Date().toISOString(),
+      });
     } catch (error) {
       setBackupMessage(error instanceof Error ? error.message : "The backup could not be created.");
     } finally {
@@ -2518,7 +2896,9 @@ function StudioWorkspace() {
       ? "AI preparing changes"
       : mcpActivity.phase === "succeeded"
         ? mcpActivity.completionKind === "review_ready"
-          ? "AI changes ready"
+          ? mcpActivity.operation === "stage_normalized_import"
+            ? "AI import ready"
+            : "AI changes ready"
           : "AI edit saved"
         : "AI edit needs attention";
   const visibleAiChanges = pendingAiProposal
@@ -2531,7 +2911,7 @@ function StudioWorkspace() {
     <div
       className={`studio-shell${
         mcpActivityVisible ? ` studio-shell--ai-${mcpActivity.phase}` : ""
-      }${pendingAiProposal ? " studio-shell--ai-review" : ""}`}
+      }${pendingAiProposal || pendingAiImportProposal ? " studio-shell--ai-review" : ""}`}
     >
       <div className="mcp-activity-frame" aria-hidden="true" />
       {mcpActivityVisible ? (
@@ -2558,16 +2938,18 @@ function StudioWorkspace() {
               {mcpActivity.chartName ? ` · ${mcpActivity.chartName}` : ""}
             </span>
           </span>
-          {mcpActivity.phase === "succeeded" && mcpActivity.chartId ? (
+          {mcpActivity.phase === "succeeded" && (mcpActivity.chartId || mcpActivity.proposalId) ? (
             <button
               type="button"
               className="mcp-activity-hud__review"
               onClick={() => void reviewMcpUpdate()}
             >
-              {aiProposalBusy === "load"
+              {aiProposalBusy === "load" || aiImportBusy === "load"
                 ? "Loading…"
                 : mcpActivity.completionKind === "review_ready"
-                  ? "Review changes"
+                  ? mcpActivity.operation === "stage_normalized_import"
+                    ? "Review import"
+                    : "Review changes"
                   : "Review update"}
             </button>
           ) : null}
@@ -2720,6 +3102,17 @@ function StudioWorkspace() {
 
         <div className="sidebar__section">
           <p className="sidebar__label">Change governance</p>
+          <button
+            type="button"
+            className={workspaceView === "ai" ? "is-active" : ""}
+            onClick={() => setWorkspaceView("ai")}
+          >
+            <Robot size={19} aria-hidden="true" />
+            <span>Local AI control</span>
+            <span className={`nav-count ${mcpControl?.paused ? "nav-count--warning" : "nav-count--neutral"}`}>
+              {mcpControl?.paused ? "Paused" : "On"}
+            </span>
+          </button>
           <button
             type="button"
             className={workspaceView === "history" ? "is-active" : ""}
@@ -3235,14 +3628,27 @@ function StudioWorkspace() {
                 <h1 id="table-title">Organizational hierarchy table</h1>
                 <p>Generated from the same current chart data as the visual editor.</p>
               </div>
-              <button
-                type="button"
-                className="button button--secondary"
-                onClick={() => setWorkspaceView("canvas")}
-              >
-                <SquaresFour size={17} aria-hidden="true" />
-                Return to chart
-              </button>
+              <div className="table-panel__actions">
+                <label>
+                  <span>Organization state</span>
+                  <select
+                    value={planningFilter}
+                    onChange={(event) => setPlanningFilter(event.target.value as PlanningFilter)}
+                  >
+                    <option value="all">Current and planned</option>
+                    <option value="current">Current only</option>
+                    <option value="planned">Planned only</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  onClick={() => setWorkspaceView("canvas")}
+                >
+                  <SquaresFour size={17} aria-hidden="true" />
+                  Return to chart
+                </button>
+              </div>
             </div>
             <div className="data-table-wrap">
               <table>
@@ -3259,10 +3665,12 @@ function StudioWorkspace() {
                     <th scope="col">Assignment</th>
                     <th scope="col">Status</th>
                     <th scope="col">Effective</th>
+                    <th scope="col">State</th>
+                    <th scope="col">Source</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {nodes.map((flowNode) => {
+                  {planningFilteredNodes.map((flowNode) => {
                     const parentEdge = edges.find((edge) => edge.target === flowNode.id);
                     const parent = nodes.find((candidate) => candidate.id === parentEdge?.source);
                     return (
@@ -3283,6 +3691,17 @@ function StudioWorkspace() {
                           </span>
                         </td>
                         <td>{flowNode.data.unit.effectiveDate}</td>
+                        <td>{planningStateForNode(flowNode) === "planned" ? "Planned" : "Current"}</td>
+                        <td>
+                          {flowNode.data.unit.sourceCertainty === "needs_review"
+                            ? "Needs review"
+                            : flowNode.data.unit.sourceCertainty === "inferred"
+                              ? "Inferred"
+                              : "Confirmed"}
+                          {flowNode.data.unit.sourceLocator
+                            ? ` · ${flowNode.data.unit.sourceLocator}`
+                            : ""}
+                        </td>
                       </tr>
                     );
                   })}
@@ -3809,6 +4228,150 @@ function StudioWorkspace() {
               )}
             </section>
           </section>
+        ) : workspaceView === "ai" ? (
+          <section className="ai-control-panel" aria-labelledby="ai-control-title">
+            <div className="ai-control-heading">
+              <div>
+                <span className="eyebrow">Local MCP governance</span>
+                <h1 id="ai-control-title">Local AI control center</h1>
+                <p>
+                  Pause tool access, limit complete chart reads and writes to selected
+                  charts, and review the bounded local access receipt. Prompts are not stored.
+                </p>
+              </div>
+              <button
+                type="button"
+                className={mcpControl?.paused ? "button button--primary" : "button button--danger"}
+                onClick={() => void updateMcpControl({ paused: !mcpControl?.paused })}
+                disabled={mcpControlBusy}
+              >
+                <Robot size={17} aria-hidden="true" />
+                {mcpControl?.paused ? "Resume local AI access" : "Pause local AI access"}
+              </button>
+            </div>
+
+            <div className="ai-control-metrics">
+              <div>
+                <span>Access state</span>
+                <strong>{mcpControl?.paused ? "Paused" : "Available"}</strong>
+              </div>
+              <div>
+                <span>Chart scope</span>
+                <strong>{mcpControl?.chartScope === "selected" ? "Selected charts" : "All on request"}</strong>
+              </div>
+              <div>
+                <span>Allowed charts</span>
+                <strong>{mcpControl?.chartScope === "selected" ? mcpControl.allowedChartIds.length : charts.length}</strong>
+              </div>
+              <div>
+                <span>Session receipts</span>
+                <strong>{mcpControl?.events.length ?? 0}</strong>
+              </div>
+            </div>
+
+            <div className="ai-control-layout">
+              <fieldset className="ai-control-scope">
+                <legend>Chart access for this running app session</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="mcp-chart-scope"
+                    checked={(mcpControl?.chartScope ?? "all") === "all"}
+                    onChange={() => void updateMcpControl({ chartScope: "all" })}
+                  />
+                  <span>
+                    <strong>All charts when explicitly requested</strong>
+                    <small>Chart contents still enter the AI conversation only when a read tool is called.</small>
+                  </span>
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="mcp-chart-scope"
+                    checked={mcpControl?.chartScope === "selected"}
+                    onChange={() => void updateMcpControl({ chartScope: "selected" })}
+                  />
+                  <span>
+                    <strong>Selected charts only</strong>
+                    <small>Other complete chart reads and chart-specific writes are blocked locally.</small>
+                  </span>
+                </label>
+                {mcpControl?.chartScope === "selected" ? (
+                  <div className="ai-control-chart-list">
+                    {charts.map((chart) => (
+                      <label key={chart.id}>
+                        <input
+                          type="checkbox"
+                          checked={mcpControl.allowedChartIds.includes(chart.id)}
+                          onChange={(event) => {
+                            const allowedChartIds = event.target.checked
+                              ? [...mcpControl.allowedChartIds, chart.id]
+                              : mcpControl.allowedChartIds.filter((id) => id !== chart.id);
+                            void updateMcpControl({ allowedChartIds });
+                          }}
+                        />
+                        <span>{chart.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+              </fieldset>
+
+              <section className="ai-control-receipts" aria-labelledby="ai-control-receipts-title">
+                <div>
+                  <div>
+                    <span className="eyebrow">This app session</span>
+                    <h2 id="ai-control-receipts-title">MCP access receipts</h2>
+                  </div>
+                  <div className="ai-control-receipt-actions">
+                    <button type="button" className="button button--secondary" onClick={() => void loadMcpControl()}>
+                      <ArrowClockwise size={16} aria-hidden="true" />Refresh
+                    </button>
+                    <button
+                      type="button"
+                      className="button button--secondary"
+                      disabled={!mcpControl?.events.length}
+                      onClick={async () => {
+                        const response = await fetch("/api/mcp-control", {
+                          method: "POST",
+                          headers: { "content-type": "application/json" },
+                          body: JSON.stringify({ action: "clear_events" }),
+                        });
+                        if (response.ok) {
+                          const data = (await response.json()) as McpControlResponse;
+                          setMcpControl(data.control);
+                        }
+                      }}
+                    >
+                      Clear receipts
+                    </button>
+                  </div>
+                </div>
+                {mcpControl?.events.length ? (
+                  <div className="data-table-wrap">
+                    <table>
+                      <thead>
+                        <tr><th scope="col">Tool</th><th scope="col">Mode</th><th scope="col">Chart</th><th scope="col">Result</th><th scope="col">Time</th></tr>
+                      </thead>
+                      <tbody>
+                        {mcpControl.events.map((event) => (
+                          <tr key={event.id}>
+                            <th scope="row"><code>{event.toolName}</code></th>
+                            <td>{event.mode}</td>
+                            <td>{charts.find((chart) => chart.id === event.chartId)?.name ?? event.chartId ?? "Library"}</td>
+                            <td>{event.allowed ? "Allowed" : "Blocked"}</td>
+                            <td>{new Date(event.createdAt).toLocaleTimeString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="history-empty">No MCP tools have requested access during this app session.</div>
+                )}
+              </section>
+            </div>
+          </section>
         ) : (
           <section
             className={workspaceView === "backups" ? "backup-panel" : "sources-panel"}
@@ -3856,6 +4419,77 @@ function StudioWorkspace() {
               </div>
             </div>
 
+            <section className="source-intake-card" aria-labelledby="source-intake-title">
+              <div className="source-intake-card__heading">
+                <div>
+                  <span className="eyebrow">Local evidence first</span>
+                  <h2 id="source-intake-title">Source intake bundles</h2>
+                  <p>
+                    Retain unchanged originals locally before normalization. ChatGPT receives
+                    a file only when you separately attach that cleared file to its conversation;
+                    MCP sees intake names, checksums, and file metadata—not file bytes.
+                  </p>
+                </div>
+                <span>{importIntakes.filter((intake) => intake.status === "pending").length} pending</span>
+              </div>
+              <div className="source-intake-create">
+                <label className="field-stack">
+                  <span>Intake name</span>
+                  <input
+                    value={intakeName}
+                    onChange={(event) => setIntakeName(event.target.value)}
+                    placeholder="Example: Communications Division legacy sources"
+                  />
+                </label>
+                <label className="evidence-picker">
+                  <FilePpt size={22} aria-hidden="true" />
+                  <span>
+                    <strong>{intakeFiles.length ? `${intakeFiles.length} original file${intakeFiles.length === 1 ? "" : "s"}` : "Choose original source files"}</strong>
+                    <small>{intakeFiles.length ? intakeFiles.map((file) => file.name).join(" · ") : "PowerPoint, Word, PDF, PNG, or JPEG · retained locally"}</small>
+                  </span>
+                  <input
+                    key={intakeFiles.map((file) => file.name).join("|") || "empty-intake"}
+                    type="file"
+                    multiple
+                    accept=".pptx,.docx,.pdf,.png,.jpg,.jpeg"
+                    onChange={(event) => setIntakeFiles(Array.from(event.target.files ?? []).slice(0, 10))}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="button button--primary"
+                  disabled={intakeBusy || !intakeName.trim() || !intakeFiles.length}
+                  onClick={() => void createImportIntake()}
+                >
+                  <FileLock size={17} aria-hidden="true" />
+                  {intakeBusy ? "Retaining sources…" : "Create local intake"}
+                </button>
+              </div>
+              {importIntakes.length ? (
+                <div className="source-intake-list">
+                  {importIntakes.map((intake) => (
+                    <article key={intake.id} className={intake.status === "pending" ? "is-pending" : "is-imported"}>
+                      <div>
+                        <strong>{intake.name}</strong>
+                        <span>{intake.files.map((file) => file.fileName).join(" · ")}</span>
+                      </div>
+                      <span>{intake.status === "pending" ? "Ready for AI or manual import" : "Linked to imported chart"}</span>
+                      {intake.status === "pending" ? (
+                        <button
+                          type="button"
+                          className="icon-button icon-button--danger"
+                          onClick={() => void discardImportIntake(intake)}
+                          aria-label={`Discard source intake ${intake.name}`}
+                        >
+                          <Trash size={16} aria-hidden="true" />
+                        </button>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+            </section>
+
             <div className="sources-layout">
               <div className="import-card">
                 <div className="import-card__heading">
@@ -3874,6 +4508,26 @@ function StudioWorkspace() {
                     }}
                     placeholder="Example Directorate — Current"
                   />
+                </label>
+                <label className="field-stack">
+                  <span>Retained source intake <small>(optional)</small></span>
+                  <select
+                    value={importIntakeId}
+                    onChange={(event) => {
+                      setImportIntakeId(event.target.value);
+                      setImportPreview(null);
+                      setImportReviewed(false);
+                    }}
+                  >
+                    <option value="">No pre-staged intake</option>
+                    {importIntakes
+                      .filter((intake) => intake.status === "pending")
+                      .map((intake) => (
+                        <option key={intake.id} value={intake.id}>
+                          {intake.name} · {intake.files.length} file{intake.files.length === 1 ? "" : "s"}
+                        </option>
+                      ))}
+                  </select>
                 </label>
                 <label className="file-drop">
                   <FileCsv size={30} aria-hidden="true" />
@@ -4030,6 +4684,82 @@ function StudioWorkspace() {
                 </article>
               </div>
             </div>
+
+            <div className="governance-grid">
+              <section className="quality-report" aria-labelledby="quality-report-title">
+                <div className="quality-report__heading">
+                  <div>
+                    <span className="eyebrow">Import and maintenance audit</span>
+                    <h2 id="quality-report-title">Chart quality report</h2>
+                  </div>
+                  <strong>{activeQualityReport?.score ?? 0}/100</strong>
+                </div>
+                {activeChart && activeQualityReport ? (
+                  <>
+                    <p>
+                      {activeChart.name}: {activeQualityReport.blockingCount} blocking and {activeQualityReport.warningCount} review finding{activeQualityReport.warningCount === 1 ? "" : "s"}.
+                    </p>
+                    {activeQualityReport.findings.length ? (
+                      <ul>
+                        {activeQualityReport.findings.slice(0, 12).map((finding, index) => (
+                          <li key={`${finding.code}-${index}`} className={`finding--${finding.severity}`}>
+                            <WarningDiamond size={16} aria-hidden="true" />
+                            <span><strong>{finding.code}</strong>{finding.message}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="quality-report__clear"><ShieldCheck size={20} aria-hidden="true" />No additional quality warnings found.</div>
+                    )}
+                  </>
+                ) : (
+                  <div className="history-empty">Open a chart to run its local quality audit.</div>
+                )}
+              </section>
+
+              <section className="chart-compare" aria-labelledby="chart-compare-title">
+                <div>
+                  <span className="eyebrow">Reviewable chart-to-chart merge</span>
+                  <h2 id="chart-compare-title">Compare and propose merge</h2>
+                  <p>Use one chart as the proposed structure for another. The target remains unchanged until you apply the normal Before/After proposal.</p>
+                </div>
+                <div className="chart-compare__selectors">
+                  <label className="field-stack">
+                    <span>Source chart</span>
+                    <select value={effectiveComparisonSourceId} onChange={(event) => setComparisonSourceId(event.target.value)}>
+                      <option value="">Choose source</option>
+                      {charts.map((chart) => <option key={chart.id} value={chart.id}>{chart.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="field-stack">
+                    <span>Target chart</span>
+                    <select value={effectiveComparisonTargetId} onChange={(event) => setComparisonTargetId(event.target.value)}>
+                      <option value="">Choose target</option>
+                      {charts.map((chart) => <option key={chart.id} value={chart.id}>{chart.name}</option>)}
+                    </select>
+                  </label>
+                </div>
+                {effectiveComparisonSourceId && effectiveComparisonSourceId === effectiveComparisonTargetId ? (
+                  <div className="publication-warning" role="status">Choose two different charts.</div>
+                ) : chartComparison ? (
+                  <div className="chart-compare__summary">
+                    <span><strong>{chartComparison.addedNodeIds.length}</strong> units added</span>
+                    <span><strong>{chartComparison.changedNodeIds.length}</strong> units changed</span>
+                    <span><strong>{chartComparison.removedNodeIds.length}</strong> units removed</span>
+                    <span><strong>{chartComparison.addedEdgeIds.length + chartComparison.changedEdgeIds.length + chartComparison.removedEdgeIds.length}</strong> relationships changed</span>
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  className="button button--primary button--full"
+                  disabled={!chartComparison?.totalChanges || comparisonBusy || effectiveComparisonSourceId === effectiveComparisonTargetId}
+                  onClick={() => void stageChartMerge()}
+                >
+                  <Columns size={17} aria-hidden="true" />
+                  {comparisonBusy ? "Preparing comparison…" : "Stage merge for Apply/Reject review"}
+                </button>
+              </section>
+            </div>
               </>
             ) : null}
 
@@ -4049,6 +4779,44 @@ function StudioWorkspace() {
                     <strong>Merge-only restore</strong>
                   </div>
                 </div>
+
+                <section className={`backup-health ${backupIsDue ? "is-due" : "is-current"}`} aria-labelledby="backup-health-title">
+                  <div>
+                    <span className="eyebrow">Local recovery readiness</span>
+                    <h2 id="backup-health-title">Backup health</h2>
+                    <p>
+                      {backupHealth.lastBackupAt
+                        ? `Last backup created ${new Date(backupHealth.lastBackupAt).toLocaleString()} with ${backupHealth.lastBackupChartCount} chart${backupHealth.lastBackupChartCount === 1 ? "" : "s"}.`
+                        : "No backup has been recorded in this desktop profile yet."}
+                    </p>
+                  </div>
+                  <div className="backup-health__status">
+                    {backupIsDue ? <ShieldWarning size={24} aria-hidden="true" /> : <ShieldCheck size={24} aria-hidden="true" />}
+                    <strong>{backupIsDue ? "Backup due" : "Backup current"}</strong>
+                    <span>{backupAgeDays === null ? "Create the first recovery package" : `${backupAgeDays} day${backupAgeDays === 1 ? "" : "s"} since backup`}</span>
+                  </div>
+                  <dl>
+                    <div><dt>Protection</dt><dd>{backupHealth.lastBackupAt ? (backupHealth.lastBackupEncrypted ? "Encrypted" : "Unencrypted") : "Not recorded"}</dd></div>
+                    <div><dt>Last verified restore</dt><dd>{backupHealth.lastRestoreVerifiedAt ? new Date(backupHealth.lastRestoreVerifiedAt).toLocaleDateString() : "Not yet"}</dd></div>
+                  </dl>
+                  <label className="field-stack">
+                    <span>Remind me after</span>
+                    <select
+                      value={backupHealth.reminderDays}
+                      onChange={(event) =>
+                        saveBackupHealth({
+                          ...backupHealth,
+                          reminderDays: Number(event.target.value) as BackupHealthState["reminderDays"],
+                        })
+                      }
+                    >
+                      <option value={7}>7 days</option>
+                      <option value={14}>14 days</option>
+                      <option value={30}>30 days</option>
+                      <option value={90}>90 days</option>
+                    </select>
+                  </label>
+                </section>
 
             <section className="backup-card" aria-labelledby="backup-package-title">
               <div className="backup-card__heading">
@@ -4572,6 +5340,16 @@ function StudioWorkspace() {
                 />
               </label>
               <label className="editor-field">
+                <span>Organization state</span>
+                <select
+                  name="planningState"
+                  defaultValue={selectedNode.data.unit.planningState ?? "current"}
+                >
+                  <option value="current">Current organization</option>
+                  <option value="planned">Planned or future state</option>
+                </select>
+              </label>
+              <label className="editor-field">
                 <span>Publication visibility</span>
                 <select
                   name="publicationVisibility"
@@ -4586,6 +5364,34 @@ function StudioWorkspace() {
                 <input
                   name="source"
                   defaultValue={selectedNode.data.unit.source}
+                />
+              </label>
+              <label className="editor-field">
+                <span>Source locator</span>
+                <input
+                  name="sourceLocator"
+                  defaultValue={selectedNode.data.unit.sourceLocator ?? ""}
+                  placeholder="Slide, page, worksheet, or row"
+                />
+              </label>
+              <label className="editor-field">
+                <span>Source certainty</span>
+                <select
+                  name="sourceCertainty"
+                  defaultValue={selectedNode.data.unit.sourceCertainty ?? "confirmed"}
+                >
+                  <option value="confirmed">Confirmed</option>
+                  <option value="inferred">Inferred</option>
+                  <option value="needs_review">Needs review</option>
+                </select>
+              </label>
+              <label className="editor-field">
+                <span>Review note</span>
+                <textarea
+                  name="reviewNote"
+                  rows={2}
+                  defaultValue={selectedNode.data.unit.reviewNote ?? ""}
+                  placeholder="Record the unresolved source question or reason for an inference"
                 />
               </label>
 
@@ -4733,6 +5539,127 @@ function StudioWorkspace() {
                 >
                   <Check size={17} weight="bold" aria-hidden="true" />
                   {aiProposalBusy === "accept" ? "Applying…" : "Apply reviewed changes"}
+                </button>
+              </div>
+            </footer>
+          </aside>
+        </div>
+      ) : null}
+
+      {pendingAiImportProposal ? (
+        <div className="ai-review-scrim">
+          <aside
+            className="ai-import-review-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ai-import-review-title"
+          >
+            <header className="ai-review-panel__header">
+              <div>
+                <span className="eyebrow">Local MCP · new chart review</span>
+                <h2 id="ai-import-review-title">Review proposed chart import</h2>
+                <p>
+                  Validate the hierarchy, uncertainty labels, and retained evidence before
+                  creating a new local chart. Nothing has been added to the library.
+                </p>
+              </div>
+              <span className="ai-review-panel__unsaved">Not created</span>
+            </header>
+
+            <div className="ai-import-review-summary">
+              <div><span>Proposed chart</span><strong>{pendingAiImportProposal.chartName}</strong></div>
+              <div><span>Units</span><strong>{pendingAiImportProposal.proposed.nodes.length}</strong></div>
+              <div><span>Relationships</span><strong>{pendingAiImportProposal.proposed.edges.length}</strong></div>
+              <div><span>Quality</span><strong>{pendingAiImportProposal.quality.score}/100</strong></div>
+            </div>
+
+            <div className="ai-import-review-evidence">
+              <div>
+                <span>Source intake</span>
+                <strong>{pendingAiImportProposal.intakeName ?? "No retained intake linked"}</strong>
+              </div>
+              <p>
+                {pendingAiImportProposal.evidenceFileNames.length
+                  ? pendingAiImportProposal.evidenceFileNames.join(" · ")
+                  : "Only the normalized JSON or CSV will be retained unless you reject and link a source intake first."}
+              </p>
+            </div>
+
+            <div className="ai-import-review-body">
+              <section aria-labelledby="ai-import-units-title">
+                <h3 id="ai-import-units-title">Proposed hierarchy</h3>
+                <div className="data-table-wrap">
+                  <table>
+                    <thead>
+                      <tr><th scope="col">Unit</th><th scope="col">Parent</th><th scope="col">State</th><th scope="col">Source</th></tr>
+                    </thead>
+                    <tbody>
+                      {pendingAiImportProposal.proposed.nodes.slice(0, 40).map((node) => {
+                        const parentEdge = pendingAiImportProposal.proposed.edges.find((edge) => edge.target === node.id);
+                        const parent = pendingAiImportProposal.proposed.nodes.find((candidate) => candidate.id === parentEdge?.source);
+                        return (
+                          <tr key={node.id}>
+                            <th scope="row">{node.data.unit.name}</th>
+                            <td>{parent?.data.unit.shortName ?? "Root"}</td>
+                            <td>{planningStateForNode(node) === "planned" ? `Planned · ${node.data.unit.effectiveDate}` : "Current"}</td>
+                            <td>
+                              {node.data.unit.sourceCertainty === "needs_review" ? "Needs review" : node.data.unit.sourceCertainty === "inferred" ? "Inferred" : "Confirmed"}
+                              {node.data.unit.sourceLocator ? ` · ${node.data.unit.sourceLocator}` : ""}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {pendingAiImportProposal.proposed.nodes.length > 40 ? (
+                  <p>{pendingAiImportProposal.proposed.nodes.length - 40} additional units passed the same structural validation.</p>
+                ) : null}
+              </section>
+              <section aria-labelledby="ai-import-findings-title">
+                <h3 id="ai-import-findings-title">Validation and quality findings</h3>
+                {pendingAiImportProposal.findings.length ? (
+                  <ul className="ai-import-review-findings">
+                    {pendingAiImportProposal.findings.map((finding, index) => (
+                      <li key={`${finding.code}-${index}`} className={`finding--${finding.severity}`}>
+                        <WarningDiamond size={16} aria-hidden="true" />
+                        <span><strong>{finding.code}</strong>{finding.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="quality-report__clear"><ShieldCheck size={20} aria-hidden="true" />No validation or quality warnings.</div>
+                )}
+              </section>
+            </div>
+
+            <footer className="ai-review-panel__footer">
+              <p>
+                Creating the chart writes this reviewed structure to the local database as a
+                new draft. Existing charts are not overwritten.
+              </p>
+              {aiImportError ? <p className="ai-review-panel__error" role="alert">{aiImportError}</p> : null}
+              <div>
+                <button
+                  type="button"
+                  className="button button--secondary ai-review-reject"
+                  data-ai-import-action="reject"
+                  onClick={() => void resolveAiImportProposal("reject")}
+                  disabled={aiImportBusy !== null}
+                  aria-busy={aiImportBusy === "reject"}
+                >
+                  {aiImportBusy === "reject" ? "Rejecting…" : "Reject import"}
+                </button>
+                <button
+                  type="button"
+                  className="button button--primary"
+                  data-ai-import-action="accept"
+                  onClick={() => void resolveAiImportProposal("accept")}
+                  disabled={aiImportBusy !== null}
+                  aria-busy={aiImportBusy === "accept"}
+                >
+                  <Check size={17} weight="bold" aria-hidden="true" />
+                  {aiImportBusy === "accept" ? "Creating chart…" : "Create reviewed chart"}
                 </button>
               </div>
             </footer>

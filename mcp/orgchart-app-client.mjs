@@ -96,6 +96,10 @@ export class OrgChartAppClient {
   }
 
   async request(pathname, init = {}) {
+    return this.rawRequest(pathname, init);
+  }
+
+  async rawRequest(pathname, init = {}) {
     const descriptor = readRuntimeDescriptor(this.runtimePath);
     const url = new URL(pathname, descriptor.baseUrl);
     if (url.origin !== descriptor.baseUrl.origin) {
@@ -124,8 +128,25 @@ export class OrgChartAppClient {
     return body;
   }
 
+  authorizeTool({ toolName, chartId, mode = "read" }) {
+    return this.rawRequest("/api/mcp-control", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "authorize",
+        toolName,
+        chartId,
+        mode,
+      }),
+    });
+  }
+
   listCharts() {
     return this.request("/api/charts", { cache: "no-store" });
+  }
+
+  listImportIntakes() {
+    return this.request("/api/import-intakes", { cache: "no-store" });
   }
 
   validateChart(chartId) {
@@ -155,6 +176,20 @@ export class OrgChartAppClient {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "stage", chart }),
+    });
+  }
+
+  stageImportProposal({ chartName, format, contents, intakeId }) {
+    return this.request("/api/ai-import-proposals", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "stage",
+        chartName,
+        format,
+        contents,
+        intakeId,
+      }),
     });
   }
 

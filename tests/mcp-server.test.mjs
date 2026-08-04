@@ -57,6 +57,20 @@ async function startFakeApp(token) {
       return;
     }
     const url = new URL(request.url, "http://127.0.0.1");
+    if (request.method === "POST" && url.pathname === "/api/mcp-control") {
+      response.end(
+        JSON.stringify({
+          control: {
+            paused: false,
+            chartScope: "all",
+            allowedChartIds: [],
+            revision: 1,
+            events: [],
+          },
+        }),
+      );
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/api/ai-activity") {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
@@ -97,6 +111,25 @@ async function startFakeApp(token) {
       );
       return;
     }
+    if (request.method === "POST" && url.pathname === "/api/ai-import-proposals") {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      assert.equal(body.action, "stage");
+      response.statusCode = 201;
+      response.end(
+        JSON.stringify({
+          proposal: {
+            id: "import-proposal-public-fixture",
+            chartName: body.chartName,
+            operation: "stage_normalized_import",
+            status: "pending",
+            proposed: { nodes: chart.nodes, edges: [] },
+          },
+        }),
+      );
+      return;
+    }
     if (request.method === "GET" && url.searchParams.get("resource") === "validate") {
       response.end(
         JSON.stringify({
@@ -127,6 +160,31 @@ async function startFakeApp(token) {
     }
     if (request.method === "GET" && url.pathname === "/api/charts") {
       response.end(JSON.stringify({ charts: [chart] }));
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/import-intakes") {
+      response.end(
+        JSON.stringify({
+          intakes: [
+            {
+              id: "intake-public-fixture",
+              name: "Public Fixture Intake",
+              status: "pending",
+              createdAt: chart.createdAt,
+              updatedAt: chart.updatedAt,
+              chartId: null,
+              files: [
+                {
+                  fileName: "fixture.pdf",
+                  contentType: "application/pdf",
+                  fileSize: 100,
+                  checksum: "fixture-checksum",
+                },
+              ],
+            },
+          ],
+        }),
+      );
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/charts") {
@@ -198,8 +256,10 @@ test("local STDIO MCP exposes bounded tools and reaches only the authorized runn
       "validate_chart",
       "list_chart_versions",
       "validate_normalized_import",
+      "list_import_intakes",
       "create_chart_draft",
       "import_normalized_chart",
+      "stage_normalized_import",
       "replace_chart_draft",
       "save_chart_version",
     ]);
@@ -235,17 +295,37 @@ test("local STDIO MCP exposes bounded tools and reaches only the authorized runn
     });
     assert.equal(importPreview.structuredContent.preview.rowCount, 1);
 
+    const intakes = await client.callTool({ name: "list_import_intakes", arguments: {} });
+    assert.equal(intakes.structuredContent.intakes[0].id, "intake-public-fixture");
+
+    const stagedImport = await client.callTool({
+      name: "stage_normalized_import",
+      arguments: {
+        chartName: "Public MCP Import",
+        format: "csv",
+        contents:
+          "id,name,shortName,type,parentId,positionTitle,assignmentLabel,positionStatus,effectiveDate,publicationVisibility\nroot,Fixture,Fixture,division,,Director,Position vacant,vacant,Current,internal",
+        intakeId: "intake-public-fixture",
+      },
+    });
+    assert.equal(stagedImport.isError, undefined);
+    assert.equal(
+      stagedImport.structuredContent.proposal.id,
+      "import-proposal-public-fixture",
+    );
+    assert.equal(fake.activityEvents.at(-1).completionKind, "review_ready");
+
     const created = await client.callTool({
       name: "create_chart_draft",
       arguments: { name: "Synthetic Activity Test" },
     });
     assert.equal(created.isError, undefined);
-    assert.equal(fake.activityEvents.length, 2);
-    assert.equal(fake.activityEvents[0].action, "begin");
-    assert.equal(fake.activityEvents[0].operation, "create_chart_draft");
-    assert.equal(fake.activityEvents[1].action, "complete");
-    assert.equal(fake.activityEvents[1].succeeded, true);
-    assert.equal(fake.activityEvents[1].chartId, "chart-public-fixture");
+    assert.equal(fake.activityEvents.length, 4);
+    assert.equal(fake.activityEvents.at(-2).action, "begin");
+    assert.equal(fake.activityEvents.at(-2).operation, "create_chart_draft");
+    assert.equal(fake.activityEvents.at(-1).action, "complete");
+    assert.equal(fake.activityEvents.at(-1).succeeded, true);
+    assert.equal(fake.activityEvents.at(-1).chartId, "chart-public-fixture");
 
     const proposed = structuredClone(chartFixture());
     proposed.nodes[0].data.unit.assignmentLabel = "Synthetic replacement";

@@ -64,7 +64,7 @@ Pass when each chart behaves as a separate saved document and no other chart is 
 ## Test 2: edit structure and presentation safely
 
 1. Open a draft chart and select its root card.
-2. Add a child unit, then edit its full name, display name, unit type, position title, status, effective label, visibility, and provenance note.
+2. Add a child unit, then edit its full name, display name, unit type, position title, status, current/planned state, effective label, visibility, source locator, source certainty, review note, and provenance note.
 3. Add a second branch and change the first unit's primary parent using the detail panel.
 4. Turn **Move branch** off, drag a card, and confirm its descendants remain in place and the semantic parent does not change.
 5. Turn **Move branch** on, drag that card, and confirm every descendant moves by the same amount while the semantic parent still does not change. Repeat with an L2 card that has L3 and L4 descendants.
@@ -82,7 +82,7 @@ Pass when each chart behaves as a separate saved document and no other chart is 
 17. Use **Undo** and **Redo**, including `Command-Z` and `Shift-Command-Z` outside a form field.
 18. Press `/`, search for a unit, and confirm the matching card can be focused.
 19. Collapse and expand a branch.
-20. Open **Accessible table** and confirm the same units and parents appear there.
+20. Open **Accessible table** and confirm the same units and parents appear there. Filter between all, current, and planned units; confirm planning state, source certainty, and source locator are announced as text rather than color alone.
 
 Pass when organizational changes and presentation-only changes remain distinguishable, blocking hierarchy errors prevent a saved version or export, and the table agrees with the visual chart.
 
@@ -91,7 +91,7 @@ Pass when organizational changes and presentation-only changes remain distinguis
 ### Spreadsheet path
 
 1. In **Sources & imports**, download the CSV template.
-2. Prepare a canonical CSV, workforce-roster CSV, canonical JSON, source manifest, or Excel workbook. Excel reads the first worksheet, maps common column labels, generates missing stable IDs, and can resolve parent names. A workforce roster can use `Full Name`, `Position Title`, and `Supervisor Full Name`.
+2. Prepare a canonical CSV, workforce-roster CSV, canonical JSON, source manifest, or Excel workbook. Excel reads the first worksheet, maps common column labels, generates missing stable IDs, and can resolve parent names. A workforce roster can use `Full Name`, `Position Title`, and `Supervisor Full Name`. Include `sourceLocator`, `sourceCertainty`, `reviewNote`, and `planningState` where applicable.
 3. Choose **Validate for review**.
 4. Inspect every finding and the normalized hierarchy preview.
 5. Check the human-confirmation box only after verifying names, parents, statuses, and source evidence.
@@ -100,21 +100,25 @@ Pass when organizational changes and presentation-only changes remain distinguis
 ### PowerPoint, Word, PDF, or image path
 
 1. Download the **AI normalization brief**.
-2. Use it only in an AI environment approved for the source material. The first pass identifies uncertain connectors or labels; the final pass returns import-ready JSON only after the human resolves them.
-3. In OrgChart Studio, choose the normalized JSON as the structured file and attach up to 10 unchanged PowerPoint, Word, PDF, PNG, or JPEG files as source evidence.
-4. Validate, review, and confirm before creating the draft.
-5. Download both stored source records and compare them with the originals.
+2. Use it only in an AI environment approved for the source material. The first pass identifies uncertain connectors or labels; a review proposal may preserve deliberately unresolved facts as `needs_review`, but material ambiguity must not be presented as confirmed.
+3. In OrgChart Studio, create a named **Source intake bundle** with up to 10 unchanged PowerPoint, Word, PDF, PNG, or JPEG files. Confirm the pending bundle lists file names, sizes, and fingerprints without creating a chart.
+4. Choose the normalized JSON as the structured file and associate the pending bundle, or stage it with `stage_normalized_import` through MCP.
+5. Inspect the proposed units, relationships, evidence names, planned/current labels, source certainty, and **Import quality report**. Confirm duplicate-name/uncertain/deep-or-wide findings are advisory and blocking structural findings still prevent creation.
+6. Reject one staged import and confirm no chart or normalized source record is created. Stage it again and choose **Create reviewed chart**.
+7. Download the stored normalized source and evidence records and compare them with the originals.
 
 Pass when the original source is retained as evidence, the normalized data becomes the editable source of truth, and no chart is created before a human confirms the preview.
 
-## Test 4: save, compare, and restore versions
+## Test 4: save, compare, merge, and restore versions
 
 1. Open **Version history** and save a named version with a meaningful change summary.
 2. Make a structural change and save a second named version.
 3. Compare the working draft with both saved versions.
 4. Restore the first version.
 5. Confirm the restore creates a new higher version and does not delete the old versions.
-6. Quit and reopen the desktop app; confirm the restored state and history remain.
+6. Create or import a second disposable chart, then open **Compare charts**. Confirm added, removed, and changed units are summarized without altering either chart.
+7. Stage **Apply source structure** to the target. Reject it once and confirm the target is unchanged; stage it again, inspect the normal Before/After proposal, and Apply it. Confirm source-file bytes were not copied by the structural merge.
+8. Quit and reopen the desktop app; confirm the restored state, merge result, and history remain.
 
 Pass when autosave protects the working draft, named versions are immutable checkpoints, and restore is additive rather than destructive.
 
@@ -146,26 +150,29 @@ Pass when all outputs derive from the same data and geometry, public-safe output
 8. Try a wrong passphrase and confirm restore fails without creating partial charts.
 9. Choose **Unencrypted**, acknowledge the readable-file warning, create a backup in a local folder, and restore it without entering a passphrase.
 10. Configure a OneDrive or Dropbox backup folder, choose **Unencrypted**, and confirm creation is blocked until encryption is turned on or a local folder is selected.
+11. In **Backup health**, set a reminder interval, confirm the latest backup records its time, included-chart count, and encryption status, then perform a successful restore and confirm **Last verified restore** updates. Reopen the app and confirm these device-local indicators remain without asking for or displaying a passphrase.
 
 Pass when both formats can be recovered without destructive replacement and unencrypted packages cannot be written directly to a recognized cloud-sync folder.
 
 ## Test 7: optional local MCP companion
 
 1. During setup, confirm the installer explains the local MCP boundary. At **Install the local MCP integration? [y/N]**, type `y` and press Return, then restart ChatGPT Desktop or Codex once.
-2. Open OrgChart Studio, then inspect MCP servers and confirm `orgchart_studio` is enabled.
-3. Call `list_charts` and verify it returns summaries without full node data. Call `get_chart` only on an approved test chart and confirm the current saved layout is returned.
-4. Call `validate_chart` and `list_chart_versions`; confirm neither changes the chart.
-5. Validate a synthetic canonical CSV through `validate_normalized_import`, then approve `import_normalized_chart`. Confirm it creates a separate draft rather than overwriting an existing chart.
-6. Read that draft and make one change through `replace_chart_draft`. Confirm the MCP result says it was staged and that the saved chart remains unchanged.
-7. While the proposal is prepared, confirm the app shows a green edge cue plus **AI preparing changes** and names the operation. Meaning must remain clear without relying on color.
-8. Choose **Review changes**. Confirm the proposed canvas is read-only, changed cards and connectors have text/pattern cues, and the panel lists exact Before and After fields including additions/removals.
-9. Reject one proposal and confirm the saved chart remains unchanged. Stage it again, choose **Apply reviewed changes**, and confirm only the reviewed fields change.
-10. Open **Version history**. Confirm both review decisions appear in the AI-assisted timeline, the accepted item says it is awaiting a named version, then save a named version and confirm the item links to it.
-11. Trigger a synthetic failed write and confirm the receipt uses **AI edit needs attention** without changing chart data. Make a deliberately stale proposal and confirm it is rejected rather than overwriting newer work.
-12. Create and restore a selected-chart backup. Confirm the related AI review timeline is restored with its version links.
-13. Confirm write tools request approval and that delete, backup restore, source-file download, storage, passphrase, and publication tools are absent.
-14. Quit OrgChart Studio and confirm a tool reports that the desktop app must be opened. Reopen it and confirm tools reconnect with the new session.
-15. Run `npm run mcp:remove`, restart ChatGPT Desktop or Codex, and confirm only the OrgChart Studio server was removed. Run `npm run mcp:configure` to restore it if needed.
+2. Open OrgChart Studio, then inspect MCP servers and confirm `orgchart_studio` is enabled. Open **AI & MCP control**, pause MCP, and confirm a tool call is refused. Resume it.
+3. Select **Selected charts**, allow one approved test chart, and confirm `get_chart` is refused for a different chart. Switch to **All charts** only for the remainder of this synthetic test. Confirm a session receipt appears for each authorized or denied operation and contains no prompt text.
+4. Call `list_charts` and verify it returns summaries without full node data. Call `get_chart` only on the approved test chart and confirm the current saved layout is returned.
+5. Call `validate_chart` and `list_chart_versions`; confirm neither changes the chart.
+6. Create a synthetic pending intake bundle. Call `list_import_intakes` and confirm it returns metadata and checksums, not file bytes. Validate synthetic canonical CSV through `validate_normalized_import`, then approve `stage_normalized_import` with the intake ID.
+7. Confirm the app opens **AI import review** and the library is still unchanged. Verify **Reject import** and **Create reviewed chart** are both keyboard- and pointer-usable. Reject once, stage again, accept, and confirm it creates a separate draft with the linked evidence.
+8. Read that draft and make one change through `replace_chart_draft`. Confirm the MCP result says it was staged and that the saved chart remains unchanged.
+9. While the proposal is prepared, confirm the app shows a green edge cue plus **AI preparing changes** and names the operation. Meaning must remain clear without relying on color.
+10. Choose **Review changes**. Confirm the proposed canvas is read-only, changed cards and connectors have text/pattern cues, and the panel lists exact Before and After fields including additions/removals.
+11. Reject one proposal and confirm the saved chart remains unchanged. Stage it again, choose **Apply reviewed changes**, and confirm only the reviewed fields change.
+12. Open **Version history**. Confirm both review decisions appear in the AI-assisted timeline, the accepted item says it is awaiting a named version, then save a named version and confirm the item links to it.
+13. Trigger a synthetic failed write and confirm the receipt uses **AI edit needs attention** without changing chart data. Make a deliberately stale proposal and confirm it is rejected rather than overwriting newer work.
+14. Create and restore a selected-chart backup. Confirm the related AI review timeline is restored with its version links.
+15. Confirm write tools request approval and that delete, backup restore, source-file download, storage, passphrase, and publication tools are absent.
+16. Quit OrgChart Studio and confirm a tool reports that the desktop app must be opened. Reopen it and confirm tools reconnect with the new session and pause/scope state has reset.
+17. Run `npm run mcp:remove`, restart ChatGPT Desktop or Codex, and confirm only the OrgChart Studio server was removed. Run `npm run mcp:configure` to restore it if needed.
 
 Pass when MCP is local and on-demand, proposals cannot change saved data before Apply, field-level review is accurate, timeline/version links survive backup restore, stale writes are rejected, and no tool bypasses the normal chart/version workflow.
 
