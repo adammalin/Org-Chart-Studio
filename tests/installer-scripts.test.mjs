@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { PDFDocument } from "pdf-lib";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bootstrapPath = path.join(
@@ -86,4 +87,23 @@ test("macOS setup offers an optional least-privilege local MCP registration", ()
   assert.match(packageJson, /"mcp:start"/);
   assert.match(packageJson, /"mcp:configure"/);
   assert.match(packageJson, /"mcp:remove"/);
+});
+
+test("bundled quick-start has a second page for the reviewed local AI workflow", async () => {
+  const guidePath = path.join(
+    projectRoot,
+    "docs",
+    "ORNL-OrgChart-Studio-macOS-Quick-Start.pdf",
+  );
+  const generatorSource = readFileSync(
+    path.join(projectRoot, "scripts", "create_mac_quick_start_pdf.py"),
+    "utf8",
+  );
+  const guide = await PDFDocument.load(readFileSync(guidePath));
+
+  assert.equal(guide.getPageCount(), 2);
+  assert.match(generatorSource, /Use the orgchart_studio MCP server/);
+  assert.match(generatorSource, /AI proposes\. You review\. The app remains the source of truth\./);
+  assert.match(generatorSource, /Bypass review for chart replacement/);
+  assert.match(generatorSource, /not ChatGPT web/);
 });

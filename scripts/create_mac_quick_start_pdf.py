@@ -118,13 +118,76 @@ def draw_header_flow(pdf: canvas.Canvas) -> None:
     pdf.drawRightString(571, 661, "ONE LOCAL SOURCE OF TRUTH")
 
 
+def draw_ai_header_flow(pdf: canvas.Canvas) -> None:
+    """Show that AI work passes through review before it becomes saved data."""
+    left = 372
+    node_y = 683
+    node_width = 58
+    node_height = 38
+    gap = 17
+
+    pdf.setStrokeColor(WHITE)
+    pdf.setLineWidth(1.2)
+    for index, (label, sublabel) in enumerate(
+        [("AI", "PROPOSES"), ("YOU", "REVIEW"), ("APP", "SAVES")]
+    ):
+        x = left + index * (node_width + gap)
+        pdf.rect(x, node_y, node_width, node_height, stroke=1, fill=0)
+        pdf.setFillColor(WHITE)
+        pdf.setFont("Helvetica-Bold", 8.2)
+        pdf.drawCentredString(x + node_width / 2, node_y + 22, label)
+        pdf.setFont("Helvetica", 6.7)
+        pdf.drawCentredString(x + node_width / 2, node_y + 10, sublabel)
+        if index < 2:
+            line_start = x + node_width
+            line_end = x + node_width + gap
+            line_y = node_y + node_height / 2
+            pdf.line(line_start, line_y, line_end - 4, line_y)
+            pdf.line(line_end - 8, line_y + 4, line_end - 4, line_y)
+            pdf.line(line_end - 8, line_y - 4, line_end - 4, line_y)
+
+    pdf.setFillColor(WHITE)
+    pdf.setFont("Helvetica-Bold", 8.3)
+    pdf.drawRightString(571, 661, "HUMAN REVIEW STAYS IN THE LOOP")
+
+
+def draw_numbered_card(
+    pdf: canvas.Canvas,
+    number: str,
+    title: str,
+    note: str,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    fill=SOFT_GREEN,
+    accent=ORNL_GREEN,
+) -> None:
+    pdf.setFillColor(fill)
+    pdf.rect(x, y, width, height, stroke=0, fill=1)
+    pdf.setFillColor(accent)
+    pdf.rect(x, y, 4, height, stroke=0, fill=1)
+    pdf.setFont("Helvetica-Bold", 7.2)
+    pdf.drawString(x + 11, y + height - 15, f"{number}  {title}")
+    draw_wrapped_text(
+        pdf,
+        note,
+        x + 11,
+        y + height - 29,
+        width - 20,
+        "Helvetica",
+        6.7,
+        leading=8.6,
+    )
+
+
 def build_pdf(output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     pdf = canvas.Canvas(str(output), pagesize=letter, pageCompression=1)
     pdf.setTitle("ORNL OrgChart Studio macOS Quick Start")
     pdf.setAuthor("ORNL OrgChart Studio")
     pdf.setSubject(
-        "Install, update, start, import, edit, and protect data in the macOS desktop source test"
+        "Install, update, start, use AI-assisted review, and protect data in the macOS desktop source test"
     )
 
     pdf.setFillColor(WHITE)
@@ -285,6 +348,137 @@ def build_pdf(output: Path) -> None:
     pdf.drawRightString(572, 21, source_url)
     source_width = stringWidth(source_url, "Helvetica-Bold", 8.5)
     pdf.linkURL(source_url, (572 - source_width, 14, 572, 29), relative=0)
+
+    pdf.showPage()
+
+    # Page 2: optional local AI workflow through the installer-managed MCP server.
+    pdf.setFillColor(WHITE)
+    pdf.rect(0, 0, PAGE_W, PAGE_H, stroke=0, fill=1)
+    pdf.setFillColor(HALE_NAVY)
+    pdf.rect(0, PAGE_H - 166, PAGE_W, 166, stroke=0, fill=1)
+    pdf.setFillColor(ORNL_GREEN)
+    pdf.rect(0, PAGE_H - 166, 18, 166, stroke=0, fill=1)
+    pdf.setFillColor(ENERGY)
+    pdf.rect(0, PAGE_H - 172, PAGE_W, 6, stroke=0, fill=1)
+
+    draw_label(pdf, "ORNL workflow | local MCP quick start | page 2 of 2", 40, 756, WHITE)
+    pdf.setFillColor(WHITE)
+    pdf.setFont("Helvetica-Bold", 27)
+    pdf.drawString(40, 714, "Use AI with")
+    pdf.drawString(40, 682, "OrgChart Studio.")
+    pdf.setFont("Helvetica", 11.2)
+    pdf.drawString(40, 653, "AI proposes. You review. The app remains the source of truth.")
+    draw_ai_header_flow(pdf)
+
+    draw_label(pdf, "01  Before the first AI edit", 40, 594)
+    setup_cards = [
+        ("1", "INSTALL", "At the MCP prompt, type y and press Return."),
+        ("2", "RESTART", "Restart ChatGPT Desktop or Codex once."),
+        ("3", "OPEN APP", "OrgChart Studio must be running first."),
+        ("4", "CONFIRM", "Check Settings > MCP servers or type /mcp."),
+    ]
+    for index, (number, title, note) in enumerate(setup_cards):
+        draw_numbered_card(
+            pdf,
+            number,
+            title,
+            note,
+            40 + index * 136,
+            523,
+            124,
+            54,
+            SOFT_GREEN if index != 3 else SOFT_NAVY,
+            ORNL_GREEN if index != 3 else HALE_NAVY,
+        )
+
+    draw_label(pdf, "02  Copy this prompt", 40, 497)
+    pdf.setFillColor(DARK_MATTER)
+    pdf.setFont("Helvetica", 8.2)
+    pdf.drawString(40, 481, "Change the chart name, person, and requested update to match your task.")
+    ai_prompt_lines = [
+        "Use the orgchart_studio MCP server.",
+        "First list the available charts and find the DVCD chart.",
+        "Read its current data, then stage a proposal marking Renee's",
+        "position vacant because she is retiring.",
+        "Do not create a separate chart or generic diagram.",
+        "Let me review the proposed change inside OrgChart Studio",
+        "before it is saved.",
+    ]
+    draw_code_block(pdf, ai_prompt_lines, 40, 469, 532, 126, font_size=7.6)
+
+    draw_label(pdf, "03  What happens next", 40, 320)
+    workflow_cards = [
+        ("1", "LIST & READ", "Find the chart and inspect its current data."),
+        ("2", "STAGE", "AI prepares a proposal; the saved chart stays unchanged."),
+        ("3", "REVIEW", "The app shows the exact proposed fields and layout."),
+        ("4", "DECIDE", "Choose Apply reviewed changes or Reject proposal."),
+        ("5", "VERSION", "After Apply, save a meaningful named checkpoint."),
+    ]
+    for index, (number, title, note) in enumerate(workflow_cards):
+        draw_numbered_card(
+            pdf,
+            number,
+            title,
+            note,
+            40 + index * 107,
+            239,
+            96,
+            64,
+            SOFT_NAVY if index in (1, 2) else SOFT_GREEN,
+            HALE_NAVY if index in (1, 2) else ORNL_GREEN,
+        )
+
+    draw_label(pdf, "04  MCP boundaries", 40, 218)
+    boundary_panels = [
+        (
+            40,
+            SOFT_GREEN,
+            ORNL_GREEN,
+            "MCP CAN",
+            [
+                "List and read approved charts",
+                "Validate or import structured data",
+                "Stage reviewed draft changes",
+                "Save a matching named version",
+            ],
+        ),
+        (
+            310,
+            SOFT_NAVY,
+            HALE_NAVY,
+            "MCP CANNOT",
+            [
+                "Delete charts or restore backups",
+                "Download sources or passphrases",
+                "Change storage or publish",
+                "Bypass review for chart replacement",
+            ],
+        ),
+    ]
+    for x, fill, accent, title, items in boundary_panels:
+        pdf.setFillColor(fill)
+        pdf.rect(x, 105, 262, 96, stroke=0, fill=1)
+        pdf.setFillColor(accent)
+        pdf.rect(x, 105, 5, 96, stroke=0, fill=1)
+        draw_label(pdf, title, x + 15, 184, accent)
+        pdf.setFillColor(DARK_MATTER)
+        pdf.setFont("Helvetica", 7.4)
+        baseline = 166
+        for item in items:
+            pdf.drawString(x + 16, baseline, f"- {item}")
+            baseline -= 16
+
+    pdf.setFillColor(DARK_MATTER)
+    pdf.rect(0, 0, PAGE_W, 89, stroke=0, fill=1)
+    draw_label(pdf, "If the server is missing", 40, 69, ENERGY)
+    pdf.setFillColor(WHITE)
+    pdf.setFont("Helvetica-Bold", 7.4)
+    pdf.drawString(40, 51, "Rerun the installer, type y at the MCP prompt, then restart ChatGPT Desktop or Codex.")
+    pdf.setFont("Helvetica", 7.2)
+    pdf.drawString(40, 35, "If it says unavailable, open OrgChart Studio. Local MCP works in the desktop app/Codex, not ChatGPT web.")
+    pdf.setFillColor(ENERGY)
+    pdf.setFont("Helvetica-Bold", 7.2)
+    pdf.drawString(40, 19, "Use only with charts approved for your AI environment; chart fields read by MCP enter that conversation.")
 
     pdf.showPage()
     pdf.save()

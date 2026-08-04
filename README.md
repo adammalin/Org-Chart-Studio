@@ -20,7 +20,7 @@ This repository implements a coherent local Phase 1 human-test slice:
 - an accessible table and downloadable accessible CSV generated from the same chart data;
 - one shared scene model for internal/public SVG, configurable-resolution PNG, vector PDF, and editable PowerPoint output, including proportional typography and strokes that match editor zoom;
 - natural-bounds, 16:9, 11 × 17 landscape, and 11 × 17 portrait output profiles with version and generation metadata;
-- a local-only Electron wrapper, checksum-verified setup/update scripts, automated desktop smoke checks, a one-page macOS PDF guide, and an optional installer-managed local STDIO MCP companion for ChatGPT Desktop and Codex.
+- a local-only Electron wrapper, checksum-verified setup/update scripts, automated desktop smoke checks, a two-page macOS setup and AI workflow PDF guide, and an optional installer-managed local STDIO MCP companion for ChatGPT Desktop and Codex.
 
 The user chart library starts empty and never inserts example charts. Synthetic fixtures remain test-only and are not shown or saved as user data. The prototype does not connect to personnel systems, authentication, a live AI endpoint, or a publication destination.
 
@@ -76,7 +76,7 @@ The desktop renderer is prevented from making non-loopback network requests, so 
 
 These controls protect the normal application and Git workflow; they cannot stop a person from deliberately bypassing hooks with Git override flags or manually copying/decrypting data into another application. Approved handling and access controls still apply. A cloud provider selected as the backup location will sync the encrypted package, so keep the passphrase separately in an approved password manager.
 
-Run `npm run test:desktop` when developing the desktop wrapper. The one-page installation guide is generated at [docs/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf](docs/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf).
+Run `npm run test:desktop` when developing the desktop wrapper. The two-page installation and local AI workflow guide is generated at [docs/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf](docs/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf).
 
 The human-test sequence and boundaries are documented in [docs/HUMAN-TEST-GUIDE.md](docs/HUMAN-TEST-GUIDE.md). The requirement-by-requirement local readiness record is [docs/READINESS-AUDIT.md](docs/READINESS-AUDIT.md).
 

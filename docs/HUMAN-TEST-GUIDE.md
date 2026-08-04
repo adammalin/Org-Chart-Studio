@@ -8,7 +8,7 @@ The test is intended to answer whether staff can maintain several charts, normal
 
 ## Install or update the desktop source test
 
-The one-page illustrated guide is [ORNL OrgChart Studio macOS Quick Start](ORNL-OrgChart-Studio-macOS-Quick-Start.pdf).
+The two-page illustrated setup and AI workflow guide is [ORNL OrgChart Studio macOS Quick Start](ORNL-OrgChart-Studio-macOS-Quick-Start.pdf).
 
 For a checkout already on the test Mac, run:
 
