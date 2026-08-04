@@ -8,6 +8,7 @@ export interface EdgeRoutingNode {
   y: number;
   width: number;
   height: number;
+  targetSide?: "top" | "left";
 }
 
 export interface EdgeRoutePoint {
@@ -38,6 +39,7 @@ export interface OrthogonalEdgeRoute {
   sourcePortIndex: number;
   sourcePortCount: number;
   targetPortOffset: number;
+  targetSide: "top" | "left";
   bundleKey?: string;
   manual: boolean;
   points: EdgeRoutePoint[];
@@ -548,12 +550,22 @@ function buildRouteGroups(
     if (!source) return;
     const manualEdges = sourceEdges.filter((edge) => manualEdgeRouteForEdge(edge));
     const automaticEdges = sourceEdges.filter((edge) => !manualEdgeRouteForEdge(edge));
-    const automaticGroups =
+    const leftTargetEdges = automaticEdges.filter(
+      (edge) => nodeById.get(edge.target)?.targetSide === "left",
+    );
+    const topTargetEdges = automaticEdges.filter(
+      (edge) => nodeById.get(edge.target)?.targetSide !== "left",
+    );
+    const topTargetGroups =
       mode === "combed"
-        ? clusterEdgesByTargetRow(automaticEdges, nodeById).flatMap((cluster) =>
+        ? clusterEdgesByTargetRow(topTargetEdges, nodeById).flatMap((cluster) =>
             cluster.length > 1 ? [cluster] : cluster.map((edge) => [edge]),
           )
-        : automaticEdges.map((edge) => [edge]);
+        : topTargetEdges.map((edge) => [edge]);
+    const automaticGroups = [
+      ...(leftTargetEdges.length ? [leftTargetEdges] : []),
+      ...topTargetGroups,
+    ];
     const edgeGroups = [
       ...manualEdges.map((edge) => [edge]),
       ...automaticGroups,
@@ -603,11 +615,35 @@ function buildRouteGroups(
   );
 }
 
+function routeLeftRailGroup(group: RouteGroup): Point[][] | null {
+  if (!group.targets.length || group.targets.some((target) => target.targetSide !== "left")) {
+    return null;
+  }
+  const railX = Math.min(...group.targets.map((target) => target.x)) - 18;
+  const firstTargetY = Math.min(
+    ...group.targets.map((target) => target.y + target.height / 2),
+  );
+  const direction = firstTargetY >= group.sourceY ? 1 : -1;
+  const sourceLeadY = group.sourceY + direction * MIN_LEAD;
+  return group.targets.map((target) => {
+    const targetY = target.y + target.height / 2;
+    return compressedPoints([
+      { x: group.sourceX, y: group.sourceY },
+      { x: group.sourceX, y: sourceLeadY },
+      { x: railX, y: sourceLeadY },
+      { x: railX, y: targetY },
+      { x: target.x, y: targetY },
+    ]);
+  });
+}
+
 function routeCombedGroup(
   group: RouteGroup,
   allNodes: EdgeRoutingNode[],
   reserved: Segment[],
 ): Point[][] | null {
+  const leftRailRoutes = routeLeftRailGroup(group);
+  if (leftRailRoutes) return leftRailRoutes;
   if (!group.bundleKey || group.edges.length < 2) return null;
   const targetIds = new Set(group.targets.map((target) => target.id));
   const obstacles = allNodes
@@ -710,13 +746,20 @@ export function buildOrthogonalEdgeRoutes(
             -TARGET_PORT_MAX_OFFSET,
             Math.min(TARGET_PORT_MAX_OFFSET, manualRoute.targetPortOffset),
           )
-        : (automaticPoints?.at(-1)?.x ?? target.x + target.width / 2) -
-          (target.x + target.width / 2);
+        : target.targetSide === "left"
+          ? (automaticPoints?.at(-1)?.y ?? target.y + target.height / 2) -
+            (target.y + target.height / 2)
+          : (automaticPoints?.at(-1)?.x ?? target.x + target.width / 2) -
+            (target.x + target.width / 2);
       const sourcePoint = { x: group.sourceX, y: group.sourceY };
-      const targetPoint = {
-        x: target.x + target.width / 2 + targetPortOffset,
-        y: target.y,
-      };
+      const targetSide = target.targetSide ?? "top";
+      const targetPoint =
+        targetSide === "left"
+          ? { x: target.x, y: target.y + target.height / 2 + targetPortOffset }
+          : {
+              x: target.x + target.width / 2 + targetPortOffset,
+              y: target.y,
+            };
       const points = manualRoute
         ? manualRoutePoints(sourcePoint, targetPoint, manualRoute)
         : automaticPoints!;
@@ -732,6 +775,7 @@ export function buildOrthogonalEdgeRoutes(
         sourcePortIndex: group.portIndex,
         sourcePortCount: group.portCount,
         targetPortOffset,
+        targetSide,
         bundleKey: manualRoute ? undefined : group.bundleKey,
         manual: Boolean(manualRoute),
         points,

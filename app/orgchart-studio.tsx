@@ -30,6 +30,7 @@ import { AlignLeft } from "@phosphor-icons/react/AlignLeft";
 import { AlignRight } from "@phosphor-icons/react/AlignRight";
 import { AlignTop } from "@phosphor-icons/react/AlignTop";
 import { CaretDown } from "@phosphor-icons/react/CaretDown";
+import { CaretLeft } from "@phosphor-icons/react/CaretLeft";
 import { CaretRight } from "@phosphor-icons/react/CaretRight";
 import { Check } from "@phosphor-icons/react/Check";
 import { ClockCounterClockwise } from "@phosphor-icons/react/ClockCounterClockwise";
@@ -50,6 +51,7 @@ import { MapPin } from "@phosphor-icons/react/MapPin";
 import { PencilSimple } from "@phosphor-icons/react/PencilSimple";
 import { Plus } from "@phosphor-icons/react/Plus";
 import { PushPin } from "@phosphor-icons/react/PushPin";
+import { Question } from "@phosphor-icons/react/Question";
 import { Robot } from "@phosphor-icons/react/Robot";
 import { Rows } from "@phosphor-icons/react/Rows";
 import { Selection } from "@phosphor-icons/react/Selection";
@@ -75,12 +77,17 @@ import {
 import {
   NODE_HEIGHT,
   NODE_WIDTH,
+  arrangeCompactPresentation,
   arrangeSelectedNodes,
+  compactNodeDimensions,
+  deriveCompactPresentation,
   descendantIds,
   positionBranchNodesFromSnapshot,
   runElkLayout,
   selectionMovementIds,
   validateHierarchy,
+  type ChartPresentationMode,
+  type CompactDisplay,
   type OrgFlowNode,
   type OrganizationalUnit,
   type PositionStatus,
@@ -148,6 +155,8 @@ import type {
   AiActivityRecord,
   AiChangeCategory,
   AiChartProposal,
+  AiPendingProposalSummary,
+  AiPendingProposalsResponse,
   AiProposalResponse,
 } from "../lib/ai-change-review";
 import type {
@@ -171,6 +180,19 @@ type BackupScope = "all" | "selected";
 type ExportFormat = "svg" | "png" | "pdf" | "pptx";
 type PlanningFilter = "all" | PlanningState;
 
+interface OnboardingTourStep {
+  eyebrow: string;
+  title: string;
+  body: string;
+  target: "navigation" | "presentation" | "chart-status" | "ai-control" | "tips" | null;
+  placement: "center" | "right" | "bottom";
+}
+
+interface TourGeometry {
+  target: { top: number; left: number; width: number; height: number } | null;
+  panel: { top: number; left: number };
+}
+
 interface BackupHealthState {
   reminderDays: 7 | 14 | 30 | 90;
   lastBackupAt: string | null;
@@ -182,6 +204,59 @@ interface BackupHealthState {
 const CONNECTOR_ROUTING_STORAGE_KEY = "orgchart-studio-connector-routing-mode";
 const CONNECTOR_ROUTING_EVENT = "orgchart-studio-connector-routing-change";
 const BACKUP_HEALTH_STORAGE_KEY = "orgchart-studio-backup-health";
+const ONBOARDING_STORAGE_KEY = "orgchart-studio-onboarding-v1";
+const PRESENTATION_STORAGE_KEY = "orgchart-studio-presentation-v1";
+
+const ONBOARDING_TOUR_STEPS: OnboardingTourStep[] = [
+  {
+    eyebrow: "Welcome",
+    title: "Know what is saved—and what still needs you",
+    body:
+      "This short tour shows where to open charts, check save state, review AI proposals, and return for help. You remain in control of every applied change.",
+    target: null,
+    placement: "center",
+  },
+  {
+    eyebrow: "Step 1",
+    title: "Move through the chart workflow",
+    body:
+      "Use the workspace navigation to open the chart library, edit the selected chart, review sources, make backups, export, and inspect version history.",
+    target: "navigation",
+    placement: "right",
+  },
+  {
+    eyebrow: "Step 2",
+    title: "Choose a grouped or individual presentation",
+    body:
+      "Compact groups keeps major units as cards and lists terminal lower-level assignments inside their parent group. Individual cards restores one card for every record. Switching views never removes chart data.",
+    target: "presentation",
+    placement: "bottom",
+  },
+  {
+    eyebrow: "Step 3",
+    title: "Check the working chart state",
+    body:
+      "The top bar identifies the active chart, version, validation result, and save state. “Not applied” means you are previewing an AI proposal—the saved chart is still unchanged.",
+    target: "chart-status",
+    placement: "bottom",
+  },
+  {
+    eyebrow: "Step 4",
+    title: "AI proposals always wait for your decision",
+    body:
+      "Open Local AI control to manage access and receipts. When a proposal arrives, compare Before and After, then apply it, reject it, or choose Review later. A pending banner keeps unsaved proposals easy to find.",
+    target: "ai-control",
+    placement: "right",
+  },
+  {
+    eyebrow: "Step 5",
+    title: "Replay these tips anytime",
+    body:
+      "Choose Tips & tour whenever you want this walkthrough again. Nothing in the tour edits, applies, publishes, or exports a chart.",
+    target: "tips",
+    placement: "right",
+  },
+];
 
 const defaultBackupHealth: BackupHealthState = {
   reminderDays: 30,
@@ -201,6 +276,13 @@ function storedBackupHealth(): BackupHealthState {
   } catch {
     return defaultBackupHealth;
   }
+}
+
+function storedPresentationMode(): ChartPresentationMode {
+  if (typeof window === "undefined") return "compact";
+  return window.localStorage.getItem(PRESENTATION_STORAGE_KEY) === "individual"
+    ? "individual"
+    : "compact";
 }
 
 function connectorRoutingSnapshot(): ConnectorRoutingMode {
@@ -342,14 +424,20 @@ function editorSnapshot(
 function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
   const { unit } = data;
   const hasChildren = Boolean(data.childCount);
-  const sourceHandleCount = Math.max(1, data.sourcePortCount ?? data.childCount ?? 0);
+  const compactEntries = data.compactEntries ?? [];
+  const sourceHandleCount = Math.max(0, data.sourcePortCount ?? data.childCount ?? 0);
+  const targetSide = data.targetSide ?? "top";
 
   return (
     <article
       className={`org-node org-node--${unit.type} ${
         selected ? "is-selected" : ""
-      } ${data.isSearchMatch ? "is-search-match" : ""} ${data.aiChange ? `is-ai-${data.aiChange}` : ""} ${unit.planningState === "planned" ? "is-planned" : ""} ${unit.sourceCertainty === "needs_review" ? "needs-source-review" : ""}`}
+      } ${data.isSearchMatch ? "is-search-match" : ""} ${data.aiChange ? `is-ai-${data.aiChange}` : ""} ${unit.planningState === "planned" ? "is-planned" : ""} ${unit.sourceCertainty === "needs_review" ? "needs-source-review" : ""} ${data.presentationMode === "compact" ? `is-compact is-level-${data.hierarchyLevel ?? 1}` : ""} ${data.compactSidecar ? "is-compact-sidecar" : ""} ${compactEntries.length ? "has-compact-list" : ""}`}
       aria-label={`${unit.name}, ${unit.positionTitle}, ${statusLabels[unit.positionStatus]}`}
+      style={{
+        width: data.visualWidth,
+        height: data.visualHeight,
+      }}
     >
       {data.aiChange ? (
         <span className={`org-node__ai-change org-node__ai-change--${data.aiChange}`}>
@@ -365,9 +453,13 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
       <Handle
         id="parent"
         type="target"
-        position={Position.Top}
+        position={targetSide === "left" ? Position.Left : Position.Top}
         isConnectable={false}
-        style={{ left: `calc(50% + ${data.targetPortOffset ?? 0}px)` }}
+        style={
+          targetSide === "left"
+            ? { top: `calc(50% + ${data.targetPortOffset ?? 0}px)` }
+            : { left: `calc(50% + ${data.targetPortOffset ?? 0}px)` }
+        }
       />
       <div className="org-node__eyebrow">
         <span>{unit.type}</span>
@@ -388,7 +480,42 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
             : statusLabels[unit.positionStatus]
         }</span>
       </div>
-      {hasChildren ? (
+      {compactEntries.length ? (
+        <div className="org-node__compact-roster">
+          <div className="org-node__compact-roster-heading">
+            <span>{compactEntries.length} listed assignment{compactEntries.length === 1 ? "" : "s"}</span>
+            <small>Level 4+ shown in this group</small>
+          </div>
+          <ul>
+            {compactEntries.map((entry) => (
+              <li
+                key={entry.id}
+                className={`${entry.selected ? "is-selected" : ""} ${entry.isSearchMatch ? "is-search-match" : ""} ${entry.aiChange ? `is-ai-${entry.aiChange}` : ""}`}
+              >
+                <button
+                  type="button"
+                  className="nodrag"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    data.onSelectCompactEntry?.(entry.id);
+                  }}
+                  aria-label={`Open ${entry.unit.name}`}
+                >
+                  <strong>{entry.unit.shortName || entry.unit.name}</strong>
+                  <span>{entry.unit.positionTitle}</span>
+                  <small className={`status--${entry.unit.positionStatus}`}>
+                    <span className="status-marker" aria-hidden="true" />
+                    {entry.unit.positionStatus === "filled"
+                      ? entry.unit.assignmentLabel
+                      : statusLabels[entry.unit.positionStatus]}
+                  </small>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {hasChildren && data.presentationMode !== "compact" ? (
         <button
           type="button"
           className="org-node__collapse nodrag"
@@ -407,18 +534,29 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
           <span>{data.childCount}</span>
         </button>
       ) : null}
-      {Array.from({ length: sourceHandleCount }, (_, index) => (
+      {hasChildren ? (
         <Handle
-          key={`route-${index}`}
-          id={`route-${index}`}
+          id="org-source"
+          className="org-node__stable-source"
           type="source"
           position={Position.Bottom}
           isConnectable={false}
-          style={{
-            left: `calc(50% + ${sourcePortOffset(index, sourceHandleCount, NODE_WIDTH)}px)`,
-          }}
         />
-      ))}
+      ) : null}
+      {data.presentationMode === "individual" ? (
+        Array.from({ length: sourceHandleCount }, (_, index) => (
+          <Handle
+            key={`route-${index}`}
+            id={`route-${index}`}
+            type="source"
+            position={Position.Bottom}
+            isConnectable={false}
+            style={{
+              left: `calc(50% + ${sourcePortOffset(index, sourceHandleCount, data.visualWidth ?? NODE_WIDTH)}px)`,
+            }}
+          />
+        ))
+      ) : null}
     </article>
   );
 }
@@ -527,11 +665,14 @@ function StudioWorkspace() {
   const [charts, setCharts] = useState<ChartDocument[]>([]);
   const [activeChartId, setActiveChartId] = useState("");
   const [libraryLoading, setLibraryLoading] = useState(true);
-  const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
+  const [saveState, setSaveState] = useState<"saved" | "saving" | "proposal" | "error">("saved");
   const [selectedId, setSelectedId] = useState("");
   const [selectedEdgeId, setSelectedEdgeId] = useState("");
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
+  const [presentationMode, setPresentationMode] = useState<ChartPresentationMode>(
+    storedPresentationMode,
+  );
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("respect-pins");
   const [moveBranchOnDrag, setMoveBranchOnDrag] = useState(true);
   const [marqueeSelectionEnabled, setMarqueeSelectionEnabled] = useState(false);
@@ -596,6 +737,9 @@ function StudioWorkspace() {
   );
   const [dismissedMcpRevision, setDismissedMcpRevision] = useState(0);
   const [pendingAiProposal, setPendingAiProposal] = useState<AiChartProposal | null>(null);
+  const [pendingAiProposalSummaries, setPendingAiProposalSummaries] = useState<
+    AiPendingProposalSummary[]
+  >([]);
   const [pendingAiImportProposal, setPendingAiImportProposal] =
     useState<AiImportProposal | null>(null);
   const [aiProposalBusy, setAiProposalBusy] = useState<"load" | "accept" | "reject" | null>(null);
@@ -610,6 +754,11 @@ function StudioWorkspace() {
   const [comparisonTargetId, setComparisonTargetId] = useState("");
   const [comparisonBusy, setComparisonBusy] = useState(false);
   const [planningFilter, setPlanningFilter] = useState<PlanningFilter>("all");
+  const [onboardingStep, setOnboardingStep] = useState<number | null>(null);
+  const [tourGeometry, setTourGeometry] = useState<TourGeometry>({
+    target: null,
+    panel: { top: 0, left: 0 },
+  });
   const hydratedChartRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveGenerationRef = useRef(0);
@@ -619,6 +768,8 @@ function StudioWorkspace() {
   const groupDragRef = useRef<GroupDragState | null>(null);
   const routeCornerDragRef = useRef<RouteCornerDragState | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const onboardingDialogRef = useRef<HTMLElement | null>(null);
+  const onboardingInitializedRef = useRef(false);
   const { fitView } = useReactFlow<OrgFlowNode>();
 
   const activeChart = charts.find((chart) => chart.id === activeChartId) ?? charts[0];
@@ -705,12 +856,151 @@ function StudioWorkspace() {
     setMcpControl(data.control);
   }, []);
 
+  const loadPendingAiProposals = useCallback(async () => {
+    const response = await fetch("/api/ai-proposals?status=pending", { cache: "no-store" });
+    if (!response.ok) throw new Error("Pending AI proposals could not be loaded.");
+    const data = (await response.json()) as AiPendingProposalsResponse;
+    setPendingAiProposalSummaries(data.proposals);
+    return data.proposals;
+  }, []);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadImportIntakes().catch(() => undefined);
     }, 0);
     return () => window.clearTimeout(timer);
   }, [loadImportIntakes]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      try {
+        const response = await fetch("/api/ai-proposals?status=pending", {
+          cache: "no-store",
+        });
+        if (response.ok && !cancelled) {
+          const data = (await response.json()) as AiPendingProposalsResponse;
+          setPendingAiProposalSummaries(data.proposals);
+        }
+      } catch {
+        // The persistent review banner recovers on the next successful local poll.
+      }
+      if (!cancelled) timer = setTimeout(poll, 1_500);
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (libraryLoading || onboardingInitializedRef.current) return;
+    onboardingInitializedRef.current = true;
+    let completed = false;
+    try {
+      completed = window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === "complete";
+    } catch {
+      completed = false;
+    }
+    if (completed) return;
+    const timer = window.setTimeout(() => setOnboardingStep(0), 500);
+    return () => window.clearTimeout(timer);
+  }, [libraryLoading]);
+
+  useEffect(() => {
+    if (onboardingStep === null) return;
+    const step = ONBOARDING_TOUR_STEPS[onboardingStep];
+    const updateGeometry = () => {
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const panelWidth = Math.min(390, viewportWidth - 32);
+      const panelHeight = 300;
+      const clamp = (value: number, minimum: number, maximum: number) =>
+        Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
+      const targetElement = step.target
+        ? [...document.querySelectorAll<HTMLElement>(`[data-tour-target="${step.target}"]`)].find(
+            (candidate) => {
+              const candidateRect = candidate.getBoundingClientRect();
+              return (
+                candidateRect.width > 0 &&
+                candidateRect.height > 0 &&
+                candidateRect.right > 0 &&
+                candidateRect.bottom > 0 &&
+                candidateRect.left < viewportWidth &&
+                candidateRect.top < viewportHeight
+              );
+            },
+          )
+        : null;
+      const rect = targetElement?.getBoundingClientRect();
+      const hasVisibleTarget = Boolean(rect && rect.width > 0 && rect.height > 0);
+      if (!rect || !hasVisibleTarget || step.placement === "center") {
+        setTourGeometry({
+          target: null,
+          panel: {
+            top: Math.max(16, (viewportHeight - panelHeight) / 2),
+            left: Math.max(16, (viewportWidth - panelWidth) / 2),
+          },
+        });
+        return;
+      }
+      const padding = 8;
+      const target = {
+        top: Math.max(4, rect.top - padding),
+        left: Math.max(4, rect.left - padding),
+        width: Math.min(viewportWidth - 8, rect.width + padding * 2),
+        height: Math.min(viewportHeight - 8, rect.height + padding * 2),
+      };
+      const fitsRight = rect.right + 18 + panelWidth <= viewportWidth - 16;
+      const panelLeft =
+        step.placement === "right" && fitsRight
+          ? rect.right + 18
+          : clamp(rect.left, 16, viewportWidth - panelWidth - 16);
+      const panelTop =
+        step.placement === "bottom" || !fitsRight
+          ? clamp(rect.bottom + 18, 16, viewportHeight - panelHeight - 16)
+          : clamp(rect.top, 16, viewportHeight - panelHeight - 16);
+      setTourGeometry({ target, panel: { top: panelTop, left: panelLeft } });
+    };
+    updateGeometry();
+    window.addEventListener("resize", updateGeometry);
+    window.addEventListener("scroll", updateGeometry, true);
+    window.requestAnimationFrame(() => onboardingDialogRef.current?.focus());
+    return () => {
+      window.removeEventListener("resize", updateGeometry);
+      window.removeEventListener("scroll", updateGeometry, true);
+    };
+  }, [onboardingStep, workspaceView]);
+
+  useEffect(() => {
+    if (onboardingStep === null) return;
+    const handleTourKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "complete");
+        setOnboardingStep(null);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setOnboardingStep((current) =>
+          current === null ? null : Math.min(current + 1, ONBOARDING_TOUR_STEPS.length - 1),
+        );
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setOnboardingStep((current) => (current === null ? null : Math.max(current - 1, 0)));
+      }
+    };
+    window.addEventListener("keydown", handleTourKeyDown);
+    return () => window.removeEventListener("keydown", handleTourKeyDown);
+  }, [onboardingStep]);
+
+  useEffect(() => {
+    const reviewNeedsAttention =
+      pendingAiProposal !== null ||
+      pendingAiImportProposal !== null ||
+      (mcpActivity.phase === "succeeded" && mcpActivity.completionKind === "review_ready");
+    if (reviewNeedsAttention) setOnboardingStep(null);
+  }, [mcpActivity.completionKind, mcpActivity.phase, pendingAiImportProposal, pendingAiProposal]);
 
   useEffect(() => {
     if (workspaceView !== "ai") return;
@@ -796,6 +1086,23 @@ function StudioWorkspace() {
     [],
   );
 
+  const changePresentationMode = useCallback(
+    (mode: ChartPresentationMode) => {
+      window.localStorage.setItem(PRESENTATION_STORAGE_KEY, mode);
+      setPresentationMode(mode);
+      setSelectedEdgeId("");
+      setNotice(
+        mode === "compact"
+          ? "Compact groups enabled. Major units remain cards, terminal level 4 assignments are listed inside their parent, and level 3 connectors enter from the left. Chart data is unchanged."
+          : "Individual cards enabled. Every chart record is shown as its own card using its saved position.",
+      );
+      window.requestAnimationFrame(() => {
+        void fitView({ duration: 420, padding: 0.14 });
+      });
+    },
+    [fitView],
+  );
+
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
       if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -872,7 +1179,7 @@ function StudioWorkspace() {
       setSelectedEdgeId("");
       setCollapsedIds(new Set());
       setWorkspaceView("canvas");
-      setSaveState("saved");
+      setSaveState("proposal");
       setNotice(
         `Previewing ${proposal.summary.total} proposed AI change${proposal.summary.total === 1 ? "" : "s"}. Nothing has been saved yet.`,
       );
@@ -880,6 +1187,70 @@ function StudioWorkspace() {
     },
     [fitView, setEdges, setNodes],
   );
+
+  const reviewPendingAiProposal = useCallback(
+    async (proposalId = pendingAiProposalSummaries[0]?.id) => {
+      if (!proposalId || aiProposalBusy) return;
+      setAiProposalBusy("load");
+      try {
+        const response = await fetch(
+          `/api/ai-proposals?proposalId=${encodeURIComponent(proposalId)}`,
+          { cache: "no-store" },
+        );
+        const data = (await response.json()) as AiProposalResponse & { error?: string };
+        if (!response.ok || !data.proposal) {
+          throw new Error(data.error ?? "The pending AI proposal could not be loaded.");
+        }
+        showAiProposal(data.proposal);
+      } catch (error) {
+        await loadPendingAiProposals().catch(() => undefined);
+        setSaveState("error");
+        setNotice(
+          error instanceof Error ? error.message : "The pending AI proposal could not be loaded.",
+        );
+      } finally {
+        setAiProposalBusy(null);
+      }
+    },
+    [aiProposalBusy, loadPendingAiProposals, pendingAiProposalSummaries, showAiProposal],
+  );
+
+  const deferAiProposal = useCallback(() => {
+    const proposal = pendingAiProposal;
+    if (!proposal || aiProposalBusy) return;
+    setPendingAiProposal(null);
+    setNodes(proposal.current.nodes);
+    setEdges(proposal.current.edges);
+    setSelectedId(proposal.current.nodes[0]?.id ?? "");
+    setSelectedEdgeId("");
+    setSaveState("saved");
+    setDismissedMcpRevision(mcpActivity.revision);
+    const deadline = new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(proposal.expiresAt));
+    setNotice(
+      `Review deferred. The saved chart is unchanged, and this proposal remains available from the pending-review banner until ${deadline}.`,
+    );
+    window.requestAnimationFrame(() => {
+      hydratedChartRef.current = proposal.current.id;
+      void fitView({ duration: 320, padding: 0.14 });
+    });
+  }, [aiProposalBusy, fitView, mcpActivity.revision, pendingAiProposal, setEdges, setNodes]);
+
+  const startOnboardingTour = useCallback(() => {
+    setOnboardingStep(0);
+  }, []);
+
+  const finishOnboardingTour = useCallback((noticeMessage: string) => {
+    try {
+      window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "complete");
+    } catch {
+      // The tour can still close when local preference storage is unavailable.
+    }
+    setOnboardingStep(null);
+    setNotice(noticeMessage);
+  }, []);
 
   const reviewMcpUpdate = useCallback(async () => {
     if (!mcpActivity.chartId && !mcpActivity.proposalId) return;
@@ -991,6 +1362,9 @@ function StudioWorkspace() {
                 (chart) => chart.id === proposal.chartId,
               );
               setPendingAiProposal(null);
+              setPendingAiProposalSummaries((current) =>
+                current.filter((item) => item.id !== proposal.id),
+              );
               setCharts(library.charts);
               if (currentChart) {
                 setNodes(currentChart.nodes);
@@ -1009,6 +1383,9 @@ function StudioWorkspace() {
         const resolvedChart = action === "accept" ? data.chart : proposal.current;
         if (!resolvedChart) throw new Error("The applied chart was not returned by local storage.");
         setPendingAiProposal(null);
+        setPendingAiProposalSummaries((current) =>
+          current.filter((item) => item.id !== proposal.id),
+        );
         setCharts((current) =>
           current.map((chart) => (chart.id === resolvedChart.id ? resolvedChart : chart)),
         );
@@ -1231,7 +1608,84 @@ function StudioWorkspace() {
     [edges, nodes, pushUndoSnapshot, selectedId],
   );
 
-  const routingNodes = useDeferredValue(nodes);
+  const compactPresentation = useMemo(
+    () => deriveCompactPresentation(nodes, edges),
+    [edges, nodes],
+  );
+  const compactLayoutNodes = useMemo(
+    () => arrangeCompactPresentation(nodes, edges, compactPresentation),
+    [compactPresentation, edges, nodes],
+  );
+  const compactPositionById = useMemo(
+    () => new Map(compactLayoutNodes.map((flowNode) => [flowNode.id, flowNode.position])),
+    [compactLayoutNodes],
+  );
+  const presentationHiddenIds = useMemo(() => {
+    const hidden = presentationMode === "compact" ? new Set<string>() : new Set(hiddenIds);
+    if (presentationMode === "compact") {
+      compactPresentation.listedNodeIds.forEach((id) => hidden.add(id));
+    }
+    return hidden;
+  }, [compactPresentation.listedNodeIds, hiddenIds, presentationMode]);
+  const presentationNodes = useMemo(
+    () =>
+      nodes.map((flowNode) => {
+        if (presentationMode === "individual") {
+          return {
+            ...flowNode,
+            width: NODE_WIDTH,
+            height: NODE_HEIGHT,
+            measured: { width: NODE_WIDTH, height: NODE_HEIGHT },
+            style: { ...flowNode.style, width: NODE_WIDTH, height: NODE_HEIGHT },
+          };
+        }
+        const level = compactPresentation.levels.get(flowNode.id) ?? 1;
+        const entries = compactPresentation.entriesByParent.get(flowNode.id) ?? [];
+        const sidecar = compactPresentation.sidecarNodeIds.has(flowNode.id);
+        const dimensions = compactNodeDimensions(level, entries.length, sidecar);
+        return {
+          ...flowNode,
+          width: dimensions.width,
+          height: dimensions.height,
+          measured: { width: dimensions.width, height: dimensions.height },
+          position: compactPositionById.get(flowNode.id) ?? flowNode.position,
+          style: {
+            ...flowNode.style,
+            width: dimensions.width,
+            height: dimensions.height,
+          },
+        };
+      }),
+    [
+      compactPositionById,
+      compactPresentation.entriesByParent,
+      compactPresentation.levels,
+      compactPresentation.sidecarNodeIds,
+      nodes,
+      presentationMode,
+    ],
+  );
+  const presentationEdges = useMemo(
+    () =>
+      edges
+        .filter(
+          (edge) =>
+            !presentationHiddenIds.has(edge.source) &&
+            !presentationHiddenIds.has(edge.target),
+        )
+        .map((edge) =>
+          presentationMode === "compact" && edge.data?.manualRoute
+            ? { ...edge, data: { ...edge.data, manualRoute: undefined } }
+            : edge,
+        ),
+    [edges, presentationHiddenIds, presentationMode],
+  );
+  const visiblePresentationNodes = useMemo(
+    () => presentationNodes.filter((flowNode) => !presentationHiddenIds.has(flowNode.id)),
+    [presentationHiddenIds, presentationNodes],
+  );
+  const routingNodes = useDeferredValue(visiblePresentationNodes);
+  const routingEdges = useDeferredValue(presentationEdges);
 
   const edgeRoutes = useMemo(
     () =>
@@ -1240,13 +1694,26 @@ function StudioWorkspace() {
           id: flowNode.id,
           x: flowNode.position.x,
           y: flowNode.position.y,
-          width: NODE_WIDTH,
-          height: NODE_HEIGHT,
+          width: Number(flowNode.style?.width) || NODE_WIDTH,
+          height: Number(flowNode.style?.height) || NODE_HEIGHT,
+          targetSide:
+            presentationMode === "compact" &&
+            ((compactPresentation.levels.get(flowNode.id) ?? 1) >= 3 ||
+              compactPresentation.sidecarNodeIds.has(flowNode.id))
+              ? "left"
+              : "top",
         })),
-        edges,
-        connectorRoutingMode,
+        routingEdges,
+        presentationMode === "compact" ? "combed" : connectorRoutingMode,
       ),
-    [connectorRoutingMode, edges, routingNodes],
+    [
+      compactPresentation.levels,
+      compactPresentation.sidecarNodeIds,
+      connectorRoutingMode,
+      presentationMode,
+      routingEdges,
+      routingNodes,
+    ],
   );
 
   const startRouteCornerDrag = useCallback(
@@ -1330,11 +1797,11 @@ function StudioWorkspace() {
 
   const sourcePortCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    edgeRoutes.forEach((route) => {
-      counts.set(route.sourceId, route.sourcePortCount);
+    presentationEdges.forEach((edge) => {
+      counts.set(edge.source, (counts.get(edge.source) ?? 0) + 1);
     });
     return counts;
-  }, [edgeRoutes]);
+  }, [presentationEdges]);
 
   const targetPortOffsets = useMemo(() => {
     const offsets = new Map<string, number>();
@@ -1343,9 +1810,13 @@ function StudioWorkspace() {
       const targetNode = nodeById.get(route.targetId);
       const endpoint = route.points.at(-1);
       if (!targetNode || !endpoint) return;
+      const targetWidth = Number(targetNode.style?.width) || NODE_WIDTH;
+      const targetHeight = Number(targetNode.style?.height) || NODE_HEIGHT;
       offsets.set(
         route.targetId,
-        endpoint.x - (targetNode.position.x + NODE_WIDTH / 2),
+        route.targetSide === "left"
+          ? endpoint.y - (targetNode.position.y + targetHeight / 2)
+          : endpoint.x - (targetNode.position.x + targetWidth / 2),
       );
     });
     return offsets;
@@ -1361,48 +1832,106 @@ function StudioWorkspace() {
     };
   }, [activeChartId, pendingAiProposal]);
 
+  const selectCompactEntry = useCallback((id: string) => {
+    setSelectedId(id);
+    setSelectedEdgeId("");
+    setNotice("Listed assignment selected. Its complete record remains available in the detail panel.");
+  }, []);
+
   const displayNodes = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
+    const matchesQuery = (flowNode: OrgFlowNode) =>
+      normalizedQuery.length > 1 &&
+      [
+        flowNode.data.unit.name,
+        flowNode.data.unit.shortName,
+        flowNode.data.unit.positionTitle,
+        flowNode.data.unit.assignmentLabel,
+      ].some((value) => value.toLowerCase().includes(normalizedQuery));
+    const nodeById = new Map(nodes.map((flowNode) => [flowNode.id, flowNode]));
 
-    return nodes.map((flowNode) => ({
-      ...flowNode,
-      hidden: hiddenIds.has(flowNode.id),
-      data: {
-        ...flowNode.data,
-        collapsed: collapsedIds.has(flowNode.id),
-        childCount: edges.filter((edge) => edge.source === flowNode.id).length,
-        sourcePortCount: sourcePortCounts.get(flowNode.id) ?? 0,
-        targetPortOffset: targetPortOffsets.get(flowNode.id) ?? 0,
-        aiChange: aiPreviewMarks?.addedNodes.has(flowNode.id)
-          ? "added"
-          : aiPreviewMarks?.changedNodes.has(flowNode.id)
-            ? "changed"
-            : (undefined as "added" | "changed" | undefined),
-        isSearchMatch:
-          normalizedQuery.length > 1 &&
-          [
-            flowNode.data.unit.name,
-            flowNode.data.unit.shortName,
-            flowNode.data.unit.positionTitle,
-            flowNode.data.unit.assignmentLabel,
-          ].some((value) => value.toLowerCase().includes(normalizedQuery)),
-        onToggleCollapse: toggleCollapse,
-      },
-    }));
-  }, [aiPreviewMarks, collapsedIds, edges, hiddenIds, nodes, searchQuery, sourcePortCounts, targetPortOffsets, toggleCollapse]);
+    return presentationNodes.map((flowNode) => {
+      const compactEntries =
+        presentationMode === "compact"
+          ? (compactPresentation.entriesByParent.get(flowNode.id) ?? []).map((entry) => {
+              const entryNode = nodeById.get(entry.id);
+              return {
+                ...entry,
+                selected: entry.id === selectedId,
+                isSearchMatch: entryNode ? matchesQuery(entryNode) : false,
+                aiChange: aiPreviewMarks?.addedNodes.has(entry.id)
+                  ? ("added" as const)
+                  : aiPreviewMarks?.changedNodes.has(entry.id)
+                    ? ("changed" as const)
+                    : undefined,
+              };
+            })
+          : [];
+      const level = compactPresentation.levels.get(flowNode.id) ?? 1;
+      const targetSide: "top" | "left" =
+        presentationMode === "compact" &&
+        (level >= 3 || compactPresentation.sidecarNodeIds.has(flowNode.id))
+          ? "left"
+          : "top";
+      return {
+        ...flowNode,
+        hidden: presentationHiddenIds.has(flowNode.id),
+        data: {
+          ...flowNode.data,
+          collapsed: presentationMode === "individual" && collapsedIds.has(flowNode.id),
+          childCount: edges.filter((edge) => edge.source === flowNode.id).length,
+          sourcePortCount: sourcePortCounts.get(flowNode.id) ?? 0,
+          targetPortOffset: targetPortOffsets.get(flowNode.id) ?? 0,
+          targetSide,
+          hierarchyLevel: level,
+          presentationMode,
+          compactEntries,
+          compactSidecar: compactPresentation.sidecarNodeIds.has(flowNode.id),
+          visualWidth: Number(flowNode.style?.width) || NODE_WIDTH,
+          visualHeight: Number(flowNode.style?.height) || NODE_HEIGHT,
+          aiChange: aiPreviewMarks?.addedNodes.has(flowNode.id)
+            ? "added"
+            : aiPreviewMarks?.changedNodes.has(flowNode.id)
+              ? "changed"
+              : (undefined as "added" | "changed" | undefined),
+          isSearchMatch: matchesQuery(flowNode) || compactEntries.some((entry) => entry.isSearchMatch),
+          onToggleCollapse: presentationMode === "individual" ? toggleCollapse : undefined,
+          onSelectCompactEntry: selectCompactEntry,
+        },
+      };
+    });
+  }, [
+    aiPreviewMarks,
+    collapsedIds,
+    compactPresentation.entriesByParent,
+    compactPresentation.levels,
+    compactPresentation.sidecarNodeIds,
+    edges,
+    nodes,
+    presentationHiddenIds,
+    presentationMode,
+    presentationNodes,
+    searchQuery,
+    selectedId,
+    selectCompactEntry,
+    sourcePortCounts,
+    targetPortOffsets,
+    toggleCollapse,
+  ]);
 
   const displayEdges = useMemo(
     () => {
-      return edges.map((edge) => {
+      return presentationEdges.flatMap((edge) => {
         const route = edgeRoutes.get(edge.id);
-        return {
+        if (!route) return [];
+        return [{
           ...edge,
           type: "orgRelationship",
-          selectable: true,
-          focusable: true,
-          selected: edge.id === selectedEdgeId,
-          sourceHandle: route?.sourceHandleId,
-          targetHandle: route?.targetHandleId,
+          selectable: presentationMode === "individual",
+          focusable: presentationMode === "individual",
+          selected: presentationMode === "individual" && edge.id === selectedEdgeId,
+          sourceHandle: "org-source",
+          targetHandle: route.targetHandleId,
           data: {
             ...edge.data,
             aiChange: aiPreviewMarks?.addedEdges.has(edge.id)
@@ -1415,17 +1944,17 @@ function StudioWorkspace() {
             onCornerDrag: dragRouteCorner,
             onCornerDragEnd: finishRouteCornerDrag,
           },
-          hidden: hiddenIds.has(edge.source) || hiddenIds.has(edge.target),
-        };
+          hidden: false,
+        }];
       });
     },
     [
       dragRouteCorner,
       aiPreviewMarks,
       edgeRoutes,
-      edges,
+      presentationEdges,
+      presentationMode,
       finishRouteCornerDrag,
-      hiddenIds,
       selectedEdgeId,
       startRouteCornerDrag,
     ],
@@ -1488,6 +2017,7 @@ function StudioWorkspace() {
         effectiveExportAudience,
         activeChart.updatedAt,
         connectorRoutingMode,
+        presentationMode,
       );
       return {
         scene,
@@ -1501,7 +2031,15 @@ function StudioWorkspace() {
         error: error instanceof Error ? error.message : "This export profile is not valid.",
       };
     }
-  }, [activeChart, connectorRoutingMode, edges, effectiveExportAudience, exportPreset, nodes]);
+  }, [
+    activeChart,
+    connectorRoutingMode,
+    edges,
+    effectiveExportAudience,
+    exportPreset,
+    nodes,
+    presentationMode,
+  ]);
   const exportCardWidth = exportFit?.scene && exportFit.viewport
     ? exportFit.scene.nodes[0].width * exportFit.viewport.scale
     : 0;
@@ -1812,11 +2350,15 @@ function StudioWorkspace() {
     (id: string) => {
       setSelectedId(id);
       setWorkspaceView("canvas");
+      const visibleId =
+        presentationMode === "compact" && compactPresentation.listedNodeIds.has(id)
+          ? (compactPresentation.parentById.get(id) ?? id)
+          : id;
       window.requestAnimationFrame(() => {
-        void fitView({ nodes: [{ id }], duration: 420, padding: 1.8 });
+        void fitView({ nodes: [{ id: visibleId }], duration: 420, padding: 1.8 });
       });
     },
-    [fitView],
+    [compactPresentation.listedNodeIds, compactPresentation.parentById, fitView, presentationMode],
   );
 
   const handleSearch = (value: string) => {
@@ -1836,8 +2378,12 @@ function StudioWorkspace() {
     if (match) {
       setSelectedId(match.id);
       setCollapsedIds(new Set());
+      const visibleId =
+        presentationMode === "compact" && compactPresentation.listedNodeIds.has(match.id)
+          ? (compactPresentation.parentById.get(match.id) ?? match.id)
+          : match.id;
       window.requestAnimationFrame(() => {
-        void fitView({ nodes: [{ id: match.id }], duration: 420, padding: 1.8 });
+        void fitView({ nodes: [{ id: visibleId }], duration: 420, padding: 1.8 });
       });
     }
   };
@@ -1875,6 +2421,9 @@ function StudioWorkspace() {
       planningState: String(
         formData.get("planningState") ?? "current",
       ) as PlanningState,
+      compactDisplay: String(
+        formData.get("compactDisplay") ?? "auto",
+      ) as CompactDisplay,
       publicationVisibility: String(
         formData.get("publicationVisibility") ?? "internal",
       ) as "internal" | "public",
@@ -2826,9 +3375,10 @@ function StudioWorkspace() {
         effectiveExportAudience,
         undefined,
         connectorRoutingMode,
+        presentationMode,
       );
       const viewport = resolveExportViewport(scene, exportPreset);
-      const fileStem = `${safeExportFileStem(activeChart.name)}-v${activeChart.version}-${effectiveExportAudience}-${exportPreset}`;
+      const fileStem = `${safeExportFileStem(activeChart.name)}-v${activeChart.version}-${effectiveExportAudience}-${presentationMode}-${exportPreset}`;
       if (format === "svg") {
         downloadBlob(
           new Blob([buildChartSvg(scene, exportPreset)], { type: "image/svg+xml;charset=utf-8" }),
@@ -2860,7 +3410,7 @@ function StudioWorkspace() {
         );
       }
       setNotice(
-        `${format.toUpperCase()} exported from version ${activeChart.version} using the ${effectiveExportAudience} audience and ${EXPORT_PRESETS.find((preset) => preset.id === exportPreset)?.label ?? exportPreset} profile.`,
+        `${format.toUpperCase()} exported from version ${activeChart.version} using the ${effectiveExportAudience} audience, ${presentationMode === "compact" ? "Compact groups" : "Individual cards"} presentation, and ${EXPORT_PRESETS.find((preset) => preset.id === exportPreset)?.label ?? exportPreset} profile.`,
       );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "The chart export could not be created.");
@@ -2906,6 +3456,15 @@ function StudioWorkspace() {
         (change) => aiReviewCategory === "all" || change.category === aiReviewCategory,
       )
     : [];
+  const nextPendingAiProposal = pendingAiProposalSummaries[0];
+  const reviewNeedsAttention =
+    pendingAiProposal !== null ||
+    pendingAiImportProposal !== null ||
+    (mcpActivity.phase === "succeeded" && mcpActivity.completionKind === "review_ready");
+  const currentTourStep =
+    onboardingStep === null || reviewNeedsAttention
+      ? null
+      : ONBOARDING_TOUR_STEPS[onboardingStep];
 
   return (
     <div
@@ -2988,7 +3547,17 @@ function StudioWorkspace() {
           <kbd>/</kbd>
         </label>
 
-        <div className="topbar__status">
+        <button
+          type="button"
+          className="mobile-tour-launch"
+          onClick={startOnboardingTour}
+          data-tour-target="tips"
+          aria-label="Open tips and tour"
+        >
+          <Question size={20} aria-hidden="true" />
+        </button>
+
+        <div className="topbar__status" data-tour-target="chart-status">
           <label className="chart-switcher">
             <span className="sr-only">Active organizational chart</span>
             <select
@@ -3007,7 +3576,13 @@ function StudioWorkspace() {
           </label>
           <span className="version-chip">{version}</span>
           <span className={`save-status save-status--${saveState}`}>
-            {saveState === "saving" ? "Saving" : saveState === "error" ? "Save issue" : "Saved"}
+            {saveState === "saving"
+              ? "Saving"
+              : saveState === "proposal"
+                ? "Not applied"
+                : saveState === "error"
+                  ? "Save issue"
+                  : "Saved"}
           </span>
           <span className="validation-status">
             {!activeChart ? (
@@ -3043,7 +3618,11 @@ function StudioWorkspace() {
         </div>
       </header>
 
-      <aside className="sidebar" aria-label="Workspace navigation">
+      <aside
+        className="sidebar"
+        aria-label="Workspace navigation"
+        data-tour-target="navigation"
+      >
         <div className="sidebar__section">
           <p className="sidebar__label">Workspace</p>
           <button
@@ -3106,6 +3685,7 @@ function StudioWorkspace() {
             type="button"
             className={workspaceView === "ai" ? "is-active" : ""}
             onClick={() => setWorkspaceView("ai")}
+            data-tour-target="ai-control"
           >
             <Robot size={19} aria-hidden="true" />
             <span>Local AI control</span>
@@ -3125,6 +3705,15 @@ function StudioWorkspace() {
               {versions.length || activeChart?.version || 0}
             </span>
           </button>
+          <button
+            type="button"
+            className="tour-nav-button"
+            onClick={startOnboardingTour}
+            data-tour-target="tips"
+          >
+            <Question size={19} aria-hidden="true" />
+            <span>Tips &amp; tour</span>
+          </button>
         </div>
 
         <div className="sidebar__summary">
@@ -3137,6 +3726,31 @@ function StudioWorkspace() {
       </aside>
 
       <main className="workspace">
+        {nextPendingAiProposal && !pendingAiProposal ? (
+          <section className="pending-review-banner" role="status" aria-live="polite">
+            <span className="pending-review-banner__icon" aria-hidden="true">
+              <Robot size={19} />
+            </span>
+            <span className="pending-review-banner__copy">
+              <strong>
+                {pendingAiProposalSummaries.length} AI proposal
+                {pendingAiProposalSummaries.length === 1 ? "" : "s"} awaiting review
+              </strong>
+              <span>
+                Nothing has been applied. Review the Before and After fields to decide what
+                happens to the saved chart.
+              </span>
+            </span>
+            <button
+              type="button"
+              className="button button--primary"
+              onClick={() => void reviewPendingAiProposal(nextPendingAiProposal.id)}
+              disabled={aiProposalBusy !== null}
+            >
+              {aiProposalBusy === "load" ? "Opening…" : "Review proposal"}
+            </button>
+          </section>
+        ) : null}
         <section className="prototype-notice" aria-live="polite">
           <span><Sparkle size={16} aria-hidden="true" /> Technical prototype</span>
           <p>{notice}</p>
@@ -3148,12 +3762,48 @@ function StudioWorkspace() {
         {workspaceView === "canvas" ? (
           <section className="canvas-panel" aria-label="Interactive organizational chart">
             <div className="canvas-toolbar">
-              <div className="layout-control">
+              <div className="presentation-control" data-tour-target="presentation">
+                <span>
+                  <strong>Presentation</strong>
+                  <small>Changes the drawing, not the saved hierarchy</small>
+                </span>
+                <div role="group" aria-label="Chart presentation">
+                  <button
+                    type="button"
+                    className={presentationMode === "compact" ? "is-active" : ""}
+                    aria-pressed={presentationMode === "compact"}
+                    onClick={() => changePresentationMode("compact")}
+                  >
+                    <Rows size={16} aria-hidden="true" />
+                    Compact groups
+                  </button>
+                  <button
+                    type="button"
+                    className={presentationMode === "individual" ? "is-active" : ""}
+                    aria-pressed={presentationMode === "individual"}
+                    onClick={() => changePresentationMode("individual")}
+                  >
+                    <SquaresFour size={16} aria-hidden="true" />
+                    Individual cards
+                  </button>
+                </div>
+              </div>
+              {presentationMode === "compact" ? (
+                <div className="compact-layout-receipt" aria-label="Compact layout rules">
+                  <TreeStructure size={20} aria-hidden="true" />
+                  <span>
+                    <strong>Auto arranged</strong>
+                    <small>Column stacks · fixed hierarchy rails · level 3 left entry</small>
+                  </span>
+                </div>
+              ) : (
+                <div className="layout-control">
                 <label htmlFor="layout-mode">Layout mode</label>
                 <select
                   id="layout-mode"
                   value={layoutMode}
                   onChange={(event) => setLayoutMode(event.target.value as LayoutMode)}
+                  title="Choose how individual card positions are recalculated"
                 >
                   <option value="preserve">Preserve layout</option>
                   <option value="branch">Selected branch</option>
@@ -3221,7 +3871,8 @@ function StudioWorkspace() {
                   <Selection size={17} aria-hidden="true" />
                   Select area: {marqueeSelectionEnabled ? "On" : "Off"}
                 </button>
-              </div>
+                </div>
+              )}
               <div className="toolbar-actions">
                 <button
                   type="button"
@@ -3264,7 +3915,7 @@ function StudioWorkspace() {
               </div>
             </div>
 
-            {selectedCardCount > 1 ? (
+            {presentationMode === "individual" && selectedCardCount > 1 ? (
               <div
                 className="selection-arrange-toolbar"
                 role="toolbar"
@@ -3364,7 +4015,7 @@ function StudioWorkspace() {
               </div>
             ) : null}
 
-            {selectedEdge && selectedEdgeRoute ? (
+            {presentationMode === "individual" && selectedEdge && selectedEdgeRoute ? (
               <div
                 className="route-editor-toolbar"
                 role="toolbar"
@@ -3416,7 +4067,9 @@ function StudioWorkspace() {
               className={`flow-surface ${marqueeSelectionEnabled ? "is-marquee-active" : ""} ${pendingAiProposal ? "is-ai-preview" : ""}`}
             >
               <p id="canvas-selection-help" className="sr-only">
-                {marqueeSelectionEnabled
+                {presentationMode === "compact"
+                  ? "Compact groups is a presentation-only view. Terminal assignments are listed inside their parent cards, and level 3 connectors enter from the left. Switch to Individual cards to move cards or edit connector routes."
+                  : marqueeSelectionEnabled
                   ? "Area selection is on. Drag on empty canvas to draw a selection rectangle. Cards touched by the rectangle become a movable group. Control-click or Command-click adds individual cards. Hold Space while dragging to pan."
                   : "Area selection is off. Control-click or Command-click adds individual cards to a selection. Turn on Select area to draw a selection rectangle around multiple cards."}
               </p>
@@ -3425,7 +4078,13 @@ function StudioWorkspace() {
                 edges={displayEdges}
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
-                onNodesChange={onNodesChange}
+                onNodesChange={(changes) =>
+                  onNodesChange(
+                    presentationMode === "compact"
+                      ? changes.filter((change) => change.type === "select")
+                      : changes,
+                  )
+                }
                 onEdgesChange={onEdgesChange}
                 onNodeClick={handleNodeClick}
                 onEdgeClick={(event, edge) => {
@@ -3560,16 +4219,16 @@ function StudioWorkspace() {
                 }}
                 fitView
                 fitViewOptions={{ padding: 0.14 }}
-                minZoom={0.22}
+                minZoom={presentationMode === "compact" ? 0.08 : 0.22}
                 maxZoom={1.6}
                 nodesConnectable={false}
-                nodesDraggable={!pendingAiProposal}
+                nodesDraggable={presentationMode === "individual" && !pendingAiProposal}
                 deleteKeyCode={null}
                 selectionKeyCode={null}
-                selectionOnDrag={marqueeSelectionEnabled}
+                selectionOnDrag={presentationMode === "individual" && marqueeSelectionEnabled}
                 selectionMode={SelectionMode.Partial}
                 multiSelectionKeyCode={["Control", "Meta"]}
-                panOnDrag={!marqueeSelectionEnabled}
+                panOnDrag={presentationMode === "compact" || !marqueeSelectionEnabled}
                 aria-describedby="canvas-selection-help"
                 defaultEdgeOptions={{
                   type: "orgRelationship",
@@ -3602,22 +4261,32 @@ function StudioWorkspace() {
               <span><i className="legend-dot legend-dot--filled" />Filled</span>
               <span><i className="legend-dot legend-dot--acting" />Acting</span>
               <span><i className="legend-dot legend-dot--vacant" />Vacant</span>
-              <span><MapPin size={14} weight="fill" aria-hidden="true" /> Dragging pins presentation only</span>
-              <span><PushPin size={14} aria-hidden="true" /> Click a connector to pin or reset its corners</span>
-              <span>
-                <Selection size={14} aria-hidden="true" />
-                {selectedCardCount > 1
-                  ? `${selectedCardCount} cards move together`
-                  : marqueeSelectionEnabled
-                    ? "Drag a box to select cards; Space pans"
-                    : "Control/Command-click or Select area groups cards"}
-              </span>
-              <span>
-                <TreeStructure size={14} aria-hidden="true" />
-                {connectorRoutingMode === "combed"
-                  ? "Sibling combs share only within one branch"
-                  : "Every connector uses a separate lane"}
-              </span>
+              {presentationMode === "compact" ? (
+                <>
+                  <span><Rows size={14} aria-hidden="true" /> Terminal assignments are listed inside their parent card</span>
+                  <span><TreeStructure size={14} aria-hidden="true" /> Level 3 cards use shared left-entry rails</span>
+                  <span><SquaresFour size={14} aria-hidden="true" /> Switch to Individual cards to move cards or edit lines</span>
+                </>
+              ) : (
+                <>
+                  <span><MapPin size={14} weight="fill" aria-hidden="true" /> Dragging pins presentation only</span>
+                  <span><PushPin size={14} aria-hidden="true" /> Click a connector to pin or reset its corners</span>
+                  <span>
+                    <Selection size={14} aria-hidden="true" />
+                    {selectedCardCount > 1
+                      ? `${selectedCardCount} cards move together`
+                      : marqueeSelectionEnabled
+                        ? "Drag a box to select cards; Space pans"
+                        : "Control/Command-click or Select area groups cards"}
+                  </span>
+                  <span>
+                    <TreeStructure size={14} aria-hidden="true" />
+                    {connectorRoutingMode === "combed"
+                      ? "Sibling combs share only within one branch"
+                      : "Every connector uses a separate lane"}
+                  </span>
+                </>
+              )}
             </div>
           </section>
         ) : workspaceView === "table" ? (
@@ -3856,6 +4525,10 @@ function StudioWorkspace() {
               <div><span>Saved version</span><strong>v{activeChart?.version ?? 0}</strong></div>
               <div><span>All units</span><strong>{nodes.length}</strong></div>
               <div><span>Public units</span><strong>{publicUnitCount}</strong></div>
+              <div>
+                <span>Presentation</span>
+                <strong>{presentationMode === "compact" ? "Compact groups" : "Individual cards"}</strong>
+              </div>
             </div>
 
             <fieldset className="audience-profiles">
@@ -5318,6 +5991,21 @@ function StudioWorkspace() {
                 </select>
               </label>
               <label className="editor-field">
+                <span>Compact presentation</span>
+                <select
+                  name="compactDisplay"
+                  defaultValue={selectedNode.data.unit.compactDisplay ?? "auto"}
+                >
+                  <option value="auto">Automatic by hierarchy level</option>
+                  <option value="list">List inside parent group</option>
+                  <option value="card">Keep as a separate card</option>
+                  <option value="sidecar">Leadership sidecar card</option>
+                </select>
+                <small>
+                  List applies only to terminal records. Sidecar applies to a terminal record directly below the chart root.
+                </small>
+              </label>
+              <label className="editor-field">
                 <span>Position title</span>
                 <input
                   name="positionTitle"
@@ -5446,14 +6134,14 @@ function StudioWorkspace() {
           >
             <header className="ai-review-panel__header">
               <div>
-                <span className="eyebrow">Local MCP · review required</span>
-                <h2 id="ai-review-title">Preview proposed changes</h2>
+                <span className="eyebrow">AI proposal · your decision required</span>
+                <h2 id="ai-review-title">Review before applying</h2>
                 <p>
-                  The canvas shows the proposal. Highlighted cards and lines are temporary;
-                  the saved chart has not changed.
+                  <strong>Nothing has changed yet.</strong> The canvas is showing a temporary
+                  preview; the saved chart remains unchanged until you apply this proposal.
                 </p>
               </div>
-              <span className="ai-review-panel__unsaved">Not saved</span>
+              <span className="ai-review-panel__unsaved">Not applied</span>
             </header>
 
             <div className="ai-review-summary" aria-label="Proposed change summary">
@@ -5462,6 +6150,14 @@ function StudioWorkspace() {
               <div><strong>{pendingAiProposal.summary.removed}</strong><span>Removed</span></div>
               <p>{pendingAiProposal.summary.text}</p>
             </div>
+
+            <section className="ai-review-purpose" aria-labelledby="ai-review-purpose-title">
+              <h3 id="ai-review-purpose-title">Why this change was proposed</h3>
+              <p>
+                {pendingAiProposal.changeSummary ??
+                  "No reason was provided with this proposal. Review the field changes carefully before applying it."}
+              </p>
+            </section>
 
             <div className="ai-review-filters" aria-label="Filter proposed changes">
               {([
@@ -5509,10 +6205,20 @@ function StudioWorkspace() {
             </div>
 
             <footer className="ai-review-panel__footer">
-              <p>
-                Applying updates the working draft and records this review. Save a named
-                version afterward to link the AI activity to a checkpoint.
-              </p>
+              <div className="ai-review-next-step">
+                <strong>Your next step</strong>
+                <p>
+                  Review every Before and After item. Apply the change to update the saved
+                  working chart, choose Review later to keep it pending, or reject it to leave
+                  the chart unchanged.
+                </p>
+                <small>
+                  This proposal is available until {new Intl.DateTimeFormat(undefined, {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  }).format(new Date(pendingAiProposal.expiresAt))}.
+                </small>
+              </div>
               {aiProposalError ? (
                 <p className="ai-review-panel__error" role="alert">
                   {aiProposalError}
@@ -5521,13 +6227,22 @@ function StudioWorkspace() {
               <div>
                 <button
                   type="button"
+                  className="button button--secondary"
+                  data-ai-proposal-action="defer"
+                  onClick={deferAiProposal}
+                  disabled={aiProposalBusy !== null}
+                >
+                  Review later
+                </button>
+                <button
+                  type="button"
                   className="button button--secondary ai-review-reject"
                   data-ai-proposal-action="reject"
                   onClick={() => void resolveAiProposal("reject")}
                   disabled={aiProposalBusy !== null}
                   aria-busy={aiProposalBusy === "reject"}
                 >
-                  {aiProposalBusy === "reject" ? "Rejecting…" : "Reject proposal"}
+                  {aiProposalBusy === "reject" ? "Rejecting…" : "Reject and leave unchanged"}
                 </button>
                 <button
                   type="button"
@@ -5538,7 +6253,7 @@ function StudioWorkspace() {
                   aria-busy={aiProposalBusy === "accept"}
                 >
                   <Check size={17} weight="bold" aria-hidden="true" />
-                  {aiProposalBusy === "accept" ? "Applying…" : "Apply reviewed changes"}
+                  {aiProposalBusy === "accept" ? "Applying…" : "Apply change to chart"}
                 </button>
               </div>
             </footer>
@@ -5664,6 +6379,102 @@ function StudioWorkspace() {
               </div>
             </footer>
           </aside>
+        </div>
+      ) : null}
+
+      {currentTourStep ? (
+        <div className="onboarding-tour">
+          {tourGeometry.target ? (
+            <div
+              className="onboarding-tour__spotlight"
+              aria-hidden="true"
+              style={{
+                top: tourGeometry.target.top,
+                left: tourGeometry.target.left,
+                width: tourGeometry.target.width,
+                height: tourGeometry.target.height,
+              }}
+            />
+          ) : (
+            <div className="onboarding-tour__shade" aria-hidden="true" />
+          )}
+          <section
+            ref={onboardingDialogRef}
+            className="onboarding-tour__panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="onboarding-tour-title"
+            tabIndex={-1}
+            style={{ top: tourGeometry.panel.top, left: tourGeometry.panel.left }}
+          >
+            <header>
+              <span className="eyebrow">{currentTourStep.eyebrow}</span>
+              <span className="onboarding-tour__progress">
+                {(onboardingStep ?? 0) + 1} of {ONBOARDING_TOUR_STEPS.length}
+              </span>
+            </header>
+            <h2 id="onboarding-tour-title">{currentTourStep.title}</h2>
+            <p>{currentTourStep.body}</p>
+            <div className="onboarding-tour__steps" aria-hidden="true">
+              {ONBOARDING_TOUR_STEPS.map((step, index) => (
+                <span
+                  key={step.title}
+                  className={index === onboardingStep ? "is-active" : ""}
+                />
+              ))}
+            </div>
+            <footer>
+              <button
+                type="button"
+                className="onboarding-tour__skip"
+                onClick={() =>
+                  finishOnboardingTour("Tour closed. Choose Tips & tour whenever you want to replay it.")
+                }
+              >
+                Skip tour
+              </button>
+              <span>
+                {(onboardingStep ?? 0) > 0 ? (
+                  <button
+                    type="button"
+                    className="button button--secondary"
+                    onClick={() =>
+                      setOnboardingStep((current) =>
+                        current === null ? null : Math.max(current - 1, 0),
+                      )
+                    }
+                  >
+                    <CaretLeft size={16} aria-hidden="true" />
+                    Back
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={() => {
+                    if ((onboardingStep ?? 0) === ONBOARDING_TOUR_STEPS.length - 1) {
+                      finishOnboardingTour(
+                        "Tour complete. Choose Tips & tour whenever you want to replay it.",
+                      );
+                    } else {
+                      setOnboardingStep((current) =>
+                        current === null
+                          ? null
+                          : Math.min(current + 1, ONBOARDING_TOUR_STEPS.length - 1),
+                      );
+                    }
+                  }}
+                >
+                  {(onboardingStep ?? 0) === ONBOARDING_TOUR_STEPS.length - 1
+                    ? "Finish tour"
+                    : "Next tip"}
+                  {(onboardingStep ?? 0) === ONBOARDING_TOUR_STEPS.length - 1 ? null : (
+                    <CaretRight size={16} aria-hidden="true" />
+                  )}
+                </button>
+              </span>
+            </footer>
+          </section>
         </div>
       ) : null}
 

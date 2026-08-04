@@ -1,6 +1,7 @@
 import PptxGenJS from "pptxgenjs";
 import {
   connectionPointsForNode,
+  estimateExportTextWidth,
   EXPORT_CONNECTION_POINT_RADIUS,
   EXPORT_CONNECTION_POINT_STROKE_WIDTH,
   EXPORT_COLORS,
@@ -29,33 +30,59 @@ function drawNode(
   const width = node.width * scale;
   const height = node.height * scale;
   const font = (pixels: number) => clamp(pixels * scale * 72, 1, 400);
+  const compact = !node.showConnectionPoints;
+  const divisionLike = /division|directorate/i.test(node.unitType);
+  const cardFill = compact && node.hierarchyLevel === 2
+    ? divisionLike
+      ? EXPORT_COLORS.energy
+      : EXPORT_COLORS.graphite
+    : EXPORT_COLORS.white;
+  const cardTransparency = compact && node.hierarchyLevel === 2
+    ? divisionLike
+      ? 82
+      : 42
+    : 0;
   const statusColor =
     node.status === "vacant"
       ? EXPORT_COLORS.orange
       : node.status === "acting"
         ? EXPORT_COLORS.blue
         : EXPORT_COLORS.green;
+  const statusTextWidth = estimateExportTextWidth(node.statusText, 11, true);
+  const statusRowStart = compact
+    ? node.width / 2 - (8 + 7 + statusTextWidth) / 2
+    : 20;
 
   slide.addShape(pptx.ShapeType.rect, {
     x,
     y,
     w: width,
     h: height,
-    fill: { color: EXPORT_COLORS.white },
+    fill: { color: cardFill, transparency: cardTransparency },
     line: { color: EXPORT_COLORS.darkTeal, width: clamp(1.5 * scale * 72, 0.2, 4) },
     objectName: `Unit card ${node.id}`,
   });
-  slide.addShape(pptx.ShapeType.rect, {
-    x,
-    y,
-    w: Math.max(0.01, 6 * scale),
-    h: height,
-    fill: { color: EXPORT_COLORS.green },
-    line: { color: EXPORT_COLORS.green, transparency: 100 },
-    objectName: `Unit accent ${node.id}`,
-  });
+  slide.addShape(pptx.ShapeType.rect, compact
+    ? {
+        x,
+        y,
+        w: width,
+        h: Math.max(0.01, (node.hierarchyLevel === 1 ? 8 : 5) * scale),
+        fill: { color: node.hierarchyLevel === 2 ? EXPORT_COLORS.darkTeal : EXPORT_COLORS.green },
+        line: { color: EXPORT_COLORS.green, transparency: 100 },
+        objectName: `Unit accent ${node.id}`,
+      }
+    : {
+        x,
+        y,
+        w: Math.max(0.01, 6 * scale),
+        h: height,
+        fill: { color: EXPORT_COLORS.green },
+        line: { color: EXPORT_COLORS.green, transparency: 100 },
+        objectName: `Unit accent ${node.id}`,
+      });
   slide.addText(node.unitType, {
-    x: x + 20 * scale,
+    x: x + (compact ? 12 : 20) * scale,
     y: y + 11 * scale,
     w: Math.max(0.3, width - 32 * scale),
     h: 18 * scale,
@@ -66,24 +93,26 @@ function drawNode(
     color: EXPORT_COLORS.green,
     charSpacing: font(1.2),
     breakLine: false,
+    align: compact ? "center" : "left",
     objectName: `Unit type ${node.id}`,
   });
   slide.addText(node.nameLines.join("\n"), {
-    x: x + 20 * scale,
+    x: x + (compact ? 12 : 20) * scale,
     y: y + 34 * scale,
     w: Math.max(0.3, width - 32 * scale),
     h: (node.nameLines.length > 1 ? 42 : 24) * scale,
     margin: 0,
     fontFace: "Aptos Display",
-    fontSize: font(17),
+    fontSize: font(compact && node.hierarchyLevel === 1 ? 22 : 17),
     bold: true,
     color: EXPORT_COLORS.ink,
     breakLine: false,
     valign: "middle",
+    align: compact ? "center" : "left",
     objectName: `Unit name ${node.id}`,
   });
   slide.addText(node.positionTitle, {
-    x: x + 20 * scale,
+    x: x + (compact ? 12 : 20) * scale,
     y: y + (node.nameLines.length > 1 ? 80 : 66) * scale,
     w: Math.max(0.3, width - 32 * scale),
     h: 18 * scale,
@@ -92,10 +121,11 @@ function drawNode(
     fontSize: font(12),
     color: EXPORT_COLORS.ink,
     breakLine: false,
+    align: compact ? "center" : "left",
     objectName: `Position title ${node.id}`,
   });
   slide.addShape(pptx.ShapeType.ellipse, {
-    x: x + 20 * scale,
+    x: x + statusRowStart * scale,
     y: y + 106 * scale,
     w: Math.max(0.01, 8 * scale),
     h: Math.max(0.01, 8 * scale),
@@ -104,17 +134,111 @@ function drawNode(
     objectName: `Position status marker ${node.id}`,
   });
   slide.addText(node.statusText, {
-    x: x + 36 * scale,
+    x: x + (compact ? statusRowStart + 15 : 36) * scale,
     y: y + 101 * scale,
-    w: Math.max(0.3, width - 48 * scale),
+    w: compact
+      ? Math.max(0.3, (statusTextWidth + 4) * scale)
+      : Math.max(0.3, width - 48 * scale),
     h: 18 * scale,
     margin: 0,
     fontFace: "Aptos",
     fontSize: font(11),
+    bold: true,
     color: EXPORT_COLORS.ink,
     breakLine: false,
     objectName: `Position status ${node.id}`,
   });
+  if (node.compactListStartY !== null) {
+    const headerY = y + node.compactListStartY * scale;
+    slide.addShape(pptx.ShapeType.rect, {
+      x,
+      y: headerY,
+      w: width,
+      h: 34 * scale,
+      fill: { color: EXPORT_COLORS.graphite },
+      line: { color: EXPORT_COLORS.graphite, transparency: 100 },
+      objectName: `Compact roster heading ${node.id}`,
+    });
+    slide.addText(
+      `${node.compactEntries.length} LISTED ASSIGNMENT${node.compactEntries.length === 1 ? "" : "S"}`,
+      {
+        x: x + 12 * scale,
+        y: headerY + 8 * scale,
+        w: Math.max(0.3, width - 24 * scale),
+        h: 18 * scale,
+        margin: 0,
+        fontFace: "Aptos",
+        fontSize: font(8),
+        bold: true,
+        color: EXPORT_COLORS.darkTeal,
+        charSpacing: font(0.8),
+        objectName: `Compact roster count ${node.id}`,
+      },
+    );
+    node.compactEntries.forEach((entry, index) => {
+      const rowY = headerY + (34 + index * 54) * scale;
+      slide.addShape(pptx.ShapeType.line, {
+        x,
+        y: rowY,
+        w: width,
+        h: 0,
+        line: { color: EXPORT_COLORS.graphite, width: clamp(scale * 72, 0.2, 2) },
+        objectName: `Compact roster divider ${entry.id}`,
+      });
+      slide.addText(entry.name, {
+        x: x + 12 * scale,
+        y: rowY + 7 * scale,
+        w: Math.max(0.3, width - 126 * scale),
+        h: 15 * scale,
+        margin: 0,
+        fontFace: "Aptos Display",
+        fontSize: font(10),
+        bold: true,
+        color: EXPORT_COLORS.darkTeal,
+        objectName: `Compact entry name ${entry.id}`,
+      });
+      slide.addText(entry.positionTitle, {
+        x: x + 12 * scale,
+        y: rowY + 25 * scale,
+        w: Math.max(0.3, width - 126 * scale),
+        h: 14 * scale,
+        margin: 0,
+        fontFace: "Aptos",
+        fontSize: font(8),
+        color: EXPORT_COLORS.ink,
+        objectName: `Compact entry role ${entry.id}`,
+      });
+      const entryStatusColor =
+        entry.status === "vacant"
+          ? EXPORT_COLORS.orange
+          : entry.status === "acting"
+            ? EXPORT_COLORS.blue
+            : EXPORT_COLORS.green;
+      slide.addShape(pptx.ShapeType.ellipse, {
+        x: x + (node.width - 104) * scale,
+        y: rowY + 23 * scale,
+        w: Math.max(0.01, 7 * scale),
+        h: Math.max(0.01, 7 * scale),
+        fill: { color: entryStatusColor },
+        line: { color: entryStatusColor, transparency: 100 },
+        objectName: `Compact entry status marker ${entry.id}`,
+      });
+      slide.addText(entry.statusText, {
+        x: x + (node.width - 92) * scale,
+        y: rowY + 19 * scale,
+        w: Math.max(0.01, 80 * scale),
+        h: 16 * scale,
+        margin: 0,
+        fontFace: "Aptos",
+        fontSize: font(8),
+        bold: true,
+        color: EXPORT_COLORS.ink,
+        align: "right",
+        fit: "shrink",
+        objectName: `Compact entry status ${entry.id}`,
+      });
+    });
+  }
   connectionPointsForNode(node).forEach((point) => {
     const diameter = EXPORT_CONNECTION_POINT_RADIUS * 2 * scale;
     slide.addShape(pptx.ShapeType.ellipse, {
@@ -236,7 +360,7 @@ export async function buildChartPptx(
   });
   scene.nodes.forEach((node) => drawNode(pptx, slide, node, scale, offsetX, offsetY));
 
-  const footer = `Generated ${new Date(scene.generatedAt).toISOString()}  |  ${scene.nodes.length} units${scene.excludedNodeCount ? `  |  ${scene.excludedNodeCount} excluded by audience profile` : ""}`;
+  const footer = `Generated ${new Date(scene.generatedAt).toISOString()}  |  ${scene.nodes.length} cards${scene.groupedNodeCount ? `  |  ${scene.groupedNodeCount} grouped entries` : ""}${scene.excludedNodeCount ? `  |  ${scene.excludedNodeCount} excluded by audience profile` : ""}`;
   slide.addText(footer, {
     x: offsetX + 52 * scale,
     y: offsetY + (scene.height - 26) * scale,

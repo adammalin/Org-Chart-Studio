@@ -183,6 +183,20 @@ export async function GET(request: Request) {
     }
     return noStoreJson({ proposal });
   }
+  if (url.searchParams.get("status") === "pending") {
+    const proposals = [...proposalStore().proposals.values()]
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+      .map((proposal) => ({
+        id: proposal.id,
+        chartId: proposal.chartId,
+        chartName: proposal.chartName,
+        changeSummary: proposal.changeSummary,
+        createdAt: proposal.createdAt,
+        expiresAt: proposal.expiresAt,
+        summary: proposal.summary,
+      }));
+    return noStoreJson({ proposals });
+  }
   const chartId = url.searchParams.get("chartId");
   if (!chartId) return noStoreJson({ error: "A chart ID is required." }, { status: 400 });
   const result = await DB.prepare(
@@ -201,6 +215,7 @@ export async function POST(request: Request) {
     action?: "stage" | "accept" | "reject";
     chart?: ChartDocument;
     proposalId?: string;
+    changeSummary?: string;
   };
 
   if (body.action === "stage" && body.chart) {
@@ -230,6 +245,7 @@ export async function POST(request: Request) {
       chartName: proposed.name,
       operation: "replace_chart_draft",
       status: "pending",
+      changeSummary: body.changeSummary?.trim().slice(0, 500) || null,
       createdAt: createdAt.toISOString(),
       expiresAt: new Date(createdAt.getTime() + PROPOSAL_TTL_MS).toISOString(),
       current,

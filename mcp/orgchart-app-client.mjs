@@ -171,11 +171,11 @@ export class OrgChartAppClient {
     });
   }
 
-  stageChartProposal(chart) {
+  stageChartProposal(chart, changeSummary) {
     return this.request("/api/ai-proposals", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "stage", chart }),
+      body: JSON.stringify({ action: "stage", chart, changeSummary }),
     });
   }
 

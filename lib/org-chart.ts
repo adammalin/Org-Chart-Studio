@@ -21,6 +21,10 @@ export type PlanningState = "current" | "planned";
 
 export type SourceCertainty = "confirmed" | "inferred" | "needs_review";
 
+export type ChartPresentationMode = "compact" | "individual";
+
+export type CompactDisplay = "auto" | "card" | "list" | "sidecar";
+
 export interface OrganizationalUnit {
   id: string;
   name: string;
@@ -35,7 +39,17 @@ export interface OrganizationalUnit {
   sourceCertainty?: SourceCertainty;
   reviewNote?: string;
   planningState?: PlanningState;
+  compactDisplay?: CompactDisplay;
   publicationVisibility: "internal" | "public";
+}
+
+export interface CompactListEntry {
+  id: string;
+  hierarchyLevel: number;
+  unit: OrganizationalUnit;
+  aiChange?: "added" | "changed";
+  isSearchMatch?: boolean;
+  selected?: boolean;
 }
 
 export interface OrgNodeData extends Record<string, unknown> {
@@ -47,13 +61,40 @@ export interface OrgNodeData extends Record<string, unknown> {
   targetPortOffset?: number;
   isSearchMatch?: boolean;
   aiChange?: "added" | "changed";
+  compactEntries?: CompactListEntry[];
+  compactSidecar?: boolean;
+  hierarchyLevel?: number;
+  presentationMode?: ChartPresentationMode;
+  targetSide?: "top" | "left";
+  visualHeight?: number;
+  visualWidth?: number;
   onToggleCollapse?: (id: string) => void;
+  onSelectCompactEntry?: (id: string) => void;
 }
 
 export type OrgFlowNode = Node<OrgNodeData, "orgUnit">;
 
 export const NODE_WIDTH = 248;
 export const NODE_HEIGHT = 132;
+export const COMPACT_ROOT_WIDTH = 720;
+export const COMPACT_BRANCH_WIDTH = 280;
+export const COMPACT_ROOT_HEIGHT = 174;
+export const COMPACT_BRANCH_HEIGHT = 146;
+export const COMPACT_ENTRY_HEIGHT = 54;
+export const COMPACT_LIST_HEADER_HEIGHT = 34;
+
+export interface CompactPresentation {
+  levels: Map<string, number>;
+  parentById: Map<string, string>;
+  listedNodeIds: Set<string>;
+  sidecarNodeIds: Set<string>;
+  entriesByParent: Map<string, CompactListEntry[]>;
+}
+
+export interface CompactNodeDimensions {
+  width: number;
+  height: number;
+}
 
 const unit = (
   id: string,
@@ -267,6 +308,256 @@ export const initialEdges: Edge[] = [
   primaryEdge("unit-facilities-division", "unit-facilities-planning"),
   primaryEdge("unit-business-division", "unit-business-services"),
 ];
+
+function orderedNodeIds(ids: string[], nodeById: Map<string, OrgFlowNode>): string[] {
+  return [...ids].sort((leftId, rightId) => {
+    const left = nodeById.get(leftId);
+    const right = nodeById.get(rightId);
+    return (
+      (left?.position.y ?? 0) - (right?.position.y ?? 0) ||
+      (left?.position.x ?? 0) - (right?.position.x ?? 0) ||
+      (left?.data.unit.shortName ?? leftId).localeCompare(
+        right?.data.unit.shortName ?? rightId,
+      )
+    );
+  });
+}
+
+export function hierarchyLevels(
+  nodes: OrgFlowNode[],
+  edges: Edge[],
+): Map<string, number> {
+  const levels = new Map<string, number>();
+  const nodeIds = new Set(nodes.map((flowNode) => flowNode.id));
+  const targets = new Set(
+    edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)).map((edge) => edge.target),
+  );
+  const childrenByParent = new Map<string, string[]>();
+  edges.forEach((edge) => {
+    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) return;
+    childrenByParent.set(edge.source, [
+      ...(childrenByParent.get(edge.source) ?? []),
+      edge.target,
+    ]);
+  });
+  const roots = nodes.filter((flowNode) => !targets.has(flowNode.id)).map((flowNode) => flowNode.id);
+  const pending = roots.map((id) => ({ id, level: 1 }));
+  while (pending.length) {
+    const current = pending.shift()!;
+    const knownLevel = levels.get(current.id);
+    if (knownLevel !== undefined && knownLevel <= current.level) continue;
+    levels.set(current.id, current.level);
+    (childrenByParent.get(current.id) ?? []).forEach((childId) => {
+      pending.push({ id: childId, level: current.level + 1 });
+    });
+  }
+  nodes.forEach((flowNode) => {
+    if (!levels.has(flowNode.id)) levels.set(flowNode.id, 1);
+  });
+  return levels;
+}
+
+export function compactNodeDimensions(
+  hierarchyLevel: number,
+  entryCount = 0,
+  sidecar = false,
+): CompactNodeDimensions {
+  if (sidecar) return { width: COMPACT_BRANCH_WIDTH, height: NODE_HEIGHT };
+  if (hierarchyLevel <= 1) return { width: COMPACT_ROOT_WIDTH, height: COMPACT_ROOT_HEIGHT };
+  const baseHeight = hierarchyLevel === 2 ? COMPACT_BRANCH_HEIGHT : NODE_HEIGHT;
+  return {
+    width: COMPACT_BRANCH_WIDTH,
+    height:
+      baseHeight +
+      (entryCount ? COMPACT_LIST_HEADER_HEIGHT + entryCount * COMPACT_ENTRY_HEIGHT : 0),
+  };
+}
+
+export function deriveCompactPresentation(
+  nodes: OrgFlowNode[],
+  edges: Edge[],
+): CompactPresentation {
+  const nodeById = new Map(nodes.map((flowNode) => [flowNode.id, flowNode]));
+  const levels = hierarchyLevels(nodes, edges);
+  const parentById = new Map<string, string>();
+  const childrenByParent = new Map<string, string[]>();
+  edges.forEach((edge) => {
+    if (!nodeById.has(edge.source) || !nodeById.has(edge.target)) return;
+    parentById.set(edge.target, edge.source);
+    childrenByParent.set(edge.source, [
+      ...(childrenByParent.get(edge.source) ?? []),
+      edge.target,
+    ]);
+  });
+
+  const listedNodeIds = new Set<string>();
+  const sidecarNodeIds = new Set<string>();
+  nodes.forEach((flowNode) => {
+    const parentId = parentById.get(flowNode.id);
+    if (!parentId || (childrenByParent.get(flowNode.id) ?? []).length) return;
+    const display = flowNode.data.unit.compactDisplay ?? "auto";
+    const level = levels.get(flowNode.id) ?? 1;
+    if (display === "sidecar" && (levels.get(parentId) ?? 1) === 1) {
+      sidecarNodeIds.add(flowNode.id);
+      return;
+    }
+    if (display === "list" || (display === "auto" && level >= 4)) {
+      listedNodeIds.add(flowNode.id);
+    }
+  });
+
+  const entriesByParent = new Map<string, CompactListEntry[]>();
+  listedNodeIds.forEach((nodeId) => {
+    const flowNode = nodeById.get(nodeId);
+    const parentId = parentById.get(nodeId);
+    if (!flowNode || !parentId) return;
+    entriesByParent.set(parentId, [
+      ...(entriesByParent.get(parentId) ?? []),
+      {
+        id: flowNode.id,
+        hierarchyLevel: levels.get(flowNode.id) ?? 1,
+        unit: flowNode.data.unit,
+      },
+    ]);
+  });
+  entriesByParent.forEach((entries, parentId) => {
+    const orderedIds = orderedNodeIds(entries.map((entry) => entry.id), nodeById);
+    const entryById = new Map(entries.map((entry) => [entry.id, entry]));
+    entriesByParent.set(
+      parentId,
+      orderedIds.flatMap((id) => {
+        const entry = entryById.get(id);
+        return entry ? [entry] : [];
+      }),
+    );
+  });
+
+  return {
+    levels,
+    parentById,
+    listedNodeIds,
+    sidecarNodeIds,
+    entriesByParent,
+  };
+}
+
+export function arrangeCompactPresentation(
+  nodes: OrgFlowNode[],
+  edges: Edge[],
+  presentation = deriveCompactPresentation(nodes, edges),
+): OrgFlowNode[] {
+  const visibleNodes = nodes.filter(
+    (flowNode) => !presentation.listedNodeIds.has(flowNode.id),
+  );
+  const nodeById = new Map(visibleNodes.map((flowNode) => [flowNode.id, flowNode]));
+  const childrenByParent = new Map<string, string[]>();
+  edges.forEach((edge) => {
+    if (!nodeById.has(edge.source) || !nodeById.has(edge.target)) return;
+    childrenByParent.set(edge.source, [
+      ...(childrenByParent.get(edge.source) ?? []),
+      edge.target,
+    ]);
+  });
+  childrenByParent.forEach((ids, parentId) => {
+    childrenByParent.set(parentId, orderedNodeIds(ids, nodeById));
+  });
+  const targets = new Set(
+    edges.filter((edge) => nodeById.has(edge.source) && nodeById.has(edge.target)).map((edge) => edge.target),
+  );
+  const roots = orderedNodeIds(
+    visibleNodes.filter((flowNode) => !targets.has(flowNode.id)).map((flowNode) => flowNode.id),
+    nodeById,
+  );
+  const positions = new Map<string, XYPosition>();
+  const BRANCH_GAP = 64;
+  const LEVEL_GAP = 92;
+  const STACK_GAP = 18;
+  const DEEP_INDENT = 24;
+  let chartOffsetX = 0;
+
+  const dimensionsFor = (nodeId: string) =>
+    compactNodeDimensions(
+      presentation.levels.get(nodeId) ?? 1,
+      presentation.entriesByParent.get(nodeId)?.length ?? 0,
+      presentation.sidecarNodeIds.has(nodeId),
+    );
+
+  roots.forEach((rootId) => {
+    const rootDimensions = dimensionsFor(rootId);
+    const directChildren = childrenByParent.get(rootId) ?? [];
+    const sidecars = directChildren.filter((id) => presentation.sidecarNodeIds.has(id));
+    const branchIds = directChildren.filter((id) => !presentation.sidecarNodeIds.has(id));
+    const branchWidths = branchIds.map((id) => dimensionsFor(id).width);
+    const branchSpan = branchWidths.length
+      ? branchWidths.reduce((total, width) => total + width, 0) +
+        Math.max(0, branchWidths.length - 1) * BRANCH_GAP
+      : rootDimensions.width;
+    const rootX = chartOffsetX + Math.max(0, (branchSpan - rootDimensions.width) / 2);
+    const rootY = 30;
+    positions.set(rootId, { x: rootX, y: rootY });
+
+    sidecars.forEach((sidecarId, index) => {
+      const sidecarDimensions = dimensionsFor(sidecarId);
+      positions.set(sidecarId, {
+        x: rootX + rootDimensions.width + 38,
+        y: rootY + 24 + index * (sidecarDimensions.height + STACK_GAP),
+      });
+    });
+
+    let branchX = chartOffsetX;
+    const branchY = rootY + rootDimensions.height + LEVEL_GAP;
+    const placeStack = (
+      parentId: string,
+      columnX: number,
+      startY: number,
+      depth: number,
+    ): number => {
+      let cursorY = startY;
+      for (const childId of childrenByParent.get(parentId) ?? []) {
+        if (presentation.sidecarNodeIds.has(childId)) continue;
+        const childDimensions = dimensionsFor(childId);
+        const childX = columnX + Math.max(0, depth - 3) * DEEP_INDENT;
+        positions.set(childId, { x: childX, y: cursorY });
+        cursorY += childDimensions.height + STACK_GAP;
+        if ((childrenByParent.get(childId) ?? []).length) {
+          cursorY = placeStack(childId, columnX, cursorY, depth + 1);
+        }
+      }
+      return cursorY;
+    };
+
+    branchIds.forEach((branchId, branchIndex) => {
+      const branchDimensions = dimensionsFor(branchId);
+      positions.set(branchId, { x: branchX, y: branchY });
+      placeStack(
+        branchId,
+        branchX,
+        branchY + branchDimensions.height + 32,
+        (presentation.levels.get(branchId) ?? 2) + 1,
+      );
+      branchX += branchDimensions.width + BRANCH_GAP;
+      if (branchIndex === branchIds.length - 1) branchX -= BRANCH_GAP;
+    });
+
+    const sidecarRight = sidecars.reduce((right, id) => {
+      const position = positions.get(id);
+      return Math.max(right, (position?.x ?? 0) + dimensionsFor(id).width);
+    }, rootX + rootDimensions.width);
+    chartOffsetX = Math.max(chartOffsetX + branchSpan, sidecarRight) + BRANCH_GAP * 2;
+  });
+
+  let fallbackY = 30;
+  visibleNodes.forEach((flowNode) => {
+    if (positions.has(flowNode.id)) return;
+    positions.set(flowNode.id, { x: chartOffsetX, y: fallbackY });
+    fallbackY += dimensionsFor(flowNode.id).height + STACK_GAP;
+  });
+
+  return visibleNodes.map((flowNode) => ({
+    ...flowNode,
+    position: positions.get(flowNode.id) ?? flowNode.position,
+  }));
+}
 
 export async function runElkLayout(
   nodes: OrgFlowNode[],

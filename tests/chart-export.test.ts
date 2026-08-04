@@ -13,6 +13,7 @@ import {
   buildChartExportScene,
   buildChartSvg,
   connectionPointsForNode,
+  estimateExportTextWidth,
   safeExportFileStem,
 } from "../lib/chart-export";
 import { buildChartPdf } from "../lib/chart-export-pdf";
@@ -25,6 +26,42 @@ import {
 import { NODE_HEIGHT, NODE_WIDTH } from "../lib/org-chart";
 
 const generatedAt = "2026-07-31T20:00:00.000Z";
+
+test("export text fitting keeps long metadata inside its assigned column", () => {
+  const chart = seedChartDocuments()[0];
+  const longLabelChart = {
+    ...chart,
+    nodes: chart.nodes.map((node) => ({
+      ...node,
+      data: {
+        ...node.data,
+        unit: {
+          ...node.data.unit,
+          assignmentLabel:
+            "A very long group and nonemployee assignment label that must remain inside the card",
+        },
+      },
+    })),
+  };
+  const scene = buildChartExportScene(
+    longLabelChart,
+    "internal",
+    generatedAt,
+    "separate",
+    "compact",
+  );
+
+  assert.ok(
+    scene.nodes.some((node) =>
+      node.compactEntries.some((entry) => entry.statusText.endsWith("…")),
+    ),
+  );
+  scene.nodes.forEach((node) => {
+    node.compactEntries.forEach((entry) => {
+      assert.ok(estimateExportTextWidth(entry.statusText, 8, true) <= 96);
+    });
+  });
+});
 
 test("a single scene drives metadata-rich internal and public SVG exports", () => {
   const chart = seedChartDocuments()[0];
@@ -89,6 +126,57 @@ test("shared export scene includes editor-matching connection point circles", ()
       kind: "target",
       ...edge.points.at(-1)!,
     });
+  }
+});
+
+test("compact exports group terminal records and route level-three cards from the left", () => {
+  const chart = seedChartDocuments()[0];
+  const scene = buildChartExportScene(
+    chart,
+    "internal",
+    generatedAt,
+    "separate",
+    "compact",
+  );
+  const svg = buildChartSvg(scene, "natural");
+
+  assert.equal(scene.presentationMode, "compact");
+  assert.ok(scene.groupedNodeCount > 0);
+  assert.ok(scene.nodes.length < chart.nodes.length);
+  assert.ok(scene.nodes.some((node) => node.compactEntries.length > 0));
+  assert.ok(scene.nodes.some((node) => node.targetSide === "left"));
+  assert.equal(scene.nodes.flatMap(connectionPointsForNode).length, 0);
+  assert.match(svg, /compact grouped presentation/);
+  assert.match(svg, /LISTED ASSIGNMENTS?/);
+  assert.match(svg, /clipPath id="export-card-content-/);
+  assert.match(svg, /text-anchor="end"/);
+  assert.doesNotMatch(svg, /data-port-kind=/);
+  const rootId = scene.nodes.find((node) => node.hierarchyLevel === 1)?.id;
+  const rootEdges = scene.edges.filter((edge) => edge.sourceId === rootId);
+  assert.ok(rootEdges.length > 1);
+  assert.equal(new Set(rootEdges.map((edge) => edge.points[0].x)).size, 1);
+  assert.equal(new Set(rootEdges.map((edge) => edge.points[1].y)).size, 1);
+  for (const edge of scene.edges) {
+    const target = scene.nodes.find((node) => node.id === edge.targetId)!;
+    if (target.targetSide === "left") {
+      assert.equal(edge.points.at(-1)?.x, target.x);
+    }
+  }
+  for (const node of scene.nodes) {
+    assert.ok(
+      estimateExportTextWidth(node.statusText, 11, true) <= node.width - 56,
+      `status text must fit inside ${node.id}`,
+    );
+    for (const entry of node.compactEntries) {
+      assert.ok(
+        estimateExportTextWidth(entry.statusText, 8, true) <= 96,
+        `compact status text must fit inside ${entry.id}`,
+      );
+      assert.ok(
+        estimateExportTextWidth(entry.name, 10, true) <= node.width - 138,
+        `compact name must fit inside ${entry.id}`,
+      );
+    }
   }
 });
 
@@ -241,6 +329,41 @@ test("PowerPoint export contains editable slide shapes and metadata", async () =
   assert.doesNotMatch(slideXml, /Sample role holder/);
   const presentationXml = strFromU8(files["ppt/presentation.xml"]);
   assert.match(presentationXml, /p:sldSz cx="10058400" cy="15544800"/);
+});
+
+test("PowerPoint compact roster status boxes stay inside their group card", async () => {
+  const chart = seedChartDocuments()[0];
+  const scene = buildChartExportScene(
+    chart,
+    "internal",
+    generatedAt,
+    "separate",
+    "compact",
+  );
+  const group = scene.nodes.find((node) => node.compactEntries.length > 0)!;
+  const entry = group.compactEntries[0];
+  const presentation = await buildChartPptx(scene, "presentation-wide");
+  const slideXml = strFromU8(unzipSync(presentation)["ppt/slides/slide1.xml"]);
+  const boundsFor = (objectName: string) => {
+    const escapedName = objectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = slideXml.match(
+      new RegExp(
+        `name="${escapedName}"[\\s\\S]*?<a:off x="(\\d+)" y="(\\d+)"\\/><a:ext cx="(\\d+)" cy="(\\d+)"\\/>`,
+      ),
+    );
+    assert.ok(match, `missing editable shape ${objectName}`);
+    return {
+      x: Number(match[1]),
+      y: Number(match[2]),
+      width: Number(match[3]),
+      height: Number(match[4]),
+    };
+  };
+  const cardBounds = boundsFor(`Unit card ${group.id}`);
+  const statusBounds = boundsFor(`Compact entry status ${entry.id}`);
+
+  assert.ok(statusBounds.x >= cardBounds.x);
+  assert.ok(statusBounds.x + statusBounds.width <= cardBounds.x + cardBounds.width);
 });
 
 test("PowerPoint keeps card typography proportional on a wide fit-to-slide chart", async () => {

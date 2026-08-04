@@ -25,8 +25,12 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.match(bundle, /AI preparing changes/);
   assert.match(bundle, /AI edit saved/);
   assert.match(bundle, /Review update/);
-  assert.match(bundle, /Preview proposed changes/);
-  assert.match(bundle, /Apply reviewed changes/);
+  assert.match(bundle, /Review before applying/);
+  assert.match(bundle, /Apply change to chart/);
+  assert.match(bundle, /Review later/);
+  assert.match(bundle, /awaiting review/);
+  assert.match(bundle, /Tips & tour/);
+  assert.match(bundle, /Know what is saved/);
   assert.match(bundle, /data-ai-proposal-action/);
   assert.match(bundle, /did not answer within 15 seconds/);
   assert.match(bundle, /AI-assisted change timeline/);
@@ -94,6 +98,8 @@ test("keeps core prototype boundaries explicit in source", async () => {
   assert.match(chartRoute, /retireBuiltInExampleCharts/);
   assert.match(proposalRoute, /action === "stage"/);
   assert.match(proposalRoute, /action === "reject"/);
+  assert.match(proposalRoute, /status.*pending/);
+  assert.match(proposalRoute, /changeSummary/);
   assert.match(proposalRoute, /WHERE id = \? AND version = \? AND updated_at = \?/);
   assert.match(schema, /ai_activity_events/);
   assert.doesNotMatch(chartRoute, /seedIfEmpty/);

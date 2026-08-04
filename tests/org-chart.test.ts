@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  arrangeCompactPresentation,
   arrangeSelectedNodes,
+  deriveCompactPresentation,
   descendantIds,
   initialEdges,
   initialNodes,
@@ -88,6 +90,54 @@ test("branch traversal remains inside the selected semantic branch", () => {
   assert.ok(researchBranch.has("unit-quantum-networking"));
   assert.ok(researchBranch.has("unit-scientific-software"));
   assert.equal(researchBranch.has("unit-facilities-planning"), false);
+});
+
+test("compact presentation groups terminal level-four records without changing hierarchy data", () => {
+  const before = JSON.stringify({ nodes: initialNodes, edges: initialEdges });
+  const presentation = deriveCompactPresentation(initialNodes, initialEdges);
+  const arranged = arrangeCompactPresentation(initialNodes, initialEdges, presentation);
+
+  assert.equal(presentation.levels.get("unit-lab"), 1);
+  assert.equal(presentation.levels.get("unit-quantum-networking"), 4);
+  assert.ok(presentation.listedNodeIds.has("unit-quantum-networking"));
+  assert.ok(
+    presentation.entriesByParent
+      .get("unit-quantum-division")
+      ?.some((entry) => entry.id === "unit-quantum-networking"),
+  );
+  assert.equal(
+    arranged.some((flowNode) => flowNode.id === "unit-quantum-networking"),
+    false,
+  );
+  assert.equal(JSON.stringify({ nodes: initialNodes, edges: initialEdges }), before);
+});
+
+test("compact presentation respects card and sidecar overrides", () => {
+  const overriddenNodes = initialNodes.map((flowNode) => {
+    if (flowNode.id === "unit-quantum-networking") {
+      return {
+        ...flowNode,
+        data: {
+          ...flowNode.data,
+          unit: { ...flowNode.data.unit, compactDisplay: "card" as const },
+        },
+      };
+    }
+    if (flowNode.id === "unit-operations") {
+      return {
+        ...flowNode,
+        data: {
+          ...flowNode.data,
+          unit: { ...flowNode.data.unit, compactDisplay: "sidecar" as const },
+        },
+      };
+    }
+    return flowNode;
+  });
+  const presentation = deriveCompactPresentation(overriddenNodes, initialEdges);
+
+  assert.equal(presentation.listedNodeIds.has("unit-quantum-networking"), false);
+  assert.equal(presentation.sidecarNodeIds.has("unit-operations"), false);
 });
 
 test("branch translation moves descendants together without moving unrelated cards", () => {

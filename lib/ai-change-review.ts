@@ -38,11 +38,22 @@ export interface AiChartProposal {
   chartName: string;
   operation: "replace_chart_draft";
   status: AiProposalStatus;
+  changeSummary: string | null;
   createdAt: string;
   expiresAt: string;
   current: ChartDocument;
   proposed: ChartDocument;
   changes: AiFieldChange[];
+  summary: AiChangeSummary;
+}
+
+export interface AiPendingProposalSummary {
+  id: string;
+  chartId: string;
+  chartName: string;
+  changeSummary: string | null;
+  createdAt: string;
+  expiresAt: string;
   summary: AiChangeSummary;
 }
 
@@ -66,6 +77,10 @@ export interface AiProposalResponse {
   proposal: AiChartProposal;
 }
 
+export interface AiPendingProposalsResponse {
+  proposals: AiPendingProposalSummary[];
+}
+
 export interface AiActivityHistoryResponse {
   activities: AiActivityRecord[];
 }
@@ -81,6 +96,7 @@ const unitFields: Array<{
   { key: "positionTitle", label: "Position title" },
   { key: "assignmentLabel", label: "Assignment or vacancy label" },
   { key: "positionStatus", label: "Position status" },
+  { key: "compactDisplay", label: "Compact presentation" },
   { key: "effectiveDate", label: "Effective date or label" },
   { key: "publicationVisibility", label: "Publication visibility" },
   { key: "source", label: "Source or provenance note" },

@@ -3,6 +3,10 @@ import type { ChartDocument } from "./chart-library";
 import {
   NODE_HEIGHT,
   NODE_WIDTH,
+  arrangeCompactPresentation,
+  compactNodeDimensions,
+  deriveCompactPresentation,
+  type ChartPresentationMode,
   type OrgFlowNode,
   type PositionStatus,
 } from "./org-chart";
@@ -89,8 +93,21 @@ export interface ExportSceneNode {
   positionTitle: string;
   status: PositionStatus;
   statusText: string;
+  hierarchyLevel: number;
+  targetSide: "top" | "left";
+  compactEntries: ExportSceneCompactEntry[];
+  compactListStartY: number | null;
+  showConnectionPoints: boolean;
   targetPortOffset: number;
   sourcePortOffsets: number[];
+}
+
+export interface ExportSceneCompactEntry {
+  id: string;
+  name: string;
+  positionTitle: string;
+  status: PositionStatus;
+  statusText: string;
 }
 
 export interface ExportConnectionPoint {
@@ -113,16 +130,20 @@ export interface ChartExportScene {
   chartVersion: number;
   generatedAt: string;
   audience: ExportAudience;
+  presentationMode: ChartPresentationMode;
   width: number;
   height: number;
   nodes: ExportSceneNode[];
   edges: ExportSceneEdge[];
   excludedNodeCount: number;
+  groupedNodeCount: number;
 }
 
 export const EXPORT_COLORS = {
   green: "00662C",
   darkTeal: "00454D",
+  graphite: "DBDCDB",
+  energy: "7DBA00",
   blue: "006BA6",
   orange: "FF9E1B",
   ink: "373A36",
@@ -148,6 +169,42 @@ function compactText(value: string, maximum = 44): string {
   return normalized.length <= maximum
     ? normalized
     : `${normalized.slice(0, Math.max(1, maximum - 1)).trimEnd()}…`;
+}
+
+export function estimateExportTextWidth(
+  value: string,
+  fontSize: number,
+  bold = false,
+): number {
+  const units = Array.from(value).reduce((total, character) => {
+    if (/\s/.test(character)) return total + 0.34;
+    if (/[ilI1|.,'`:;]/.test(character)) return total + 0.3;
+    if (/[MW@%&]/.test(character)) return total + 0.88;
+    if (/[A-Z0-9]/.test(character)) return total + 0.62;
+    return total + 0.54;
+  }, 0);
+  return units * fontSize * (bold ? 1.04 : 1);
+}
+
+export function fitExportText(
+  value: string,
+  maximumWidth: number,
+  fontSize: number,
+  bold = false,
+): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized || estimateExportTextWidth(normalized, fontSize, bold) <= maximumWidth) {
+    return normalized;
+  }
+  const suffix = "…";
+  let fitted = normalized;
+  while (
+    fitted.length > 1 &&
+    estimateExportTextWidth(`${fitted.trimEnd()}${suffix}`, fontSize, bold) > maximumWidth
+  ) {
+    fitted = fitted.slice(0, -1);
+  }
+  return `${fitted.trimEnd()}${suffix}`;
 }
 
 function wrapName(value: string): string[] {
@@ -220,25 +277,62 @@ export function buildChartExportScene(
   audience: ExportAudience,
   generatedAt = new Date().toISOString(),
   connectorRoutingMode: ConnectorRoutingMode = "separate",
+  presentationMode: ChartPresentationMode = "individual",
 ): ChartExportScene {
-  const includedNodes = chart.nodes.filter((node) => visibleForAudience(node, audience));
-  if (!includedNodes.length) {
+  const audienceNodes = chart.nodes.filter((node) => visibleForAudience(node, audience));
+  if (!audienceNodes.length) {
     throw new Error("This publication audience does not include any units.");
   }
 
+  const audienceIds = new Set(audienceNodes.map((node) => node.id));
+  assertAudienceHierarchyClosed(chart, audience, audienceIds);
+  const audienceEdges = chart.edges.filter(
+    (edge) => audienceIds.has(edge.source) && audienceIds.has(edge.target),
+  );
+  const compactPresentation = deriveCompactPresentation(audienceNodes, audienceEdges);
+  const includedNodes =
+    presentationMode === "compact"
+      ? arrangeCompactPresentation(audienceNodes, audienceEdges, compactPresentation)
+      : audienceNodes;
   const includedIds = new Set(includedNodes.map((node) => node.id));
-  assertAudienceHierarchyClosed(chart, audience, includedIds);
-  const sourceEdges = chart.edges.filter(
+  const sourceEdges = audienceEdges.filter(
     (edge) => includedIds.has(edge.source) && includedIds.has(edge.target),
+  );
+  const dimensionsById = new Map(
+    includedNodes.map((node) => {
+      const level = compactPresentation.levels.get(node.id) ?? 1;
+      const entries =
+        presentationMode === "compact"
+          ? (compactPresentation.entriesByParent.get(node.id) ?? [])
+          : [];
+      return [
+        node.id,
+        presentationMode === "compact"
+          ? compactNodeDimensions(
+              level,
+              entries.length,
+              compactPresentation.sidecarNodeIds.has(node.id),
+            )
+          : { width: NODE_WIDTH, height: NODE_HEIGHT },
+      ] as const;
+    }),
   );
   const minX = Math.min(...includedNodes.map((node) => node.position.x));
   const minY = Math.min(...includedNodes.map((node) => node.position.y));
-  const maxX = Math.max(...includedNodes.map((node) => node.position.x + NODE_WIDTH));
-  const maxY = Math.max(...includedNodes.map((node) => node.position.y + NODE_HEIGHT));
+  const maxX = Math.max(
+    ...includedNodes.map(
+      (node) => node.position.x + (dimensionsById.get(node.id)?.width ?? NODE_WIDTH),
+    ),
+  );
+  const maxY = Math.max(
+    ...includedNodes.map(
+      (node) => node.position.y + (dimensionsById.get(node.id)?.height ?? NODE_HEIGHT),
+    ),
+  );
   const offsetX = PADDING - minX;
   const offsetY = HEADER_HEIGHT + PADDING - minY;
   const includedEdges = sourceEdges.map((edge) => {
-    const manualRoute = manualEdgeRouteForEdge(edge);
+    const manualRoute = presentationMode === "compact" ? undefined : manualEdgeRouteForEdge(edge);
     if (!manualRoute) return edge;
     return {
       ...edge,
@@ -257,30 +351,95 @@ export function buildChartExportScene(
 
   const baseNodes = includedNodes.map((node) => {
     const unit = node.data.unit;
-    const statusText =
+    const hierarchyLevel = compactPresentation.levels.get(node.id) ?? 1;
+    const dimensions = dimensionsById.get(node.id) ?? { width: NODE_WIDTH, height: NODE_HEIGHT };
+    const compactEntryTextWidth = Math.max(48, dimensions.width - 138);
+    const compactEntryStatusWidth = Math.min(96, Math.max(56, dimensions.width * 0.36));
+    const compactEntries =
+      presentationMode === "compact"
+        ? (compactPresentation.entriesByParent.get(node.id) ?? []).map((entry) => ({
+            id: entry.id,
+            name: fitExportText(
+              compactText(entry.unit.shortName || entry.unit.name, 34),
+              compactEntryTextWidth,
+              10,
+              true,
+            ),
+            positionTitle: fitExportText(
+              compactText(entry.unit.positionTitle, 40),
+              compactEntryTextWidth,
+              8,
+            ),
+            status: entry.unit.positionStatus,
+            statusText: fitExportText(
+              audience === "public"
+                ? STATUS_LABELS[entry.unit.positionStatus]
+                : entry.unit.positionStatus === "filled"
+                  ? compactText(entry.unit.assignmentLabel, 34)
+                  : STATUS_LABELS[entry.unit.positionStatus],
+              compactEntryStatusWidth,
+              8,
+              true,
+            ),
+          }))
+        : [];
+    const rawStatusText =
       audience === "public"
         ? STATUS_LABELS[unit.positionStatus]
         : unit.positionStatus === "filled"
           ? compactText(unit.assignmentLabel, 35)
           : STATUS_LABELS[unit.positionStatus];
+    const compact = presentationMode === "compact";
+    const nameFontSize = compact && hierarchyLevel === 1 ? 22 : 17;
+    const horizontalTextInset = compact ? 32 : 40;
+    const statusText = fitExportText(
+      rawStatusText,
+      Math.max(56, dimensions.width - (compact ? 56 : 48)),
+      11,
+      true,
+    );
     return {
       id: node.id,
       x: node.position.x + offsetX,
       y: node.position.y + offsetY,
-      width: NODE_WIDTH,
-      height: NODE_HEIGHT,
+      width: dimensions.width,
+      height: dimensions.height,
       unitType: unit.type.toUpperCase(),
-      nameLines: wrapName(unit.shortName || unit.name),
-      positionTitle: compactText(unit.positionTitle, 39),
+      nameLines: wrapName(unit.shortName || unit.name).map((line) =>
+        fitExportText(line, dimensions.width - horizontalTextInset, nameFontSize, true),
+      ),
+      positionTitle: fitExportText(
+        compactText(unit.positionTitle, 39),
+        dimensions.width - horizontalTextInset,
+        12,
+      ),
       status: unit.positionStatus,
       statusText,
+      hierarchyLevel,
+      targetSide:
+        presentationMode === "compact" &&
+        (hierarchyLevel >= 3 || compactPresentation.sidecarNodeIds.has(node.id))
+          ? ("left" as const)
+          : ("top" as const),
+      compactEntries,
+      compactListStartY: compactEntries.length
+        ? dimensions.height - (34 + compactEntries.length * 54)
+        : null,
+      showConnectionPoints: presentationMode === "individual",
     };
   });
   const nodeById = new Map(baseNodes.map((node) => [node.id, node]));
   const routedEdges = buildOrthogonalEdgeRoutes(
-    baseNodes,
+    baseNodes.map((node) => ({
+      id: node.id,
+      x: node.x,
+      y: node.y,
+      width: node.width,
+      height: node.height,
+      targetSide: node.targetSide,
+    })),
     includedEdges,
-    connectorRoutingMode,
+    presentationMode === "compact" ? "combed" : connectorRoutingMode,
   );
   const sourcePortCounts = new Map<string, number>();
   const targetPortOffsets = new Map<string, number>();
@@ -291,7 +450,9 @@ export function buildChartExportScene(
     if (!targetNode || !endpoint) return;
     targetPortOffsets.set(
       route.targetId,
-      endpoint.x - (targetNode.x + targetNode.width / 2),
+      route.targetSide === "left"
+        ? endpoint.y - (targetNode.y + targetNode.height / 2)
+        : endpoint.x - (targetNode.x + targetNode.width / 2),
     );
   });
   const nodes: ExportSceneNode[] = baseNodes.map((node) => {
@@ -324,22 +485,32 @@ export function buildChartExportScene(
     chartVersion: chart.version,
     generatedAt,
     audience,
+    presentationMode,
     width: Math.max(760, maxX - minX + PADDING * 2),
     height: maxY - minY + HEADER_HEIGHT + FOOTER_HEIGHT + PADDING * 2,
     nodes,
     edges,
-    excludedNodeCount: chart.nodes.length - nodes.length,
+    excludedNodeCount: chart.nodes.length - audienceNodes.length,
+    groupedNodeCount:
+      presentationMode === "compact" ? compactPresentation.listedNodeIds.size : 0,
   };
 }
 
 export function connectionPointsForNode(
   node: ExportSceneNode,
 ): ExportConnectionPoint[] {
+  if (!node.showConnectionPoints) return [];
   return [
     {
       kind: "target",
-      x: node.x + node.width / 2 + node.targetPortOffset,
-      y: node.y,
+      x:
+        node.targetSide === "left"
+          ? node.x
+          : node.x + node.width / 2 + node.targetPortOffset,
+      y:
+        node.targetSide === "left"
+          ? node.y + node.height / 2 + node.targetPortOffset
+          : node.y,
     },
     ...node.sourcePortOffsets.map((offset) => ({
       kind: "source" as const,
@@ -383,28 +554,67 @@ export function buildChartSvg(
     })
     .join("");
   const nodeMarkup = scene.nodes
-    .map((node) => {
+    .map((node, nodeIndex) => {
+      const compact = scene.presentationMode === "compact";
+      const textX = compact ? node.x + node.width / 2 : node.x + 20;
+      const textAnchor = compact ? ' text-anchor="middle"' : "";
       const nameMarkup = node.nameLines
         .map(
           (line, index) =>
-            `<tspan x="${node.x + 20}" dy="${index ? 20 : 0}">${escapeXml(line)}</tspan>`,
+            `<tspan x="${textX}" dy="${index ? 20 : 0}">${escapeXml(line)}</tspan>`,
         )
         .join("");
       const titleY = node.y + (node.nameLines.length > 1 ? 92 : 78);
+      const statusTextWidth = estimateExportTextWidth(node.statusText, 11, true);
+      const statusRowStartX = compact
+        ? textX - (8 + 7 + statusTextWidth) / 2
+        : node.x + 20;
+      const statusMarkerX = compact ? statusRowStartX + 4 : node.x + 24;
+      const statusTextX = compact ? statusRowStartX + 15 : node.x + 36;
+      const compactEntryMarkup = node.compactListStartY === null
+        ? ""
+        : `<g class="compact-roster">
+            <rect x="${node.x}" y="${node.y + node.compactListStartY}" width="${node.width}" height="34" fill="#${EXPORT_COLORS.green}" fill-opacity="0.08"/>
+            <text x="${node.x + 12}" y="${node.y + node.compactListStartY + 21}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="8" font-weight="700" letter-spacing="0.8" fill="#${EXPORT_COLORS.darkTeal}">${node.compactEntries.length} LISTED ASSIGNMENT${node.compactEntries.length === 1 ? "" : "S"}</text>
+            ${node.compactEntries.map((entry, index) => {
+              const rowY = node.y + node.compactListStartY! + 34 + index * 54;
+              const entryStatusRight = node.x + node.width - 12;
+              const entryStatusTextWidth = estimateExportTextWidth(entry.statusText, 8, true);
+              const entryStatusMarkerX = entryStatusRight - entryStatusTextWidth - 5 - 4;
+              return `<g data-compact-entry-id="${escapeXml(entry.id)}">
+                <line x1="${node.x}" y1="${rowY}" x2="${node.x + node.width}" y2="${rowY}" stroke="#${EXPORT_COLORS.graphite}" stroke-width="1"/>
+                <text x="${node.x + 12}" y="${rowY + 19}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" font-weight="700" fill="#${EXPORT_COLORS.darkTeal}">${escapeXml(entry.name)}</text>
+                <text x="${node.x + 12}" y="${rowY + 35}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="8" fill="#${EXPORT_COLORS.ink}">${escapeXml(entry.positionTitle)}</text>
+                <circle cx="${entryStatusMarkerX}" cy="${rowY + 27}" r="4" fill="#${statusColor(entry.status)}"/>
+                <text x="${entryStatusRight}" y="${rowY + 31}" text-anchor="end" font-family="Mulish, Aptos, Arial, sans-serif" font-size="8" font-weight="700" fill="#${EXPORT_COLORS.ink}">${escapeXml(entry.statusText)}</text>
+              </g>`;
+            }).join("")}
+          </g>`;
       const connectionPointMarkup = connectionPointsForNode(node)
         .map(
           (point) =>
             `<circle class="org-connection-point org-connection-point--${point.kind}" data-port-kind="${point.kind}" cx="${point.x}" cy="${point.y}" r="${EXPORT_CONNECTION_POINT_RADIUS}" fill="#${EXPORT_COLORS.darkTeal}" stroke="#${EXPORT_COLORS.white}" stroke-width="${EXPORT_CONNECTION_POINT_STROKE_WIDTH}"/>`,
         )
         .join("");
+      const cardFill = compact && node.hierarchyLevel === 2
+        ? node.unitType === "DIVISION" || node.unitType === "DIRECTORATE"
+          ? EXPORT_COLORS.energy
+          : EXPORT_COLORS.graphite
+        : EXPORT_COLORS.white;
+      const cardFillOpacity = compact && node.hierarchyLevel === 2 ? "0.18" : "1";
       return `<g data-unit-id="${escapeXml(node.id)}">
-        <rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="#${EXPORT_COLORS.white}" stroke="#${EXPORT_COLORS.darkTeal}" stroke-width="1.5"/>
-        <rect x="${node.x}" y="${node.y}" width="6" height="${node.height}" fill="#${EXPORT_COLORS.green}"/>
-        <text x="${node.x + 20}" y="${node.y + 24}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" font-weight="700" letter-spacing="1.2" fill="#${EXPORT_COLORS.green}">${escapeXml(node.unitType)}</text>
-        <text x="${node.x + 20}" y="${node.y + 51}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="17" font-weight="700" fill="#${EXPORT_COLORS.ink}">${nameMarkup}</text>
-        <text x="${node.x + 20}" y="${titleY}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="12" fill="#${EXPORT_COLORS.ink}">${escapeXml(node.positionTitle)}</text>
-        <circle cx="${node.x + 24}" cy="${node.y + 114}" r="4" fill="#${statusColor(node.status)}"/>
-        <text x="${node.x + 36}" y="${node.y + 118}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="11" fill="#${EXPORT_COLORS.ink}">${escapeXml(node.statusText)}</text>
+        <rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="#${cardFill}" fill-opacity="${cardFillOpacity}" stroke="#${EXPORT_COLORS.darkTeal}" stroke-width="1.5"/>
+        <g clip-path="url(#export-card-content-${nodeIndex})">
+        ${compact
+          ? `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.hierarchyLevel === 1 ? 8 : 5}" fill="#${node.hierarchyLevel === 2 ? EXPORT_COLORS.darkTeal : EXPORT_COLORS.green}"/>`
+          : `<rect x="${node.x}" y="${node.y}" width="6" height="${node.height}" fill="#${EXPORT_COLORS.green}"/>`}
+        <text x="${textX}" y="${node.y + 24}"${textAnchor} font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" font-weight="700" letter-spacing="1.2" fill="#${EXPORT_COLORS.green}">${escapeXml(node.unitType)}</text>
+        <text x="${textX}" y="${node.y + 51}"${textAnchor} font-family="Mulish, Aptos, Arial, sans-serif" font-size="${compact && node.hierarchyLevel === 1 ? 22 : 17}" font-weight="700" fill="#${EXPORT_COLORS.ink}">${nameMarkup}</text>
+        <text x="${textX}" y="${titleY}"${textAnchor} font-family="Mulish, Aptos, Arial, sans-serif" font-size="12" fill="#${EXPORT_COLORS.ink}">${escapeXml(node.positionTitle)}</text>
+        <circle cx="${statusMarkerX}" cy="${node.y + 114}" r="4" fill="#${statusColor(node.status)}"/>
+        <text x="${statusTextX}" y="${node.y + 118}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="11" font-weight="700" fill="#${EXPORT_COLORS.ink}">${escapeXml(node.statusText)}</text>
+        ${compactEntryMarkup}
+        </g>
         ${connectionPointMarkup}
       </g>`;
     })
@@ -417,7 +627,10 @@ export function buildChartSvg(
   });
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${viewport.width}" height="${viewport.height}" viewBox="0 0 ${viewport.width} ${viewport.height}" role="img" aria-labelledby="title description">
     <title id="title">${escapeXml(scene.chartName)} organizational chart</title>
-    <desc id="description">${escapeXml(audienceLabel)}, version ${scene.chartVersion}, ${escapeXml(viewport.preset.label)}, generated ${escapeXml(generatedLabel)}.</desc>
+    <desc id="description">${escapeXml(audienceLabel)}, version ${scene.chartVersion}, ${scene.presentationMode === "compact" ? "compact grouped presentation" : "individual card presentation"}, ${escapeXml(viewport.preset.label)}, generated ${escapeXml(generatedLabel)}.</desc>
+    <defs>
+      ${scene.nodes.map((node, index) => `<clipPath id="export-card-content-${index}" clipPathUnits="userSpaceOnUse"><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"/></clipPath>`).join("")}
+    </defs>
     <rect width="${viewport.width}" height="${viewport.height}" fill="#${EXPORT_COLORS.softGray}"/>
     <g transform="translate(${viewport.offsetX} ${viewport.offsetY}) scale(${viewport.scale})">
     <rect width="${scene.width}" height="${scene.height}" fill="#${EXPORT_COLORS.softGray}"/>
@@ -426,7 +639,7 @@ export function buildChartSvg(
     <text x="30" y="31" font-family="Mulish, Aptos, Arial, sans-serif" font-size="20" font-weight="700" fill="#${EXPORT_COLORS.ink}">${escapeXml(scene.chartName)}</text>
     <text x="30" y="53" font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" font-weight="700" letter-spacing="1.1" fill="#${EXPORT_COLORS.darkTeal}">${audienceLabel} • VERSION ${scene.chartVersion}</text>
     ${edgeMarkup}${nodeMarkup}
-    <text x="${PADDING}" y="${scene.height - 15}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" fill="#${EXPORT_COLORS.ink}">Generated ${escapeXml(generatedLabel)} • ${scene.nodes.length} units${scene.excludedNodeCount ? ` • ${scene.excludedNodeCount} excluded by audience profile` : ""}</text>
+    <text x="${PADDING}" y="${scene.height - 15}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" fill="#${EXPORT_COLORS.ink}">Generated ${escapeXml(generatedLabel)} • ${scene.nodes.length} cards${scene.groupedNodeCount ? ` • ${scene.groupedNodeCount} grouped entries` : ""}${scene.excludedNodeCount ? ` • ${scene.excludedNodeCount} excluded by audience profile` : ""}</text>
     </g>
   </svg>`;
 }

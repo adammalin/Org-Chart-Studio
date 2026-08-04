@@ -90,6 +90,29 @@ test("global connector lanes avoid horizontal and vertical path overlap", () => 
   assert.equal(positiveLengthCollinearOverlaps(routes), 0);
 });
 
+test("level-three compact targets share a left-entry rail", () => {
+  const parent = node("parent", 100, 0);
+  const first = { ...node("first", 0, 220), targetSide: "left" as const };
+  const second = { ...node("second", 0, 380), targetSide: "left" as const };
+  const routes = buildOrthogonalEdgeRoutes(
+    [parent, first, second],
+    [
+      { id: "edge-first", source: parent.id, target: first.id },
+      { id: "edge-second", source: parent.id, target: second.id },
+    ],
+  );
+  const firstRoute = routes.get("edge-first")!;
+  const secondRoute = routes.get("edge-second")!;
+
+  assert.equal(firstRoute.targetSide, "left");
+  assert.equal(secondRoute.targetSide, "left");
+  assert.equal(firstRoute.points.at(-1)?.x, first.x);
+  assert.equal(secondRoute.points.at(-1)?.x, second.x);
+  assert.equal(firstRoute.points.at(-2)?.x, secondRoute.points.at(-2)?.x);
+  assertOrthogonal(firstRoute.points);
+  assertOrthogonal(secondRoute.points);
+});
+
 test("separate routing detours around cards between a parent and child", () => {
   const nodes = [
     node("parent", 250, 0),

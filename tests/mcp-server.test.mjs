@@ -84,6 +84,7 @@ async function startFakeApp(token) {
       for await (const chunk of request) chunks.push(chunk);
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       assert.equal(body.action, "stage");
+      assert.equal(body.changeSummary, "The synthetic assignment changed after owner review.");
       response.statusCode = 201;
       response.end(
         JSON.stringify({
@@ -331,7 +332,10 @@ test("local STDIO MCP exposes bounded tools and reaches only the authorized runn
     proposed.nodes[0].data.unit.assignmentLabel = "Synthetic replacement";
     const staged = await client.callTool({
       name: "replace_chart_draft",
-      arguments: { chart: proposed },
+      arguments: {
+        chart: proposed,
+        changeSummary: "The synthetic assignment changed after owner review.",
+      },
     });
     assert.equal(staged.isError, undefined);
     assert.equal(staged.structuredContent.proposal.id, "proposal-public-fixture");

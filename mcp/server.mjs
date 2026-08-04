@@ -410,9 +410,10 @@ function registerTools(server, client) {
     {
       title: "Propose changes to a working chart",
       description:
-        "Stage a complete ChartDocument for field-by-field human review in OrgChart Studio. The saved chart is not changed until a person applies the proposal. The chart ID, version, and updatedAt must still match, so stale proposals are rejected.",
+        "Stage a complete ChartDocument for field-by-field human review in OrgChart Studio. The saved chart is not changed until a person applies the proposal. The chart ID, version, and updatedAt must still match, so stale proposals are rejected. Use changeSummary only to restate the human-supplied reason for the change; never infer one.",
       inputSchema: {
         chart: z.record(z.string(), z.unknown()),
+        changeSummary: z.string().min(3).max(500).optional(),
       },
       annotations: {
         readOnlyHint: false,
@@ -420,17 +421,17 @@ function registerTools(server, client) {
         openWorldHint: false,
       },
     },
-    async ({ chart }) => {
+    async ({ chart, changeSummary }) => {
       try {
         const result = await runWithWriteActivity(
           client,
           {
             operation: "replace_chart_draft",
-            label: "Updating working draft",
+            label: changeSummary || "Preparing chart changes for review",
             chartId: chart.id,
             chartName: chart.name,
           },
-          () => client.stageChartProposal(chart),
+          () => client.stageChartProposal(chart, changeSummary),
         );
         return success(
           { proposal: result.proposal },
