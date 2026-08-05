@@ -488,6 +488,46 @@ function createMainWindow(url) {
           ),
           'the MCP-created chart to appear without a page reload'
         );
+        const smokeChartCard = [...document.querySelectorAll('.chart-card')].find(
+          (card) => card.querySelector('h2')?.textContent === created.chart.name
+        );
+        const openSmokeChartButton = [...smokeChartCard.querySelectorAll('button')].find(
+          (button) => button.textContent.trim() === 'Open'
+        );
+        openSmokeChartButton.click();
+        const smokeRootCard = await waitFor(
+          () => document.querySelector('.react-flow__node'),
+          'the chart root card'
+        );
+        smokeRootCard.click();
+        const drawerCloseButton = await waitFor(
+          () => {
+            const button = document.querySelector('[aria-label="Close selected unit details"]');
+            return button instanceof HTMLButtonElement && buttonReceivesPointer(button)
+              ? button
+              : null;
+          },
+          'the selected-unit drawer close control'
+        );
+        const drawerCloseButtonClickable =
+          drawerCloseButton instanceof HTMLButtonElement &&
+          !drawerCloseButton.disabled &&
+          buttonReceivesPointer(drawerCloseButton);
+        drawerCloseButton.click();
+        const drawerClosedOnFirstClick = await waitFor(
+          () => !document.querySelector('.detail-panel'),
+          'the selected-unit drawer to close after one click'
+        );
+        smokeRootCard.click();
+        const drawerReopensForNextSelection = await waitFor(
+          () => document.querySelector('.detail-panel'),
+          'the selected-unit drawer to reopen for a deliberate selection'
+        );
+        document.querySelector('[aria-label="Close selected unit details"]').click();
+        await waitFor(
+          () => !document.querySelector('.detail-panel'),
+          'the reopened selected-unit drawer to close'
+        );
         const editedChart = {
           ...created.chart,
           nodes: created.chart.nodes.map((node, index) => index === 0 ? {
@@ -930,6 +970,10 @@ function createMainWindow(url) {
           externalRequestBlocked: await fetch('https://example.com/orgchart-network-test').then(() => false, () => true),
           chartLibraryVisible: chartLibraryInitiallyVisible,
           mcpLibraryAutoRefresh: Boolean(mcpLibraryAutoRefresh),
+          unitDrawerSingleClickClose:
+            drawerCloseButtonClickable &&
+            drawerClosedOnFirstClick &&
+            Boolean(drawerReopensForNextSelection),
           sourcesVisible: document.body.textContent.includes('Sources & imports'),
           backupsVisible: document.body.textContent.includes('Backup & restore'),
           startsWithoutExampleCharts: chartLibrary.charts.length === 0,

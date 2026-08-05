@@ -119,6 +119,12 @@ test("selected unit details use a dismissible editor-only drawer", () => {
   );
   assert.match(workspaceSource, /detailPanelVisible && selectedNode/);
   assert.match(workspaceSource, /aria-label="Close selected unit details"/);
+  assert.match(workspaceSource, /dismissedSelectionIdsRef/);
+  assert.match(
+    workspaceSource,
+    /currentSelectedNodes = selectedNodes\.filter\([\s\S]*dismissedSelectionIdsRef\.current\.has/,
+  );
+  assert.match(workspaceSource, /onPointerDown=\{\(event\) => event\.stopPropagation\(\)\}/);
   assert.match(workspaceSource, /onPaneClick=\{\(\) => \{[\s\S]*clearSelectedCard\(\)/);
   assert.match(workspaceSource, /setSelectedId\(""\)/);
   assert.match(

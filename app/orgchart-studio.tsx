@@ -822,6 +822,7 @@ function StudioWorkspace() {
   const branchDragRef = useRef<BranchDragState | null>(null);
   const groupDragRef = useRef<GroupDragState | null>(null);
   const routeCornerDragRef = useRef<RouteCornerDragState | null>(null);
+  const dismissedSelectionIdsRef = useRef<Set<string>>(new Set());
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const onboardingDialogRef = useRef<HTMLElement | null>(null);
   const onboardingInitializedRef = useRef(false);
@@ -2128,6 +2129,7 @@ function StudioWorkspace() {
   }, [activeChartId, pendingAiProposal]);
 
   const selectCompactEntry = useCallback((id: string) => {
+    dismissedSelectionIdsRef.current.clear();
     setSelectedId(id);
     setSelectedEdgeId("");
     setNotice("Listed assignment selected. Its complete record remains available in the detail panel.");
@@ -2799,11 +2801,16 @@ function StudioWorkspace() {
   };
 
   const handleNodeClick: NodeMouseHandler<OrgFlowNode> = (_event, flowNode) => {
+    dismissedSelectionIdsRef.current.clear();
     setSelectedId(flowNode.id);
     setSelectedEdgeId("");
   };
 
   const clearSelectedCard = useCallback(() => {
+    dismissedSelectionIdsRef.current = new Set(
+      [selectedId, ...nodes.filter((flowNode) => flowNode.selected).map((flowNode) => flowNode.id)]
+        .filter(Boolean),
+    );
     setSelectedId("");
     setNodes((currentNodes) => {
       let selectionChanged = false;
@@ -2814,7 +2821,7 @@ function StudioWorkspace() {
       });
       return selectionChanged ? nextNodes : currentNodes;
     });
-  }, [setNodes]);
+  }, [nodes, selectedId, setNodes]);
 
   const saveUnitChanges = (form: HTMLFormElement) => {
     if (!selectedNode) return;
@@ -4765,11 +4772,19 @@ function StudioWorkspace() {
                   setSelectedEdgeId("");
                 }}
                 onSelectionChange={({ nodes: selectedNodes }) => {
-                  if (!selectedNodes.length) return;
+                  if (!selectedNodes.length) {
+                    dismissedSelectionIdsRef.current.clear();
+                    return;
+                  }
+                  const currentSelectedNodes = selectedNodes.filter(
+                    (candidate) => !dismissedSelectionIdsRef.current.has(candidate.id),
+                  );
+                  if (!currentSelectedNodes.length) return;
+                  dismissedSelectionIdsRef.current.clear();
                   setSelectedId((current) =>
-                    selectedNodes.some((candidate) => candidate.id === current)
+                    currentSelectedNodes.some((candidate) => candidate.id === current)
                       ? current
-                      : selectedNodes[0].id,
+                      : currentSelectedNodes[0].id,
                   );
                 }}
                 onNodeDragStart={(_event, flowNode, draggedNodes) => {
@@ -6947,7 +6962,11 @@ function StudioWorkspace() {
             <button
               type="button"
               className="detail-panel__close"
-              onClick={clearSelectedCard}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                clearSelectedCard();
+              }}
               aria-label="Close selected unit details"
               title="Close selected unit details"
             >
