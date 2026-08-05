@@ -98,6 +98,9 @@ export interface ExportSceneNode {
   positionTitle: string;
   status: PositionStatus;
   statusText: string;
+  statusLines: string[];
+  statusFontSize: number;
+  statusLineHeight: number;
   hierarchyLevel: number;
   targetSide: "top" | "left";
   compactEntries: ExportSceneCompactEntry[];
@@ -199,6 +202,24 @@ function wrapExportText(
   const lines: string[] = [];
   let current = "";
   for (const word of words) {
+    if (estimateExportTextWidth(word, fontSize, bold) > maximumWidth) {
+      if (current) {
+        lines.push(current);
+        current = "";
+      }
+      let segment = "";
+      for (const character of word) {
+        const candidate = `${segment}${character}`;
+        if (segment && estimateExportTextWidth(candidate, fontSize, bold) > maximumWidth) {
+          lines.push(segment);
+          segment = character;
+        } else {
+          segment = candidate;
+        }
+      }
+      current = segment;
+      continue;
+    }
     const candidate = current ? `${current} ${word}` : word;
     if (current && estimateExportTextWidth(candidate, fontSize, bold) > maximumWidth) {
       lines.push(current);
@@ -209,6 +230,28 @@ function wrapExportText(
   }
   if (current) lines.push(current);
   return lines;
+}
+
+function layoutExportStatus(
+  value: string,
+  maximumWidth: number,
+  maximumHeight: number,
+): { text: string; lines: string[]; fontSize: number; lineHeight: number } {
+  const text = cleanOrgChartDisplayText(value) || "Unassigned";
+  for (let fontSize = 11; fontSize >= 3; fontSize -= 0.5) {
+    const lineHeight = fontSize * 1.14;
+    const lines = wrapExportText(text, maximumWidth, fontSize, true);
+    if (lines.length * lineHeight <= maximumHeight) {
+      return { text, lines, fontSize, lineHeight };
+    }
+  }
+  const fontSize = 3;
+  return {
+    text,
+    lines: wrapExportText(text, maximumWidth, fontSize, true),
+    fontSize,
+    lineHeight: fontSize * 1.14,
+  };
 }
 
 function mergeExportLines(lines: string[], maximumLines: number, fontSize: number): string[] {
@@ -434,6 +477,14 @@ export function buildChartExportScene(
       dimensions.width - horizontalTextInset,
       nameFontSize,
     );
+    const compactListStartY = compactEntries.length
+      ? dimensions.height - (34 + compactEntries.length * 54)
+      : null;
+    const statusLayout = layoutExportStatus(
+      rawStatusText,
+      dimensions.width - (compact ? 56 : 48),
+      Math.max(18, (compactListStartY ?? dimensions.height) - 110),
+    );
     return {
       id: node.id,
       x: node.position.x + offsetX,
@@ -447,7 +498,10 @@ export function buildChartExportScene(
       nameLineHeight: nameLayout.lineHeight,
       positionTitle: cleanOrgChartDisplayText(unit.positionTitle),
       status: unit.positionStatus,
-      statusText: cleanOrgChartDisplayText(rawStatusText),
+      statusText: statusLayout.text,
+      statusLines: statusLayout.lines,
+      statusFontSize: statusLayout.fontSize,
+      statusLineHeight: statusLayout.lineHeight,
       hierarchyLevel,
       targetSide:
         presentationMode === "compact" &&
@@ -456,9 +510,7 @@ export function buildChartExportScene(
           ? ("left" as const)
           : ("top" as const),
       compactEntries,
-      compactListStartY: compactEntries.length
-        ? dimensions.height - (34 + compactEntries.length * 54)
-        : null,
+      compactListStartY,
       showConnectionPoints: presentationMode === "individual",
     };
   });
@@ -638,18 +690,28 @@ export function buildChartSvg(
         nameMaximumWidth,
         12,
       );
-      const statusFontSize = fitExportFontSize(
-        node.statusText,
-        statusMaximumWidth,
-        11,
-        true,
+      const statusFontSize = Math.min(
+        node.statusFontSize,
+        ...node.statusLines.map((line) =>
+          fitExportFontSize(line, statusMaximumWidth, node.statusFontSize, true),
+        ),
       );
-      const statusTextWidth = estimateExportTextWidth(node.statusText, statusFontSize, true);
+      const statusTextWidth = Math.max(
+        ...node.statusLines.map((line) =>
+          estimateExportTextWidth(line, statusFontSize, true),
+        ),
+      );
       const statusRowStartX = compact
         ? textX - (8 + 7 + statusTextWidth) / 2
         : node.x + 20;
       const statusMarkerX = compact ? statusRowStartX + 4 : node.x + 24;
       const statusTextX = compact ? statusRowStartX + 15 : node.x + 36;
+      const statusMarkup = node.statusLines
+        .map(
+          (line, index) =>
+            `<tspan x="${statusTextX}" dy="${index ? node.statusLineHeight : 0}">${escapeXml(line)}</tspan>`,
+        )
+        .join("");
       const compactEntryMarkup = node.compactListStartY === null
         ? ""
         : `<g class="compact-roster">
@@ -715,7 +777,7 @@ export function buildChartSvg(
         <text x="${textX}" y="${node.y + 51}" data-full-text="${escapeXml(node.name)}"${textAnchor} font-family="Mulish, Aptos, Arial, sans-serif" font-size="${node.nameFontSize}" font-weight="700" fill="#${EXPORT_COLORS.ink}">${nameMarkup}</text>
         <text x="${textX}" y="${titleY}" data-full-text="${escapeXml(node.positionTitle)}"${textAnchor} font-family="Mulish, Aptos, Arial, sans-serif" font-size="${positionTitleFontSize}" fill="#${EXPORT_COLORS.ink}">${escapeXml(node.positionTitle)}</text>
         <circle cx="${statusMarkerX}" cy="${node.y + 114}" r="4" fill="#${statusColor(node.status)}"/>
-        <text x="${statusTextX}" y="${node.y + 118}" data-full-text="${escapeXml(node.statusText)}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="${statusFontSize}" font-weight="700" fill="#${EXPORT_COLORS.ink}">${escapeXml(node.statusText)}</text>
+        <text x="${statusTextX}" y="${node.y + 118}" data-full-text="${escapeXml(node.statusText)}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="${statusFontSize}" font-weight="700" fill="#${EXPORT_COLORS.ink}">${statusMarkup}</text>
         ${compactEntryMarkup}
         </g>
         ${connectionPointMarkup}

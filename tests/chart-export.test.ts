@@ -71,6 +71,74 @@ test("export text keeps complete long metadata in SVG and editable PowerPoint te
   assert.match(slideXml, /<a:normAutofit\/>/);
 });
 
+test("long card assignment labels wrap consistently across visual exports", async () => {
+  const chart = seedChartDocuments()[0];
+  const initialScene = buildChartExportScene(
+    chart,
+    "internal",
+    generatedAt,
+    "separate",
+    "compact",
+  );
+  const branchId = initialScene.nodes.find((node) => node.hierarchyLevel === 2)!.id;
+  const fullLabel =
+    "Safety operations: Synthetic contact alpha; Procurement: Synthetic contact beta; Finance: Synthetic contact gamma; Human resources: Synthetic contact delta; Facilities operations: Synthetic contact epsilon";
+  const wrappedChart = {
+    ...chart,
+    nodes: chart.nodes.map((node) =>
+      node.id === branchId
+        ? {
+            ...node,
+            data: {
+              ...node.data,
+              unit: { ...node.data.unit, assignmentLabel: fullLabel },
+            },
+          }
+        : node,
+    ),
+  };
+  const scene = buildChartExportScene(
+    wrappedChart,
+    "internal",
+    generatedAt,
+    "separate",
+    "compact",
+  );
+  const wrappedNode = scene.nodes.find((node) => node.id === branchId)!;
+
+  assert.ok(wrappedNode.statusLines.length > 1);
+  assert.ok(wrappedNode.statusFontSize >= 5);
+  assert.equal(wrappedNode.statusLines.join(" "), fullLabel);
+  assert.ok(
+    wrappedNode.statusLines.every(
+      (line) =>
+        estimateExportTextWidth(line, wrappedNode.statusFontSize, true) <=
+        wrappedNode.width - 56,
+    ),
+  );
+
+  const svg = buildChartSvg(scene, "presentation-wide");
+  assert.match(
+    svg,
+    new RegExp(`data-full-text="${fullLabel}"[^>]*>[\\s\\S]*?<tspan`),
+  );
+  for (const line of wrappedNode.statusLines) assert.ok(svg.includes(line));
+
+  const pdf = await buildChartPdf(scene, "presentation-wide");
+  assert.equal(Buffer.from(pdf.subarray(0, 5)).toString("ascii"), "%PDF-");
+
+  const presentation = await buildChartPptx(scene, "presentation-wide");
+  const slideXml = strFromU8(unzipSync(presentation)["ppt/slides/slide1.xml"]);
+  const statusShapeStart = slideXml.indexOf(`Position status ${branchId}`);
+  const statusShapeEnd = slideXml.indexOf("</p:sp>", statusShapeStart);
+  const statusShapeXml = slideXml.slice(statusShapeStart, statusShapeEnd);
+  assert.equal(
+    (statusShapeXml.match(/<a:p>/g) ?? []).length,
+    wrappedNode.statusLines.length,
+  );
+  for (const line of wrappedNode.statusLines) assert.ok(slideXml.includes(line));
+});
+
 test("screen-ready export labels remove imported asterisks without mutating source data", async () => {
   const chart = seedChartDocuments()[0];
   const markedChart = {

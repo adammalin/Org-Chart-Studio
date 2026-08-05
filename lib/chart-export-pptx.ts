@@ -63,7 +63,11 @@ function drawNode(
   const statusMaximumWidth = Math.max(56, node.width - (compact ? 56 : 48));
   const statusTextWidth = Math.min(
     statusMaximumWidth,
-    estimateExportTextWidth(node.statusText, 11, true),
+    Math.max(
+      ...node.statusLines.map((line) =>
+        estimateExportTextWidth(line, node.statusFontSize, true),
+      ),
+    ),
   );
   const statusRowStart = compact
     ? node.width / 2 - (8 + 7 + statusTextWidth) / 2
@@ -77,11 +81,11 @@ function drawNode(
     12,
     node.width - (compact ? 32 : 40),
   );
-  const statusFontSize = fitTextPixels(
-    node.statusText,
-    11,
-    statusMaximumWidth,
-    true,
+  const statusFontSize = Math.min(
+    node.statusFontSize,
+    ...node.statusLines.map((line) =>
+      fitTextPixels(line, node.statusFontSize, statusMaximumWidth, true),
+    ),
   );
 
   slide.addShape(pptx.ShapeType.rect, {
@@ -164,13 +168,13 @@ function drawNode(
     line: { color: statusColor, transparency: 100 },
     objectName: `Position status marker ${node.id}`,
   });
-  slide.addText(node.statusText, {
+  slide.addText(node.statusLines.join("\n"), {
     x: x + (compact ? statusRowStart + 15 : 36) * scale,
     y: y + 101 * scale,
     w: compact
       ? Math.max(0.3, (statusTextWidth + 4) * scale)
       : Math.max(0.3, width - 48 * scale),
-    h: 18 * scale,
+    h: Math.max(18, node.statusLines.length * node.statusLineHeight + 4) * scale,
     margin: 0,
     fontFace: "Aptos",
     fontSize: font(statusFontSize),

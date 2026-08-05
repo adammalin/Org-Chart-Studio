@@ -151,13 +151,24 @@ function drawNode(
     font: regular,
     color: color(EXPORT_COLORS.ink),
   });
-  const statusTextSize = fitPdfTextSize(
-    node.statusText,
-    bold,
-    Math.max(5, 11 * scale),
-    Math.max(24, (node.width - (compact ? 56 : 48)) * scale),
+  const statusMaximumWidth = Math.max(
+    24,
+    (node.width - (compact ? 56 : 48)) * scale,
   );
-  const statusTextWidth = bold.widthOfTextAtSize(node.statusText, statusTextSize);
+  const statusTextSizes = node.statusLines.map((line) =>
+    fitPdfTextSize(
+      line,
+      bold,
+      Math.max(3, node.statusFontSize * scale),
+      statusMaximumWidth,
+      2.5,
+    ),
+  );
+  const statusTextWidth = Math.max(
+    ...node.statusLines.map((line, index) =>
+      bold.widthOfTextAtSize(line, statusTextSizes[index]),
+    ),
+  );
   const statusMarkerRadius = Math.max(1.8, 4 * scale);
   const statusGap = 7 * scale;
   const statusRowStartX = compact
@@ -178,12 +189,14 @@ function drawNode(
     size: statusMarkerRadius,
     color: color(statusHex),
   });
-  page.drawText(pdfText(node.statusText, bold), {
-    x: statusTextX,
-    y: mapY(node.y + 118),
-    size: statusTextSize,
-    font: bold,
-    color: color(EXPORT_COLORS.ink),
+  node.statusLines.forEach((line, index) => {
+    page.drawText(pdfText(line, bold), {
+      x: statusTextX,
+      y: mapY(node.y + 118 + index * node.statusLineHeight),
+      size: statusTextSizes[index],
+      font: bold,
+      color: color(EXPORT_COLORS.ink),
+    });
   });
   if (node.compactListStartY !== null) {
     const headerTop = node.y + node.compactListStartY;
