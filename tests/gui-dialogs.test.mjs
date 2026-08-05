@@ -9,6 +9,10 @@ const workspaceSource = readFileSync(
   path.join(projectRoot, "app", "orgchart-studio.tsx"),
   "utf8",
 );
+const workspaceStyles = readFileSync(
+  path.join(projectRoot, "app", "globals.css"),
+  "utf8",
+);
 
 test("create, add-child, and metadata forms use an accessible in-app dialog", () => {
   assert.doesNotMatch(workspaceSource, /window\.prompt\s*\(/);
@@ -106,4 +110,23 @@ test("chart lifecycle exposes guarded Current and safe archived workflows", () =
   assert.match(workspaceSource, /Archive a chart before permanently deleting it/);
   assert.match(workspaceSource, /Chart lifecycle is authoritative/);
   assert.match(workspaceSource, /Internal current record/);
+});
+
+test("selected unit details use a dismissible editor-only drawer", () => {
+  assert.match(
+    workspaceSource,
+    /const detailPanelVisible = workspaceView === "canvas" && Boolean\(selectedNode\)/,
+  );
+  assert.match(workspaceSource, /detailPanelVisible && selectedNode/);
+  assert.match(workspaceSource, /aria-label="Close selected unit details"/);
+  assert.match(workspaceSource, /onPaneClick=\{\(\) => \{[\s\S]*clearSelectedCard\(\)/);
+  assert.match(workspaceSource, /setSelectedId\(""\)/);
+  assert.match(
+    workspaceStyles,
+    /\.studio-shell \{[\s\S]*grid-template-columns: 214px minmax\(0, 1fr\)/,
+  );
+  assert.match(
+    workspaceStyles,
+    /\.detail-panel \{[\s\S]*position: fixed;[\s\S]*right: 0;[\s\S]*animation: detail-panel-enter/,
+  );
 });

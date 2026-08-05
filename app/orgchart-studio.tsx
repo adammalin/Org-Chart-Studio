@@ -1267,7 +1267,7 @@ function StudioWorkspace() {
       setActiveChartId(chart.id);
       setNodes(chart.nodes);
       setEdges(chart.edges);
-      setSelectedId(chart.nodes[0]?.id ?? "");
+      setSelectedId("");
       setSelectedEdgeId("");
       setCollapsedIds(new Set());
       setSearchQuery("");
@@ -2257,8 +2257,7 @@ function StudioWorkspace() {
     ],
   );
 
-  const selectedNode =
-    nodes.find((flowNode) => flowNode.id === selectedId) ?? nodes[0];
+  const selectedNode = nodes.find((flowNode) => flowNode.id === selectedId);
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
   const selectedEdgeRoute = selectedEdgeId ? edgeRoutes.get(selectedEdgeId) : undefined;
   const selectedEdgeSource = nodes.find((node) => node.id === selectedEdge?.source);
@@ -2804,6 +2803,19 @@ function StudioWorkspace() {
     setSelectedEdgeId("");
   };
 
+  const clearSelectedCard = useCallback(() => {
+    setSelectedId("");
+    setNodes((currentNodes) => {
+      let selectionChanged = false;
+      const nextNodes = currentNodes.map((flowNode) => {
+        if (!flowNode.selected) return flowNode;
+        selectionChanged = true;
+        return { ...flowNode, selected: false };
+      });
+      return selectionChanged ? nextNodes : currentNodes;
+    });
+  }, [setNodes]);
+
   const saveUnitChanges = (form: HTMLFormElement) => {
     if (!selectedNode) return;
     const formData = new FormData(form);
@@ -3008,6 +3020,10 @@ function StudioWorkspace() {
   const runLayout = async () => {
     if (layoutMode === "preserve") {
       setNotice("Preserve mode kept all existing coordinates. No nodes needed placement.");
+      return;
+    }
+    if (layoutMode === "branch" && !selectedNode) {
+      setNotice("Select a card before running the Selected branch layout.");
       return;
     }
 
@@ -4006,12 +4022,15 @@ function StudioWorkspace() {
   const lifecycleReadiness = lifecycleDialogChart
     ? currentReadiness(lifecycleDialogChart)
     : null;
+  const detailPanelVisible = workspaceView === "canvas" && Boolean(selectedNode);
 
   return (
     <div
       className={`studio-shell${
         mcpActivityVisible ? ` studio-shell--ai-${mcpActivity.phase}` : ""
-      }${pendingAiProposal || pendingAiImportProposal ? " studio-shell--ai-review" : ""}`}
+      }${pendingAiProposal || pendingAiImportProposal ? " studio-shell--ai-review" : ""}${
+        detailPanelVisible ? " studio-shell--detail-open" : ""
+      }`}
     >
       <div className="mcp-activity-frame" aria-hidden="true" />
       {mcpActivityVisible ? (
@@ -4433,7 +4452,16 @@ function StudioWorkspace() {
                     type="button"
                     className="button button--primary layout-control__run"
                     onClick={() => void runLayout()}
-                    disabled={isLayoutRunning || activeChartReadOnly}
+                    disabled={
+                      isLayoutRunning ||
+                      activeChartReadOnly ||
+                      (layoutMode === "branch" && !selectedNode)
+                    }
+                    title={
+                      layoutMode === "branch" && !selectedNode
+                        ? "Select a card before laying out a branch"
+                        : "Run the chosen card layout"
+                    }
                   >
                     <ArrowsOut size={17} aria-hidden="true" />
                     {isLayoutRunning ? "Laying out…" : "Run layout"}
@@ -4729,9 +4757,13 @@ function StudioWorkspace() {
                 onNodeClick={handleNodeClick}
                 onEdgeClick={(event, edge) => {
                   event.stopPropagation();
+                  clearSelectedCard();
                   setSelectedEdgeId(edge.id);
                 }}
-                onPaneClick={() => setSelectedEdgeId("")}
+                onPaneClick={() => {
+                  clearSelectedCard();
+                  setSelectedEdgeId("");
+                }}
                 onSelectionChange={({ nodes: selectedNodes }) => {
                   if (!selectedNodes.length) return;
                   setSelectedId((current) =>
@@ -6904,15 +6936,26 @@ function StudioWorkspace() {
         )}
       </main>
 
-      <aside className="detail-panel" aria-label="Selected unit details">
-        {selectedNode ? (
-          <>
+      {detailPanelVisible && selectedNode ? (
+        <aside className="detail-panel" aria-label="Selected unit details">
+          <div className="detail-panel__top">
             <div className="detail-panel__heading">
               <span className="eyebrow">Selected {selectedNode.data.unit.type}</span>
               <h2>{selectedNode.data.unit.shortName}</h2>
               <p>{selectedNode.data.unit.name}</p>
             </div>
+            <button
+              type="button"
+              className="detail-panel__close"
+              onClick={clearSelectedCard}
+              aria-label="Close selected unit details"
+              title="Close selected unit details"
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
 
+          <div className="detail-panel__body">
             <div className="detail-panel__actions">
               <button
                 type="button"
@@ -7147,9 +7190,9 @@ function StudioWorkspace() {
               <PushPin size={17} aria-hidden="true" />
               {selectedNode.data.pinned ? "Unpin card" : "Pin card position"}
             </button>
-          </>
-        ) : null}
-      </aside>
+          </div>
+        </aside>
+      ) : null}
 
       {pendingAiProposal ? (
         <div className="ai-review-scrim">
