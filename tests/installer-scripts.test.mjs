@@ -162,6 +162,7 @@ test("Windows command-line installer matches the macOS safety and setup flow", (
   assert.match(commandLauncher, /Repeat the command-line installation to repair it/i);
   assert.match(commandLauncher, /ORGCHART_EXIT_CODE/);
   assert.match(electronStartSource, /superviseWindowsSmoke/);
+  assert.match(electronStartSource, /process\.env\.ORGCHART_ELECTRON_SMOKE === "1"/);
   assert.match(electronStartSource, /taskkill\.exe/);
   assert.match(electronStartSource, /ORGCHART_ELECTRON_SMOKE/);
   assert.equal(packageJson.scripts.build, "node scripts/run-vinext.mjs build");

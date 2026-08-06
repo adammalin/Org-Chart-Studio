@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import electronPath from "electron";
 
-const smokeTest = process.argv.includes("--smoke");
+const smokeTest =
+  process.argv.includes("--smoke") || process.env.ORGCHART_ELECTRON_SMOKE === "1";
 const superviseWindowsSmoke = smokeTest && process.platform === "win32";
 const child = spawn(electronPath, ["."], {
   cwd: process.cwd(),
