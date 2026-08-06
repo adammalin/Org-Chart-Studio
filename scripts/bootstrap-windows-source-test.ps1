@@ -88,16 +88,20 @@ try {
   Write-Host "Downloading the latest main-branch source ZIP..."
   if ($SourceArchiveUrl -eq $DefaultSourceArchiveUrl) {
     Write-Host "Using public GitHub access; no account or authentication is required..."
-    $commit = Invoke-RestMethod `
-      -Uri "https://api.github.com/repos/$SourceRepository/commits/$SourceRef" `
+    $commitPatch = Invoke-WebRequest `
+      -Uri "https://github.com/$SourceRepository/commit/$SourceRef.patch" `
       -Headers $Headers `
       -UseBasicParsing
-    $candidateRevision = [string]$commit.sha
+    $commitMatch = [regex]::Match(
+      [string]$commitPatch.Content,
+      "\AFrom ([0-9a-f]{40}) "
+    )
+    $candidateRevision = if ($commitMatch.Success) { $commitMatch.Groups[1].Value } else { "" }
     if ($candidateRevision -notmatch "^[0-9a-f]{40}$") {
       throw "GitHub did not return a valid public commit revision for $SourceRef."
     }
     $ResolvedSourceRevision = $candidateRevision
-    $publicArchiveUrl = "https://github.com/$SourceRepository/archive/$ResolvedSourceRevision.zip"
+    $publicArchiveUrl = "https://codeload.github.com/$SourceRepository/zip/$ResolvedSourceRevision"
     Invoke-WebRequest -Uri $publicArchiveUrl -Headers $Headers -UseBasicParsing -OutFile $ArchivePath
   } else {
     if (Test-Path -LiteralPath $SourceArchiveUrl -PathType Leaf) {

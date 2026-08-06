@@ -63,7 +63,7 @@ fi
 TEMPORARY_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/orgchart-studio-bootstrap.XXXXXX")"
 ARCHIVE_PATH="${TEMPORARY_DIRECTORY}/Org-Chart-Studio-main.zip"
 EXTRACT_DIRECTORY="${TEMPORARY_DIRECTORY}/extract"
-COMMIT_METADATA_PATH="${TEMPORARY_DIRECTORY}/commit.json"
+COMMIT_PATCH_PATH="${TEMPORARY_DIRECTORY}/commit.patch"
 
 cleanup() {
   if [[ -n "${TEMPORARY_DIRECTORY:-}" &&
@@ -79,23 +79,21 @@ mkdir -p "${EXTRACT_DIRECTORY}"
 download_public_revision() {
   local candidate_revision public_archive_url
   if ! curl --fail --location --show-error --retry 3 \
-      --header "Accept: application/vnd.github+json" \
-      --header "X-GitHub-Api-Version: 2022-11-28" \
+      --header "Accept: text/plain" \
       --user-agent "ORNL-OrgChart-Studio-Installer" \
-      --output "${COMMIT_METADATA_PATH}" \
-      "https://api.github.com/repos/${SOURCE_REPOSITORY}/commits/${SOURCE_REF}"; then
+      --output "${COMMIT_PATCH_PATH}" \
+      "https://github.com/${SOURCE_REPOSITORY}/commit/${SOURCE_REF}.patch"; then
     return 1
   fi
   candidate_revision="$(
-    awk -F '"' '/"sha"[[:space:]]*:/ { print $4; exit }' \
-      "${COMMIT_METADATA_PATH}"
+    awk 'NR == 1 && $1 == "From" { print $2 }' "${COMMIT_PATCH_PATH}"
   )"
   if [[ ! "${candidate_revision}" =~ '^[0-9a-f]{40}$' ]]; then
     print -u2 "GitHub did not return a valid public commit revision for ${SOURCE_REF}."
     return 1
   fi
   RESOLVED_SOURCE_REVISION="${candidate_revision}"
-  public_archive_url="https://github.com/${SOURCE_REPOSITORY}/archive/${RESOLVED_SOURCE_REVISION}.zip"
+  public_archive_url="https://codeload.github.com/${SOURCE_REPOSITORY}/zip/${RESOLVED_SOURCE_REVISION}"
   curl --fail --location --show-error --retry 3 \
     --user-agent "ORNL-OrgChart-Studio-Installer" \
     --output "${ARCHIVE_PATH}" \

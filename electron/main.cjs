@@ -4,7 +4,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { randomBytes } = require("node:crypto");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const {
   app,
@@ -1338,6 +1338,12 @@ async function requestUserQuit() {
 async function beginQuit() {
   if (quitting) return;
   quitting = true;
+  if (smokeTest) {
+    setTimeout(
+      () => process.exit(requestedExitCode),
+      SERVER_STOP_TIMEOUT_MS + 2_000,
+    );
+  }
   removeMcpRuntime();
   await stopLocalServer();
   allowWindowClose = true;
@@ -1352,8 +1358,20 @@ async function stopLocalServer() {
   const exited = new Promise((resolve) => activeProcess.once("exit", resolve));
 
   try {
-    if (process.platform === "win32") activeProcess.kill("SIGTERM");
-    else process.kill(-pid, "SIGTERM");
+    if (process.platform === "win32") {
+      const result = spawnSync(
+        "taskkill.exe",
+        ["/pid", String(pid), "/T", "/F"],
+        {
+          windowsHide: true,
+          stdio: "ignore",
+          timeout: SERVER_STOP_TIMEOUT_MS,
+        },
+      );
+      if (result.error) activeProcess.kill("SIGTERM");
+    } else {
+      process.kill(-pid, "SIGTERM");
+    }
   } catch {
     activeProcess.kill("SIGTERM");
   }

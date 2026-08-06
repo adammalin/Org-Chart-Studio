@@ -110,4 +110,9 @@ test("desktop quit control confirms before using the clean shutdown path", () =>
   assert.match(mainSource, /private local server/);
   assert.match(mainSource, /setImmediate\(\(\)\s*=>\s*void beginQuit\(\)\)/);
   assert.match(mainSource, /removeMcpRuntime\(\);[\s\S]*await stopLocalServer\(\);/);
+  assert.match(mainSource, /taskkill\.exe[\s\S]*"\/T"[\s\S]*"\/F"/);
+  assert.match(
+    mainSource,
+    /if \(smokeTest\)[\s\S]*process\.exit\(requestedExitCode\)/,
+  );
 });

@@ -18,16 +18,17 @@ test("macOS bootstrap uses public-only downloads and records provenance", () => 
 
   assert.match(
     source,
-    /api\.github\.com\/repos\/\$\{SOURCE_REPOSITORY\}\/commits\/\$\{SOURCE_REF\}/,
+    /github\.com\/\$\{SOURCE_REPOSITORY\}\/commit\/\$\{SOURCE_REF\}\.patch/,
   );
   assert.match(
     source,
-    /github\.com\/\$\{SOURCE_REPOSITORY\}\/archive\/\$\{RESOLVED_SOURCE_REVISION\}\.zip/,
+    /codeload\.github\.com\/\$\{SOURCE_REPOSITORY\}\/zip\/\$\{RESOLVED_SOURCE_REVISION\}/,
   );
   assert.match(source, /INSTALL-REVISION\.txt/);
   assert.match(source, /Archive SHA-256:/);
   assert.match(source, /--user-agent "ORNL-OrgChart-Studio-Installer"/);
   assert.match(source, /adammalin\/Org-Chart-Studio/);
+  assert.doesNotMatch(source, /api\.github\.com/);
   assert.doesNotMatch(source, /\bgh\b/);
 });
 
@@ -123,8 +124,9 @@ test("Windows command-line installer matches the macOS safety and setup flow", (
   );
   const packageJson = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8"));
 
-  assert.match(bootstrapSource, /api\.github\.com\/repos\/\$SourceRepository\/commits\/\$SourceRef/);
-  assert.match(bootstrapSource, /archive\/\$ResolvedSourceRevision\.zip/);
+  assert.match(bootstrapSource, /github\.com\/\$SourceRepository\/commit\/\$SourceRef\.patch/);
+  assert.match(bootstrapSource, /codeload\.github\.com\/\$SourceRepository\/zip\/\$ResolvedSourceRevision/);
+  assert.doesNotMatch(bootstrapSource, /api\.github\.com/);
   assert.match(bootstrapSource, /Get-FileHash[^\n]+SHA256/);
   assert.match(bootstrapSource, /INSTALL-REVISION\.txt/);
   assert.match(bootstrapSource, /Platform: Windows/);
