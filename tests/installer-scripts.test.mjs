@@ -122,6 +122,10 @@ test("Windows command-line installer matches the macOS safety and setup flow", (
     path.join(projectRoot, "Start-OrgChart-Studio.cmd"),
     "utf8",
   );
+  const electronStartSource = readFileSync(
+    path.join(projectRoot, "scripts", "start-electron.mjs"),
+    "utf8",
+  );
   const packageJson = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8"));
 
   assert.match(bootstrapSource, /github\.com\/\$SourceRepository\/commit\/\$SourceRef\.patch/);
@@ -157,6 +161,9 @@ test("Windows command-line installer matches the macOS safety and setup flow", (
   assert.match(commandLauncher, /start-windows-source-test\.ps1/i);
   assert.match(commandLauncher, /Repeat the command-line installation to repair it/i);
   assert.match(commandLauncher, /ORGCHART_EXIT_CODE/);
+  assert.match(electronStartSource, /superviseWindowsSmoke/);
+  assert.match(electronStartSource, /taskkill\.exe/);
+  assert.match(electronStartSource, /ORGCHART_ELECTRON_SMOKE/);
   assert.equal(packageJson.scripts.build, "node scripts/run-vinext.mjs build");
   assert.equal(packageJson.scripts.dev, "node scripts/run-vinext.mjs dev");
   assert.equal(packageJson.scripts.start, "node scripts/run-vinext.mjs start");
