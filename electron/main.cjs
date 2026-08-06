@@ -1348,6 +1348,7 @@ async function beginQuit() {
   await stopLocalServer();
   allowWindowClose = true;
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+  if (smokeTest) process.exit(requestedExitCode);
   app.exit(requestedExitCode);
 }
 
