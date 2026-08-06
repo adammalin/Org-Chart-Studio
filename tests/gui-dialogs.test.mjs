@@ -79,6 +79,13 @@ test("completed MCP work refreshes the visible library and opens review screens 
   assert.match(workspaceSource, /setCharts\(data\.charts\)/);
 });
 
+test("retained-source AI access is explicit, session-only, and off by default", () => {
+  assert.match(workspaceSource, /sourceAccessEnabled: false/);
+  assert.match(workspaceSource, /Allow retained-source extraction for this session/);
+  assert.match(workspaceSource, /Off by default/);
+  assert.match(workspaceSource, /Raw files are never returned/);
+});
+
 test("source review queue explains and resolves cards and reporting lines", () => {
   assert.match(workspaceSource, /Source review queue/);
   assert.match(workspaceSource, /resolveCardSourceReview/);
@@ -135,4 +142,22 @@ test("selected unit details use a dismissible editor-only drawer", () => {
     workspaceStyles,
     /\.detail-panel \{[\s\S]*position: fixed;[\s\S]*right: 0;[\s\S]*animation: detail-panel-enter/,
   );
+});
+
+test("accessible hierarchy table supports data auditing and practical filters", () => {
+  assert.match(workspaceSource, /A searchable, keyboard-friendly view of the same records/);
+  assert.match(workspaceSource, /Recorded vacant/);
+  assert.match(workspaceSource, /Import placeholders/);
+  assert.match(workspaceSource, /Likely import placeholder/);
+  assert.match(workspaceSource, /tableSearchQuery/);
+  assert.match(workspaceSource, /tablePositionFilter/);
+  assert.match(workspaceSource, /tableUnitTypeFilter/);
+  assert.match(workspaceSource, /tableSourceFilter/);
+  assert.match(workspaceSource, /tableQualityFilter/);
+  assert.match(workspaceSource, /Source label confirmed/);
+  assert.match(workspaceSource, /Open .* in the chart editor/);
+  assert.match(workspaceSource, /No records match these filters/);
+  assert.match(workspaceStyles, /\.table-summary \{/);
+  assert.match(workspaceStyles, /\.table-filters \{/);
+  assert.match(workspaceStyles, /\.table-audit-notice \{/);
 });

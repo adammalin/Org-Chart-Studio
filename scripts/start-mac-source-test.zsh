@@ -14,7 +14,7 @@ if ! command -v node >/dev/null 2>&1 ||
    ! command -v npm >/dev/null 2>&1 ||
    [[ "$(node -p 'const [major, minor] = process.versions.node.split(".").map(Number); major === 22 && minor >= 13 ? "1" : "0"')" != "1" ]]; then
   print -u2 "OrgChart Studio needs its local setup refreshed."
-  print -u2 "Run the two-command installer again to repair this source-test copy."
+  print -u2 "Run the two-command installer again to repair this application copy."
   exit 1
 fi
 

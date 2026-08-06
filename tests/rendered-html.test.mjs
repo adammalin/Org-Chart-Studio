@@ -35,6 +35,8 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.match(bundle, /did not answer within 15 seconds/);
   assert.match(bundle, /AI-assisted change timeline/);
   assert.match(bundle, /Local AI control center/);
+  assert.match(bundle, /Allow retained-source extraction for this session/);
+  assert.match(bundle, /Raw files are never returned/);
   assert.match(bundle, /Source intake bundles/);
   assert.match(bundle, /Review proposed chart import/);
   assert.match(bundle, /Chart quality report/);
@@ -70,12 +72,13 @@ test("production server bundle contains the complete OrgChart Studio workspace",
 });
 
 test("keeps core prototype boundaries explicit in source", async () => {
-  const [studio, model, importModel, backupModel, chartRoute, proposalRoute, schema, nextConfig, packageJson, hosting] = await Promise.all([
+  const [studio, model, importModel, backupModel, chartRoute, sourceExtractionRoute, proposalRoute, schema, nextConfig, packageJson, hosting] = await Promise.all([
     readFile(new URL("../app/orgchart-studio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/org-chart.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/import-org-chart.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/encrypted-backup.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/charts/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/source-extractions/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/ai-proposals/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
     readFile(new URL("../next.config.ts", import.meta.url), "utf8"),
@@ -97,8 +100,12 @@ test("keeps core prototype boundaries explicit in source", async () => {
   assert.match(importModel, /WORKFORCE_ROSTER_MAPPED/);
   assert.match(studio, /multiple/);
   assert.match(studio, /\.docx/);
+  assert.match(studio, /PowerPoint, Word, PDF, image, CSV, or Excel/);
   assert.match(chartRoute, /getAll\("evidence"\)/);
   assert.match(chartRoute, /pptx\|docx\|pdf/);
+  assert.match(chartRoute, /csv\|xlsx/);
+  assert.match(sourceExtractionRoute, /sha256Hex/);
+  assert.match(sourceExtractionRoute, /Raw retained file bytes are not returned/);
   assert.match(chartRoute, /retireBuiltInExampleCharts/);
   assert.match(proposalRoute, /action === "stage"/);
   assert.match(proposalRoute, /action === "reject"/);

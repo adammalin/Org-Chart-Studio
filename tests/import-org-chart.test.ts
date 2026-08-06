@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  aiIntakeBrief,
   importTemplateCsv,
   parseCsv,
   parseImportFile,
   rowsToChart,
 } from "../lib/import-org-chart";
+
+test("AI normalization brief separates filled staff cards from portfolio labels", () => {
+  const brief = aiIntakeBrief();
+
+  assert.match(brief, /split them into assignmentLabel and positionTitle/);
+  assert.match(brief, /Do not store a visible person as a vacant organizational unit/);
+  assert.match(brief, /client portfolios, coverage areas, specialties, and service lists/);
+  assert.match(brief, /normally represents siblings under the same parent/);
+  assert.match(brief, /semantic mapping is supported by the source/);
+});
 
 test("CSV template parses into a valid hierarchy", () => {
   const preview = parseImportFile("template.csv", importTemplateCsv());
@@ -39,6 +50,23 @@ test("normalized imports retain source locators, uncertainty, and planned state"
   assert.equal(preview.nodes[0].data.unit.sourceCertainty, "inferred");
   assert.equal(preview.nodes[0].data.unit.reviewNote, "Connector should be confirmed");
   assert.equal(preview.nodes[0].data.unit.planningState, "planned");
+});
+
+test("blank certainty enters review and relationship provenance stays independent", () => {
+  const preview = parseImportFile(
+    "review-defaults.csv",
+    [
+      "id,name,shortName,type,parentId,positionTitle,assignmentLabel,positionStatus,effectiveDate,publicationVisibility,source,sourceLocator,sourceCertainty,reviewNote,planningState,relationshipType,relationshipSourceLocator,relationshipSourceCertainty,relationshipReviewNote",
+      "root,Example Division,Example Division,division,,Director,Alex Example,filled,Current,internal,Slide deck,Slide 1 shape 2,confirmed,,current,,,,",
+      "child,Example Group,Example Group,group,root,Group Leader,Jordan Example,filled,Current,internal,Slide deck,Slide 1 shape 5,,,,primary supervisory,Slide 1 connector 7,inferred,Confirm connector endpoint",
+    ].join("\n"),
+  );
+
+  assert.equal(preview.nodes[0].data.unit.sourceCertainty, "confirmed");
+  assert.equal(preview.nodes[1].data.unit.sourceCertainty, "needs_review");
+  assert.equal(preview.edges[0].data?.sourceCertainty, "inferred");
+  assert.equal(preview.edges[0].data?.sourceLocator, "Slide 1 connector 7");
+  assert.equal(preview.edges[0].data?.reviewNote, "Confirm connector endpoint");
 });
 
 test("workforce roster CSV maps staff and resolves supervisor middle initials", () => {
@@ -84,7 +112,7 @@ test("blocking findings prevent empty, duplicate, and missing-parent imports", (
 
   assert.ok(preview.findings.some((finding) => finding.code === "DUPLICATE_ID"));
   assert.ok(preview.findings.some((finding) => finding.code === "MISSING_PARENT"));
-  assert.ok(preview.findings.every((finding) => finding.severity === "blocking"));
+  assert.ok(preview.findings.some((finding) => finding.severity === "blocking"));
 });
 
 test("a downloaded source manifest can be imported as canonical rows", () => {
@@ -125,7 +153,10 @@ test("a downloaded source manifest can be imported as canonical rows", () => {
 
   assert.equal(preview.nodes.length, 2);
   assert.equal(preview.edges.length, 1);
-  assert.deepEqual(preview.findings, []);
+  assert.equal(preview.nodes[0].data.unit.sourceCertainty, "needs_review");
+  assert.equal(preview.edges[0].data?.sourceCertainty, "needs_review");
+  assert.ok(preview.findings.some((finding) => finding.code === "SOURCE_CERTAINTY_REQUIRED"));
+  assert.ok(preview.findings.some((finding) => finding.code === "RELATIONSHIP_CERTAINTY_REQUIRED"));
 });
 
 test("canonical JSON rejects multiple primary parents", () => {
@@ -163,6 +194,40 @@ test("canonical JSON rejects multiple primary parents", () => {
   assert.ok(
     preview.findings.some((finding) => finding.code === "MULTIPLE_PRIMARY_PARENTS"),
   );
+  assert.equal(preview.nodes[0].data.unit.sourceCertainty, "needs_review");
+  assert.equal(preview.edges[0].data?.sourceCertainty, "needs_review");
+  assert.ok(preview.findings.some((finding) => finding.code === "SOURCE_CERTAINTY_REQUIRED"));
+  assert.ok(
+    preview.findings.some((finding) => finding.code === "RELATIONSHIP_CERTAINTY_REQUIRED"),
+  );
+});
+
+test("canonical JSON rejects malformed records without throwing", () => {
+  const malformedNode = parseImportFile(
+    "bad-node.json",
+    JSON.stringify({ nodes: [null], edges: [] }),
+  );
+  const malformedRelationship = parseImportFile(
+    "bad-edge.json",
+    JSON.stringify({
+      nodes: [
+        {
+          id: "root",
+          type: "orgUnit",
+          position: { x: 0, y: 0 },
+          data: { unit: { id: "root", name: "Root", type: "division" } },
+        },
+      ],
+      edges: [{ id: "missing-target", source: "root" }],
+    }),
+  );
+
+  assert.ok(malformedNode.findings.some((finding) => finding.code === "MALFORMED_NODE"));
+  assert.ok(
+    malformedRelationship.findings.some(
+      (finding) => finding.code === "MALFORMED_RELATIONSHIP",
+    ),
+  );
 });
 
 test("imports section, team, program, office, project, and configured-other unit levels", () => {
@@ -178,6 +243,23 @@ test("imports section, team, program, office, project, and configured-other unit
   ].join("\n");
   const preview = parseImportFile("levels.csv", rows);
 
-  assert.deepEqual(preview.findings, []);
+  assert.equal(preview.findings.some((finding) => finding.severity === "blocking"), false);
+  assert.ok(preview.findings.some((finding) => finding.code === "SUSPICIOUS_LINEAR_CHAIN"));
   assert.equal(preview.nodes.at(-1)?.data.unit.type, "other");
+});
+
+test("import validation warns about person-like vacancies and unsupported staff chains", () => {
+  const rows = [
+    "id,name,shortName,type,parentId,positionTitle,assignmentLabel,positionStatus,effectiveDate,publicationVisibility",
+    "person-1,Kevin Norris,Kevin Norris,other,,Position not supplied,Position vacant,vacant,Current,internal",
+    "person-2,Jordan Sample,Jordan Sample,other,person-1,Position not supplied,Position vacant,vacant,Current,internal",
+    "person-3,Taylor Sample,Taylor Sample,other,person-2,Position not supplied,Position vacant,vacant,Current,internal",
+    "person-4,Casey Sample,Casey Sample,other,person-3,Position not supplied,Position vacant,vacant,Current,internal",
+    "person-5,Riley Sample,Riley Sample,other,person-4,Position not supplied,Position vacant,vacant,Current,internal",
+    "person-6,Morgan Sample,Morgan Sample,other,person-5,Position not supplied,Position vacant,vacant,Current,internal",
+  ].join("\n");
+  const preview = parseImportFile("suspicious.csv", rows);
+
+  assert.ok(preview.findings.some((finding) => finding.code === "PERSON_LOOKING_VACANCY"));
+  assert.ok(preview.findings.some((finding) => finding.code === "SUSPICIOUS_LINEAR_CHAIN"));
 });

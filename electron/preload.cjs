@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld("orgChartDesktop", {
   chooseDataDirectory: () => ipcRenderer.invoke("storage:choose-data-directory"),
   chooseBackupDirectory: () => ipcRenderer.invoke("storage:choose-backup-directory"),
   restartForStorageChange: () => ipcRenderer.invoke("storage:restart"),
+  getMcpConfigurationStatus: () => ipcRenderer.invoke("mcp:configuration-status"),
+  configureMcp: (action) => ipcRenderer.invoke("mcp:configure", action),
   saveEncryptedBackup: (fileName, encryptedJson) =>
     ipcRenderer.invoke("backup:save-encrypted", { fileName, encryptedJson }),
   saveBackup: (fileName, backupJson, encrypted) =>

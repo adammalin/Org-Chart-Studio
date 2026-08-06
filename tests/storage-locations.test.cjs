@@ -193,7 +193,7 @@ test("an explicitly unencrypted backup may be written to a separate local folder
     });
     const backupJson = JSON.stringify({
       format: "orgchart-studio-library-backup",
-      schemaVersion: 2,
+      schemaVersion: 4,
       exportedAt: "2026-08-03T12:00:00.000Z",
       chartCount: 1,
       sourceFileCount: 0,
@@ -207,7 +207,9 @@ test("an explicitly unencrypted backup may be written to a separate local folder
       backupJson,
       encrypted: false,
     });
-    assert.equal(JSON.parse(fs.readFileSync(saved.path, "utf8")).chartCount, 1);
+    const persisted = JSON.parse(fs.readFileSync(saved.path, "utf8"));
+    assert.equal(persisted.schemaVersion, 4);
+    assert.equal(persisted.chartCount, 1);
   } finally {
     item.cleanup();
   }

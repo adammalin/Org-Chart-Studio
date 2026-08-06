@@ -103,11 +103,11 @@ export async function POST(request: Request) {
       );
     }
     const unsupported = files.find(
-      (file) => !/\.(pptx|docx|pdf|png|jpe?g)$/i.test(file.name),
+      (file) => !/\.(pptx|docx|pdf|png|jpe?g|csv|xlsx)$/i.test(file.name),
     );
     if (unsupported) {
       return noStoreJson(
-        { error: `Unsupported source-evidence file: ${unsupported.name}.` },
+        { error: `Unsupported source-evidence file: ${unsupported.name}. Use PowerPoint, Word, PDF, image, CSV, or Excel evidence.` },
         { status: 415 },
       );
     }

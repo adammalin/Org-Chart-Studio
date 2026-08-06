@@ -19,6 +19,7 @@ const SAFE_JSON_FILES = new Set([
   "tsconfig.json",
 ]);
 const PUBLIC_BINARY_ALLOWLIST = new Set([
+  "docs/ORNL-OrgChart-Studio-Desktop-Quick-Start.pdf",
   "docs/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf",
 ]);
 const HISTORICAL_PUBLIC_BINARY_ALLOWLIST = new Set([

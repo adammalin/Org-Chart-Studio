@@ -22,6 +22,13 @@ export function defaultRuntimeFilePath() {
       RUNTIME_FILE_NAME,
     );
   }
+  if (process.platform === "win32" && process.env.APPDATA) {
+    return path.join(
+      process.env.APPDATA,
+      "ORNL OrgChart Studio",
+      RUNTIME_FILE_NAME,
+    );
+  }
   return path.join(os.homedir(), ".orgchart-studio", RUNTIME_FILE_NAME);
 }
 
@@ -128,7 +135,7 @@ export class OrgChartAppClient {
     return body;
   }
 
-  authorizeTool({ toolName, chartId, mode = "read" }) {
+  authorizeTool({ toolName, chartId, mode = "read", sourceAccess = false }) {
     return this.rawRequest("/api/mcp-control", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -137,6 +144,7 @@ export class OrgChartAppClient {
         toolName,
         chartId,
         mode,
+        sourceAccess,
       }),
     });
   }
@@ -147,6 +155,30 @@ export class OrgChartAppClient {
 
   listImportIntakes() {
     return this.request("/api/import-intakes", { cache: "no-store" });
+  }
+
+  extractImportIntake(intakeId) {
+    return this.request("/api/source-extractions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "intake", id: intakeId }),
+    });
+  }
+
+  extractChartSources(chartId) {
+    return this.request("/api/source-extractions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "chart", id: chartId }),
+    });
+  }
+
+  createBackup(chartIds = []) {
+    const query = new URLSearchParams();
+    for (const chartId of chartIds) query.append("chartId", chartId);
+    return this.request(`/api/backups${query.size ? `?${query}` : ""}`, {
+      cache: "no-store",
+    });
   }
 
   validateChart(chartId) {

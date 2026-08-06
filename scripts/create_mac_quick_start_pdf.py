@@ -199,7 +199,7 @@ def build_pdf(output: Path) -> None:
     pdf.setFillColor(ENERGY)
     pdf.rect(0, PAGE_H - 172, PAGE_W, 6, stroke=0, fill=1)
 
-    draw_label(pdf, "ORNL workflow | macOS quick start | updated August 4, 2026", 40, 756, WHITE)
+    draw_label(pdf, "ORNL workflow | macOS quick start | updated August 5, 2026", 40, 756, WHITE)
     pdf.setFillColor(WHITE)
     pdf.setFont("Helvetica-Bold", 28)
     pdf.drawString(40, 716, "Install once.")
@@ -375,7 +375,7 @@ def build_pdf(output: Path) -> None:
         ("1", "INSTALL", "At the MCP prompt, type y and press Return."),
         ("2", "RESTART", "Restart ChatGPT Desktop or Codex once."),
         ("3", "OPEN APP", "OrgChart Studio must be running first."),
-        ("4", "SCOPE", "In AI & MCP control, resume and allow charts."),
+        ("4", "SCOPE", "Allow charts. Retained-source reading stays off."),
     ]
     for index, (number, title, note) in enumerate(setup_cards):
         draw_numbered_card(
@@ -437,9 +437,9 @@ def build_pdf(output: Path) -> None:
             "MCP CAN",
             [
                 "List allowed charts and intake metadata",
-                "Validate and stage a new-chart import",
-                "Stage reviewed draft changes",
-                "Save a matching named version",
+                "Extract approved source content after opt-in",
+                "Stage a reviewed import or source recheck",
+                "Create a private pre-recheck rollback file",
             ],
         ),
         (
@@ -449,7 +449,7 @@ def build_pdf(output: Path) -> None:
             "MCP CANNOT",
             [
                 "Delete charts or restore backups",
-                "Download sources or passphrases",
+                "Return raw source files or passphrases",
                 "Change storage or publish",
                 "Bypass review for chart replacement",
             ],
@@ -478,7 +478,7 @@ def build_pdf(output: Path) -> None:
     pdf.drawString(40, 35, "If it says unavailable, open OrgChart Studio. Local MCP works in the desktop app/Codex, not ChatGPT web.")
     pdf.setFillColor(ENERGY)
     pdf.setFont("Helvetica-Bold", 7.2)
-    pdf.drawString(40, 19, "Use only with charts approved for your AI environment; chart fields read by MCP enter that conversation.")
+    pdf.drawString(40, 19, "Source extraction is off by default. Returned chart fields and extracted content enter the AI conversation.")
 
     pdf.showPage()
     pdf.save()

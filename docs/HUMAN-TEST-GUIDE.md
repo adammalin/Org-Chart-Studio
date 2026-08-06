@@ -6,27 +6,15 @@ This build is ready for a local human test using synthetic or explicitly cleared
 
 The test is intended to answer whether staff can maintain several charts, normalize legacy charts, make routine changes safely, recover previous versions, and create useful outputs without editing source code.
 
-## Install or update the desktop source test
+## Install or update the command-line desktop app
 
-The two-page illustrated setup and AI workflow guide is [ORNL OrgChart Studio macOS Quick Start](ORNL-OrgChart-Studio-macOS-Quick-Start.pdf).
+Follow the three-page [Mac and Windows desktop quick start](ORNL-OrgChart-Studio-Desktop-Quick-Start.pdf). The public setup needs no GitHub account, signing certificate, or administrator shell. It resolves `main` to one exact commit, records that revision and the archive SHA-256 in `INSTALL-REVISION.txt`, prepares a verified Node runtime when necessary, installs exact dependency versions, builds the app, and runs a hidden Electron/GUI/storage/AI smoke test before opening the desktop window.
 
-For a checkout already on the test Mac, run:
+Repeat the same platform commands to update or repair the app. On Mac, double-click `Start-OrgChart-Studio.command` in the installed folder or run its start script. On Windows, double-click `Start-OrgChart-Studio.cmd` in the installed folder.
 
-```bash
-/bin/zsh scripts/setup-mac-source-test.zsh
-```
+Working data is separate from the downloaded application folder under the normal macOS Application Support or Windows AppData location. Updating application code does not intentionally replace chart data.
 
-For the shared GitHub installer, use the commands in the PDF after the tested commit has been pushed to public `main`. The installer uses macOS `curl`, resolves `main` to one exact commit through GitHub's public API, writes its commit and archive checksum to `INSTALL-REVISION.txt`, installs exact dependency versions, builds the app, runs a hidden Electron and local-storage smoke test, and then opens the desktop window.
-
-For later launches, run:
-
-```bash
-/bin/zsh "$HOME/OrgChart-Studio-source-test/scripts/start-mac-source-test.zsh"
-```
-
-Working data is separate from the source checkout under `~/Library/Application Support/ORNL OrgChart Studio/local-worker-data` by default. Updating the source-test folder does not intentionally replace that data.
-
-Before recording results, open `$HOME/OrgChart-Studio-source-test/INSTALL-REVISION.txt` and confirm the installed commit matches the commit selected for testing. On an update, also confirm the bundled quick-start PDF was refreshed while another file placed under `output/` remained intact.
+Before recording results, open `INSTALL-REVISION.txt` in the installed application folder and confirm its commit matches the commit selected for testing. On an update, also confirm a file placed under `output/` remains intact while an obsolete application file is removed.
 
 ## Test 0: choose protected storage locations
 
@@ -46,7 +34,7 @@ Pass when live data remains local and outside the repository, the two configured
 2. Use synthetic or approved sanitized charts only.
 3. Create an encrypted backup from **Backup & restore** before a test that uses pre-existing app data.
 4. Store the backup passphrase separately; the app cannot recover it.
-5. Record the app commit, macOS version, and whether the Mac is Apple silicon or Intel.
+5. Record the app commit, operating-system version, and Mac or Windows architecture.
 
 ## Test 1: manage several independent charts
 
@@ -91,17 +79,17 @@ Pass when organizational changes and presentation-only changes remain distinguis
 ### Spreadsheet path
 
 1. In **Sources & imports**, download the CSV template.
-2. Prepare a canonical CSV, workforce-roster CSV, canonical JSON, source manifest, or Excel workbook. Excel reads the first worksheet, maps common column labels, generates missing stable IDs, and can resolve parent names. A workforce roster can use `Full Name`, `Position Title`, and `Supervisor Full Name`. Include `sourceLocator`, `sourceCertainty`, `reviewNote`, and `planningState` where applicable.
+2. Prepare a canonical CSV, workforce-roster CSV, canonical JSON, source manifest, or Excel workbook. Excel reads the first worksheet, maps common column labels, generates missing stable IDs, and can resolve parent names. A workforce roster can use `Full Name`, `Position Title`, and `Supervisor Full Name`. Include card provenance in `sourceLocator`, `sourceCertainty`, and `reviewNote`; include reporting-line provenance separately in `relationshipSourceLocator`, `relationshipSourceCertainty`, and `relationshipReviewNote`.
 3. Choose **Validate for review**.
 4. Inspect every finding and the normalized hierarchy preview.
 5. Check the human-confirmation box only after verifying names, parents, statuses, and source evidence.
 6. Create the draft and download its stored original from the source register.
 
-### PowerPoint, Word, PDF, or image path
+### PowerPoint, Word, PDF, image, CSV, or Excel evidence path
 
 1. Download the **AI normalization brief**.
 2. Use it only in an AI environment approved for the source material. The first pass identifies uncertain connectors or labels; a review proposal may preserve deliberately unresolved facts as `needs_review`, but material ambiguity must not be presented as confirmed.
-3. In OrgChart Studio, create a named **Source intake bundle** with up to 10 unchanged PowerPoint, Word, PDF, PNG, or JPEG files. Confirm the pending bundle lists file names, sizes, and fingerprints without creating a chart.
+3. In OrgChart Studio, create a named **Source intake bundle** with up to 10 unchanged PowerPoint, Word, PDF, PNG, JPEG, CSV, or Excel files. Confirm the pending bundle lists file names, sizes, and fingerprints without creating a chart.
 4. Choose the normalized JSON as the structured file and associate the pending bundle, or stage it with `stage_normalized_import` through MCP.
 5. Inspect the proposed units, relationships, evidence names, planned/current labels, source certainty, and **Import quality report**. Confirm duplicate-name/uncertain/deep-or-wide findings are advisory and blocking structural findings still prevent creation.
 6. Reject one staged import and confirm no chart or normalized source record is created. Stage it again and choose **Create reviewed chart**.
@@ -156,7 +144,7 @@ Pass when both formats can be recovered without destructive replacement and unen
 
 ## Test 7: optional local MCP companion
 
-1. During setup, confirm the installer explains the local MCP boundary. At **Install the local MCP integration? [y/N]**, type `y` and press Return, then restart ChatGPT Desktop or Codex once.
+1. During command-line setup, answer `y` at **Install the local MCP integration? [y/N]**. Or open **Local AI control** later and choose **Install local AI integration**. Confirm the status changes to **Installed**, then restart ChatGPT Desktop or Codex once.
 2. Open OrgChart Studio, then inspect MCP servers and confirm `orgchart_studio` is enabled. Open **AI & MCP control**, pause MCP, and confirm a tool call is refused. Resume it.
 3. Select **Selected charts**, allow one approved test chart, and confirm `get_chart` is refused for a different chart. Switch to **All charts** only for the remainder of this synthetic test. Confirm a session receipt appears for each authorized or denied operation and contains no prompt text.
 4. Call `list_charts` and verify it returns summaries without full node data. Call `get_chart` only on the approved test chart and confirm the current saved layout is returned.
@@ -170,9 +158,12 @@ Pass when both formats can be recovered without destructive replacement and unen
 12. Open **Version history**. Confirm both review decisions appear in the AI-assisted timeline, the accepted item says it is awaiting a named version, then save a named version and confirm the item links to it.
 13. Trigger a synthetic failed write and confirm the receipt uses **AI edit needs attention** without changing chart data. Make a deliberately stale proposal and confirm it is rejected rather than overwriting newer work.
 14. Create and restore a selected-chart backup. Confirm the related AI review timeline is restored with its version links.
-15. Confirm write tools request approval and that delete, backup restore, source-file download, storage, passphrase, and publication tools are absent.
-16. Quit OrgChart Studio and confirm a tool reports that the desktop app must be opened. Reopen it and confirm tools reconnect with the new session and pause/scope state has reset.
-17. Run `npm run mcp:remove`, restart ChatGPT Desktop or Codex, and confirm only the OrgChart Studio server was removed. Run `npm run mcp:configure` to restore it if needed.
+15. Confirm **Allow retained-source extraction for this session** is off. Confirm `extract_import_intake` and `extract_chart_sources` are refused. Enable it only for the synthetic or cleared files, call both tools, and verify they return extracted text/cells/PowerPoint geometry plus checksums, never raw source bytes. Confirm image-only evidence is reported as metadata-only when OCR is unavailable.
+16. Modify a copy of the current chart to correct one source-backed field, set that card to `needs_review`, and add a precise source locator and actionable review note. Call `stage_source_recheck` with the exact checksums from extraction. Confirm the result reports a private rollback backup, the saved chart remains unchanged, and the proposal preserves all layout, pins, card IDs, and reporting endpoints. Reject once; stage again and Apply, then resolve the item in **Source review queue**.
+17. Confirm `stage_source_recheck` refuses added/removed cards, relationship rewiring, layout movement, missing notes/locators, `confirmed` changes, and stale or incomplete source checksums.
+18. Confirm write tools request approval and that delete, backup restore, raw source-file download, storage, passphrase, and publication tools are absent.
+19. Quit OrgChart Studio and confirm a tool reports that the desktop app must be opened. Reopen it and confirm tools reconnect with the new session and pause, scope, and retained-source permission have reset.
+20. Choose **Remove integration**, restart ChatGPT Desktop or Codex, and confirm only the OrgChart Studio server was removed. Choose **Install local AI integration** to restore it. Source developers may use `npm run mcp:remove` and `npm run mcp:configure` for the same check.
 
 Pass when MCP is local and on-demand, proposals cannot change saved data before Apply, field-level review is accurate, timeline/version links survive backup restore, stale writes are rejected, and no tool bypasses the normal chart/version workflow.
 

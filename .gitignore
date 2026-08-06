@@ -17,6 +17,7 @@
 /.next/
 /.vinext/
 /out/
+/releases/
 
 # misc
 .DS_Store
@@ -72,3 +73,4 @@ next-env.d.ts
 *.xls
 *.xlsx
 !docs/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf
+!docs/ORNL-OrgChart-Studio-Desktop-Quick-Start.pdf

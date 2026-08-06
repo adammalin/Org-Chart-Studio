@@ -20,31 +20,57 @@ function tomlString(value) {
   return JSON.stringify(String(value));
 }
 
-function managedBlock(projectRoot) {
+function defaultRuntimeFile() {
+  if (process.platform === "darwin") {
+    return path.join(
+      os.homedir(),
+      "Library",
+      "Application Support",
+      "ORNL OrgChart Studio",
+      "mcp-runtime.json",
+    );
+  }
+  if (process.platform === "win32" && process.env.APPDATA) {
+    return path.join(
+      process.env.APPDATA,
+      "ORNL OrgChart Studio",
+      "mcp-runtime.json",
+    );
+  }
+  return path.join(os.homedir(), ".orgchart-studio", "mcp-runtime.json");
+}
+
+function managedBlock({ projectRoot, executablePath, runtimePath, runAsNode }) {
   const launcher = path.join(projectRoot, "scripts", "start-orgchart-mcp.zsh");
-  const runtimeFile = path.join(
-    os.homedir(),
-    "Library",
-    "Application Support",
-    "ORNL OrgChart Studio",
-    "mcp-runtime.json",
-  );
+  const mcpServer = path.join(projectRoot, "mcp", "server.mjs");
+  const runtimeFile = runtimePath ?? defaultRuntimeFile();
   const enabledTools = [
     "list_charts",
     "get_chart",
     "validate_chart",
     "list_chart_versions",
     "validate_normalized_import",
+    "list_import_intakes",
+    "extract_import_intake",
+    "extract_chart_sources",
     "create_chart_draft",
     "import_normalized_chart",
+    "stage_normalized_import",
     "replace_chart_draft",
+    "stage_source_recheck",
     "save_chart_version",
+  ];
+  const command = executablePath ?? "/bin/zsh";
+  const args = executablePath ? [mcpServer] : [launcher];
+  const environment = [
+    `ORGCHART_MCP_RUNTIME_FILE = ${tomlString(runtimeFile)}`,
+    ...(runAsNode ? ['ELECTRON_RUN_AS_NODE = "1"'] : []),
   ];
   return [
     BEGIN_MARKER,
     SERVER_TABLE,
-    'command = "/bin/zsh"',
-    `args = [${tomlString(launcher)}]`,
+    `command = ${tomlString(command)}`,
+    `args = [${args.map(tomlString).join(", ")}]`,
     `cwd = ${tomlString(projectRoot)}`,
     "enabled = true",
     "required = false",
@@ -54,7 +80,7 @@ function managedBlock(projectRoot) {
     `enabled_tools = [${enabledTools.map(tomlString).join(", ")}]`,
     "",
     '[mcp_servers.orgchart_studio.env]',
-    `ORGCHART_MCP_RUNTIME_FILE = ${tomlString(runtimeFile)}`,
+    ...environment,
     END_MARKER,
   ].join("\n");
 }
@@ -72,6 +98,20 @@ function removeManagedBlock(source) {
   return {
     source: [before, after].filter(Boolean).join("\n\n") + (before || after ? "\n" : ""),
     found: true,
+  };
+}
+
+export function inspectOrgChartMcpConfiguration({ configPath }) {
+  const resolvedConfig = path.resolve(configPath);
+  const source = fs.existsSync(resolvedConfig)
+    ? fs.readFileSync(resolvedConfig, "utf8")
+    : "";
+  const hasStart = source.includes(BEGIN_MARKER);
+  const hasEnd = source.includes(END_MARKER);
+  return {
+    configPath: resolvedConfig,
+    installed: hasStart && hasEnd,
+    needsRepair: hasStart !== hasEnd,
   };
 }
 
@@ -103,6 +143,9 @@ export function configureOrgChartMcp({
   action = "install",
   configPath,
   projectRoot,
+  executablePath,
+  runtimePath,
+  runAsNode = false,
 }) {
   const resolvedConfig = path.resolve(configPath);
   const resolvedProject = path.resolve(projectRoot);
@@ -124,7 +167,12 @@ export function configureOrgChartMcp({
   const next =
     action === "remove"
       ? withoutManaged.source
-      : `${withoutManaged.source.trimEnd()}${withoutManaged.source.trim() ? "\n\n" : ""}${managedBlock(resolvedProject)}\n`;
+      : `${withoutManaged.source.trimEnd()}${withoutManaged.source.trim() ? "\n\n" : ""}${managedBlock({
+          projectRoot: resolvedProject,
+          executablePath: executablePath ? path.resolve(executablePath) : undefined,
+          runtimePath: runtimePath ? path.resolve(runtimePath) : undefined,
+          runAsNode,
+        })}\n`;
   if (next === original) {
     return { changed: false, configPath: resolvedConfig, backupPath: null };
   }
@@ -150,10 +198,20 @@ export function configureOrgChartMcp({
 async function main() {
   const action = process.argv[2] === "remove" ? "remove" : "install";
   const projectRoot = argumentValue("--project-root") ?? defaultProjectRoot;
+  const executablePath = argumentValue("--executable");
+  const runtimePath = argumentValue("--runtime-file");
+  const runAsNode = process.argv.includes("--electron-run-as-node");
   const configPath =
     argumentValue("--config") ??
     path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "config.toml");
-  const result = configureOrgChartMcp({ action, configPath, projectRoot });
+  const result = configureOrgChartMcp({
+    action,
+    configPath,
+    projectRoot,
+    executablePath,
+    runtimePath,
+    runAsNode,
+  });
   const verb = action === "remove" ? "removed from" : "registered in";
   process.stdout.write(
     result.changed
@@ -164,7 +222,19 @@ async function main() {
   );
 }
 
-if (import.meta.url === new URL(process.argv[1], "file:").href) {
+function isCommandLineEntryPoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      fs.realpathSync(fileURLToPath(import.meta.url)) ===
+      fs.realpathSync(process.argv[1])
+    );
+  } catch {
+    return import.meta.url === new URL(process.argv[1], "file:").href;
+  }
+}
+
+if (isCommandLineEntryPoint()) {
   main().catch((error) => {
     process.stderr.write(
       `${error instanceof Error ? error.message : "MCP configuration failed."}\n`,

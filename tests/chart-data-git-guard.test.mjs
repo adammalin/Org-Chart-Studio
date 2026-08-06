@@ -27,6 +27,10 @@ test("Git guard blocks source evidence but allows the generated public guide", (
     false,
   );
   assert.equal(
+    blockedDataPath("docs/ORNL-OrgChart-Studio-Desktop-Quick-Start.pdf"),
+    false,
+  );
+  assert.equal(
     blockedDataPath("output/pdf/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf"),
     true,
   );

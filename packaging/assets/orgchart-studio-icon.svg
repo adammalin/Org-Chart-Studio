@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">OrgChart Studio app icon</title>
+  <desc id="description">An orthogonal organizational chart drawn with square green and navy cards.</desc>
+  <rect width="1024" height="1024" rx="176" fill="#00454D"/>
+  <path d="M512 334V450M256 450H768M256 450V562M512 450V562M768 450V562" fill="none" stroke="#FFFFFF" stroke-width="42" stroke-linecap="square" stroke-linejoin="miter"/>
+  <rect x="340" y="150" width="344" height="184" fill="#FFFFFF"/>
+  <rect x="368" y="178" width="288" height="128" fill="#00662C"/>
+  <rect x="114" y="562" width="284" height="214" fill="#FFFFFF"/>
+  <rect x="142" y="590" width="228" height="158" fill="#00662C"/>
+  <rect x="370" y="562" width="284" height="214" fill="#FFFFFF"/>
+  <rect x="398" y="590" width="228" height="158" fill="#7DBA00"/>
+  <rect x="626" y="562" width="284" height="214" fill="#FFFFFF"/>
+  <rect x="654" y="590" width="228" height="158" fill="#00662C"/>
+  <path d="M406 218H618M178 638H334M178 686H304M434 638H590M434 686H560M690 638H846M690 686H816" stroke="#FFFFFF" stroke-width="26" stroke-linecap="square"/>
+</svg>

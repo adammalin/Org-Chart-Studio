@@ -63,3 +63,58 @@ test("AI proposal diff reports removed cards and relationships", () => {
   assert.deepEqual(result.summary.removedEdgeIds, ["edge-to-remove"]);
   assert.equal(result.summary.removed, 2);
 });
+
+test("AI proposal diff treats source-review metadata as reviewable changes", () => {
+  const current = createBlankChart("Source review chart", "chart-source-review");
+  const root = current.nodes[0];
+  const child = structuredClone(root);
+  child.id = "unit-source-review-child";
+  child.data.unit.id = child.id;
+  child.data.unit.name = "Source Review Child";
+  child.data.unit.shortName = "Review Child";
+  current.nodes.push(child);
+  current.edges.push({
+    id: "edge-source-review-child",
+    source: root.id,
+    target: child.id,
+    data: {
+      relationshipType: "primary supervisory",
+      sourceLocator: "Slide 1; connector 4",
+      sourceCertainty: "confirmed",
+      reviewNote: "",
+    },
+  });
+
+  const proposed = structuredClone(current);
+  proposed.nodes[0].data.unit.sourceLocator = "Slide 1; shape 2";
+  proposed.nodes[0].data.unit.sourceCertainty = "needs_review";
+  proposed.nodes[0].data.unit.reviewNote = "Verify the name-to-position mapping.";
+  proposed.nodes[0].data.unit.planningState = "planned";
+  proposed.edges[0].data = {
+    ...proposed.edges[0].data,
+    relationshipType: "secondary supervisory",
+    sourceLocator: "Slide 1; connector 6",
+    sourceCertainty: "needs_review",
+    reviewNote: "Verify the reporting line against the source.",
+  };
+
+  const result = diffChartDocuments(current, proposed);
+
+  assert.equal(result.summary.total, 8);
+  assert.equal(result.summary.changed, 8);
+  assert.deepEqual(result.summary.changedNodeIds, [root.id]);
+  assert.deepEqual(result.summary.changedEdgeIds, ["edge-source-review-child"]);
+  assert.deepEqual(
+    result.changes.map((item) => item.fieldLabel),
+    [
+      "Source locator",
+      "Source certainty",
+      "Source review note",
+      "Planning state",
+      "Relationship type",
+      "Source locator",
+      "Source certainty",
+      "Source review note",
+    ],
+  );
+});

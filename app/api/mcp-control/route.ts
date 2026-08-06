@@ -17,6 +17,7 @@ function controlStore(): McpControlStore {
       paused: false,
       chartScope: "all",
       allowedChartIds: [],
+      sourceAccessEnabled: false,
       revision: 0,
       events: [],
     };
@@ -60,6 +61,7 @@ export async function POST(request: Request) {
     store.paused = body.paused === true;
     store.chartScope = chartScope;
     store.allowedChartIds = allowedChartIds;
+    store.sourceAccessEnabled = body.sourceAccessEnabled === true;
     store.revision += 1;
     return response(store);
   }
@@ -74,6 +76,7 @@ export async function POST(request: Request) {
     const toolName = safeText(body.toolName, 120);
     const chartId = safeText(body.chartId, 200);
     const mode = body.mode === "write" ? "write" : "read";
+    const sourceAccess = body.sourceAccess === true;
     if (!toolName) {
       return Response.json(
         { error: "An MCP tool name is required." },
@@ -84,16 +87,20 @@ export async function POST(request: Request) {
       !chartId ||
       store.chartScope === "all" ||
       store.allowedChartIds.includes(chartId);
-    const allowed = !store.paused && chartAllowed;
+    const sourceAllowed = !sourceAccess || store.sourceAccessEnabled;
+    const allowed = !store.paused && chartAllowed && sourceAllowed;
     const event: McpAccessEvent = {
       id: `mcp-access-${crypto.randomUUID()}`,
       toolName,
       chartId,
       mode,
+      sourceAccess,
       allowed,
       createdAt: new Date().toISOString(),
       message: store.paused
         ? "Blocked while local AI access is paused."
+        : !sourceAllowed
+          ? "Blocked because retained-source extraction is off for this app session."
         : chartAllowed
           ? `${mode === "write" ? "Write" : "Read"} access allowed.`
           : "Blocked by the selected-chart access scope.",

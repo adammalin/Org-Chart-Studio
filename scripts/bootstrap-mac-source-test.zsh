@@ -20,8 +20,8 @@ TARGET_DIRECTORY="${1:-${DEFAULT_TARGET_DIRECTORY}}"
 SKIP_SETUP="${ORGCHART_BOOTSTRAP_SKIP_SETUP:-0}"
 
 print ""
-print "ORNL OrgChart Studio - source test bootstrap"
-print "=============================================="
+print "ORNL OrgChart Studio - command-line installer"
+print "================================================"
 print ""
 print "Source: ${SOURCE_ARCHIVE_URL}"
 print "Target: ${TARGET_DIRECTORY}"
@@ -48,13 +48,13 @@ if [[ -e "${TARGET_DIRECTORY}" ]]; then
         ! -f "${TARGET_DIRECTORY}/scripts/setup-mac-source-test.zsh" ]] ||
       ! grep -Eq '"name"[[:space:]]*:[[:space:]]*"ornl-orgchart-studio"' \
         "${TARGET_DIRECTORY}/package.json"; then
-    print -u2 "The existing target is not a recognized OrgChart Studio source-test folder:"
+    print -u2 "The existing target is not a recognized OrgChart Studio application folder:"
     print -u2 "${TARGET_DIRECTORY}"
     print -u2 "Nothing was overwritten."
     exit 1
   fi
   if ! command -v rsync >/dev/null 2>&1; then
-    print -u2 "rsync is required to update an existing source-test folder."
+    print -u2 "rsync is required to update an existing application folder."
     exit 1
   fi
   UPDATE_EXISTING=1
@@ -107,11 +107,15 @@ if [[ "${SOURCE_ARCHIVE_URL}" == "${DEFAULT_SOURCE_ARCHIVE_URL}" ]]; then
     exit 1
   fi
 else
-  if ! curl --fail --location --show-error --retry 3 \
-      --output "${ARCHIVE_PATH}" \
-      "${SOURCE_ARCHIVE_URL}"; then
-    print -u2 "The configured source archive could not be downloaded."
-    exit 1
+  if [[ -f "${SOURCE_ARCHIVE_URL}" ]]; then
+    cp "${SOURCE_ARCHIVE_URL}" "${ARCHIVE_PATH}"
+  else
+    if ! curl --fail --location --show-error --retry 3 \
+        --output "${ARCHIVE_PATH}" \
+        "${SOURCE_ARCHIVE_URL}"; then
+      print -u2 "The configured source archive could not be downloaded."
+      exit 1
+    fi
   fi
 fi
 
@@ -135,7 +139,7 @@ if [[ ! -f "${EXPANDED_DIRECTORY}/scripts/setup-mac-source-test.zsh" ]] ||
 fi
 
 if (( UPDATE_EXISTING )); then
-  print "Updating the existing OrgChart Studio source-test folder..."
+  print "Updating the existing OrgChart Studio application folder..."
   print "Preserving its private runtime, dependencies, local tool state, and repository metadata."
   rsync -a --delete \
     --exclude "/.git/" \
@@ -165,6 +169,7 @@ REVISION_RECORD_TEMP="${REVISION_RECORD}.tmp.$$"
   print "Installed commit: ${RESOLVED_SOURCE_REVISION:-unresolved custom archive}"
   print "Archive SHA-256: ${ARCHIVE_SHA256}"
   print "Installed at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  print "Platform: macOS"
 } > "${REVISION_RECORD_TEMP}"
 chmod 644 "${REVISION_RECORD_TEMP}"
 mv "${REVISION_RECORD_TEMP}" "${REVISION_RECORD}"

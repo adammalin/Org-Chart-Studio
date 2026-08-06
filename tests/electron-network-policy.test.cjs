@@ -98,6 +98,8 @@ test("desktop quit control confirms before using the clean shutdown path", () =>
 
   assert.match(preloadSource, /requestQuit:\s*\(\)\s*=>\s*ipcRenderer\.invoke\("app:request-quit"\)/);
   assert.match(preloadSource, /reportSaveState:\s*\(state\)\s*=>\s*ipcRenderer\.send\("app:save-state",\s*state\)/);
+  assert.match(preloadSource, /getMcpConfigurationStatus:\s*\(\)\s*=>\s*ipcRenderer\.invoke\("mcp:configuration-status"\)/);
+  assert.match(preloadSource, /configureMcp:\s*\(action\)\s*=>\s*ipcRenderer\.invoke\("mcp:configure",\s*action\)/);
   assert.match(mainSource, /ipcMain\.handle\("app:request-quit"/);
   assert.match(mainSource, /ipcMain\.on\("app:save-state"/);
   assert.match(mainSource, /rendererSaveState === "saving"/);

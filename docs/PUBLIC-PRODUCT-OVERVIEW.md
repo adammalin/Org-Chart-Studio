@@ -22,7 +22,7 @@ The repository intentionally contains no operational organizational charts, pers
 
 ## Data boundary
 
-The desktop application runs a private loopback service and blocks renderer requests to non-loopback network destinations. Working chart data is stored outside the source checkout under the current user's macOS Application Support folder by default.
+The desktop application runs a private loopback service and blocks renderer requests to non-loopback network destinations. Working chart data is stored outside the downloaded application folder under the current user's macOS Application Support or Windows AppData folder by default.
 
 The application rejects a live-data folder located inside the source repository or a recognized cloud-sync root. A separate OneDrive or Dropbox folder may be used for an encrypted backup package. Unencrypted backup packages require an explicit warning acknowledgement and a local backup folder. The backup passphrase is not stored by the application.
 
@@ -32,11 +32,15 @@ Repository hooks and automated scans reject common database files, chart-shaped 
 
 Existing PowerPoint, Word, PDF, image, roster, and spreadsheet files are treated as source evidence rather than as authoritative databases. A reviewed structured CSV or JSON document becomes the editable source of truth after import.
 
-The application has no live AI endpoint. An external assistant may help normalize a cleared source into canonical CSV or JSON, but a person must review the result and explicitly confirm the import preview. The desktop source test can optionally register a bounded local MCP companion for deliberate chart listing, reading, validation, import, draft editing, and version saves while the app is running. It does not expose deletion, backup restore, source downloads, storage changes, passphrases, or publication. Material returned by any assistant tool enters that AI conversation and must not be used unless the environment and material are approved for one another.
+The application has no live AI endpoint. An external assistant may help normalize a cleared source into canonical CSV or JSON, but a person must review the result and explicitly confirm the import preview. The command-line desktop app can optionally register a bounded local MCP companion for deliberate chart listing, reading, validation, import, draft editing, and version saves while the app is running. A separate session-only permission, off by default, can expose bounded locally extracted text, worksheet cells, and PowerPoint structure from retained sources; it never returns raw file bytes. A source-recheck tool creates a private rollback package and stages only `needs_review` corrections while preserving layout, card identities, and reporting endpoints. The MCP does not expose deletion, backup restore, raw source downloads, storage changes, passphrases, or publication. Material returned by any assistant tool enters that AI conversation and must not be used unless the environment and material are approved for one another.
 
 ## Desktop distribution
 
-The current macOS source-test installer downloads this repository, installs exact dependency versions, builds the local application, runs an Electron smoke test, and launches the app. It does not create a signed application under `/Applications`, bypass Gatekeeper, or make system-wide changes.
+The current distribution path uses public command-line scripts for macOS and Windows instead of unsigned DMG, PKG, MSI, or Setup files. It therefore needs no Apple or Microsoft developer signing account, no administrator install, and no GitHub authentication. Each platform resolves public `main` to one exact commit, downloads that commit archive, records its SHA-256, prepares a compatible pinned Node.js runtime after validating the official Node checksum when necessary, installs exact dependencies, builds the application, and launches the real Electron/GUI/storage/AI smoke suite.
+
+Running the same command again performs a safe update: obsolete application files are removed while the private runtime, local dependencies until refresh, local tool state, and output folders are preserved. The installed app contains no user charts or source evidence. Live data and backups remain under per-user application storage or folders the user selects, separate from replaceable application files.
+
+The optional ChatGPT Desktop/Codex connection can be accepted with `y` during setup or installed and removed later from **Local AI control**. Unsigned native package builds remain manual developer experiments and are not the current distribution path.
 
 ## Production boundary
 

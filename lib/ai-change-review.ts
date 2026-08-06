@@ -100,7 +100,18 @@ const unitFields: Array<{
   { key: "effectiveDate", label: "Effective date or label" },
   { key: "publicationVisibility", label: "Publication visibility" },
   { key: "source", label: "Source or provenance note" },
+  { key: "sourceLocator", label: "Source locator" },
+  { key: "sourceCertainty", label: "Source certainty" },
+  { key: "reviewNote", label: "Source review note" },
+  { key: "planningState", label: "Planning state" },
 ];
+
+const relationshipFields = [
+  ["relationshipType", "Relationship type"],
+  ["sourceLocator", "Source locator"],
+  ["sourceCertainty", "Source certainty"],
+  ["reviewNote", "Source review note"],
+] as const;
 
 function displayValue(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -242,6 +253,22 @@ export function diffChartDocuments(
           label,
         ),
       );
+    }
+    for (const [field, fieldLabel] of relationshipFields) {
+      if (!jsonEqual(previous.data?.[field], edge.data?.[field])) {
+        changes.push(
+          change(
+            "changed",
+            "relationship",
+            edge.id,
+            label,
+            field,
+            fieldLabel,
+            previous.data?.[field],
+            edge.data?.[field],
+          ),
+        );
+      }
     }
     if (!jsonEqual(previous.data?.manualRoute, edge.data?.manualRoute)) {
       changes.push(

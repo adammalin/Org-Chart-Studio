@@ -1,9 +1,11 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const fs = require("node:fs");
 const net = require("node:net");
+const os = require("node:os");
 const path = require("node:path");
 const { randomBytes } = require("node:crypto");
 const { spawn } = require("node:child_process");
+const { pathToFileURL } = require("node:url");
 const {
   app,
   BrowserWindow,
@@ -12,6 +14,7 @@ const {
   session,
   shell,
 } = require("electron");
+const squirrelStartup = require("electron-squirrel-startup");
 const { installLocalOnlyNetworkPolicy } = require("./network-policy.cjs");
 const {
   applyPendingDataMigration,
@@ -31,6 +34,9 @@ const smokeTest = process.env.ORGCHART_ELECTRON_SMOKE === "1";
 const desktopToken = randomBytes(32).toString("hex");
 const smokeUserDataPath = smokeTest
   ? path.join(app.getPath("temp"), `orgchart-studio-smoke-${process.pid}`)
+  : null;
+const smokeCodexHomePath = smokeUserDataPath
+  ? path.join(smokeUserDataPath, "codex-home")
   : null;
 
 if (smokeUserDataPath) {
@@ -53,6 +59,7 @@ let quitDialogOpen = false;
 
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_ID);
+if (squirrelStartup) app.quit();
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -71,6 +78,8 @@ app.whenReady().then(async () => {
     installLocalOnlyNetworkPolicy(session.defaultSession, desktopToken);
     storageRuntime = initializeStorageLocations();
     registerStorageHandlers();
+    registerMcpConfigurationHandlers();
+    await refreshManagedMcpRegistration();
     serverUrl = await startLocalServer();
     publishMcpRuntime(serverUrl);
     createMainWindow(serverUrl);
@@ -122,19 +131,15 @@ async function availablePort() {
 
 async function startLocalServer() {
   const projectRoot = app.getAppPath();
-  const nodeExecutable = process.env.ORGCHART_NODE_BIN;
-  const wranglerCli = path.join(
-    projectRoot,
-    "node_modules",
-    "wrangler",
-    "wrangler-dist",
-    "cli.js",
-  );
+  const configuredNodeExecutable = process.env.ORGCHART_NODE_BIN;
+  const nodeExecutable = configuredNodeExecutable || process.execPath;
+  const runElectronAsNode = !configuredNodeExecutable;
+  const wranglerCli = path.join(projectRoot, "scripts", "run-packaged-wrangler.cjs");
   const wranglerConfig = path.join(projectRoot, "dist", "server", "wrangler.json");
   const dataPath = storageRuntime.dataDirectory;
   const logsPath = path.join(app.getPath("userData"), "logs");
 
-  if (!nodeExecutable || !fs.existsSync(nodeExecutable)) {
+  if (!fs.existsSync(nodeExecutable)) {
     throw new Error("The private Node.js runtime was not supplied by the launcher.");
   }
   if (!fs.existsSync(wranglerCli) || !fs.existsSync(wranglerConfig)) {
@@ -174,6 +179,7 @@ async function startLocalServer() {
       detached: process.platform !== "win32",
       env: {
         ...process.env,
+        ...(runElectronAsNode ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
         MINIFLARE_REGISTRY_PATH: path.join(dataPath, "registry"),
         NO_UPDATE_NOTIFIER: "1",
         WRANGLER_LOG_PATH: path.join(logsPath, "wrangler.log"),
@@ -326,6 +332,73 @@ function registerStorageHandlers() {
   });
 }
 
+function codexConfigPath() {
+  return path.join(
+    smokeCodexHomePath || process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
+    "config.toml",
+  );
+}
+
+async function mcpConfigurationModule() {
+  const modulePath = path.join(app.getAppPath(), "scripts", "configure-orgchart-mcp.mjs");
+  if (!fs.existsSync(modulePath)) {
+    throw new Error("The installed local AI integration files are incomplete.");
+  }
+  return import(pathToFileURL(modulePath).href);
+}
+
+function mcpConfigurationOptions() {
+  const packaged = app.isPackaged;
+  const executablePath = packaged ? process.execPath : process.env.ORGCHART_NODE_BIN;
+  if (!executablePath || !fs.existsSync(executablePath)) {
+    throw new Error("The local AI integration could not locate its private runtime.");
+  }
+  return {
+    configPath: codexConfigPath(),
+    projectRoot: app.getAppPath(),
+    executablePath,
+    runtimePath: mcpRuntimePath(),
+    runAsNode: packaged,
+  };
+}
+
+async function refreshManagedMcpRegistration() {
+  try {
+    const configuration = await mcpConfigurationModule();
+    const options = mcpConfigurationOptions();
+    const status = configuration.inspectOrgChartMcpConfiguration(options);
+    if (status.needsRepair) {
+      console.error("The managed OrgChart Studio MCP configuration marker is incomplete.");
+      return;
+    }
+    if (status.installed) {
+      configuration.configureOrgChartMcp({ ...options, action: "install" });
+    }
+  } catch (error) {
+    console.error("The optional local AI integration could not be refreshed.", error);
+  }
+}
+
+function registerMcpConfigurationHandlers() {
+  ipcMain.handle("mcp:configuration-status", async () => {
+    const configuration = await mcpConfigurationModule();
+    return configuration.inspectOrgChartMcpConfiguration(mcpConfigurationOptions());
+  });
+  ipcMain.handle("mcp:configure", async (_event, action) => {
+    if (!["install", "remove"].includes(action)) {
+      throw new Error("Unsupported local AI integration action.");
+    }
+    const configuration = await mcpConfigurationModule();
+    const options = mcpConfigurationOptions();
+    const result = configuration.configureOrgChartMcp({ ...options, action });
+    return {
+      ...configuration.inspectOrgChartMcpConfiguration(options),
+      changed: result.changed,
+      backupPath: result.backupPath,
+    };
+  });
+}
+
 function mcpRuntimePath() {
   return path.join(app.getPath("userData"), MCP_RUNTIME_FILE_NAME);
 }
@@ -410,7 +483,7 @@ function createMainWindow(url) {
     if (!smokeTest) return;
     try {
       const capabilities = await mainWindow.webContents.executeJavaScript(`(async () => {
-        const waitFor = async (predicate, label, timeoutMs = 8000) => {
+        const waitFor = async (predicate, label, timeoutMs = 15000) => {
           const deadline = Date.now() + timeoutMs;
           while (Date.now() < deadline) {
             const value = await predicate();
@@ -462,6 +535,17 @@ function createMainWindow(url) {
         const chartLibraryInitiallyVisible = await waitFor(
           () => document.body.textContent.includes('Organizational chart library'),
           'the chart library workspace'
+        );
+        const onboardingSkipButton = await waitFor(
+          () => [...document.querySelectorAll('.onboarding-tour button')].find(
+            (button) => button.textContent.trim() === 'Skip tour'
+          ),
+          'the first-run tour'
+        );
+        onboardingSkipButton.click();
+        const onboardingTourDismissed = await waitFor(
+          () => !document.querySelector('.onboarding-tour'),
+          'the first-run tour to close'
         );
         const created = await fetch('/api/charts', {
           method: 'POST',
@@ -527,6 +611,37 @@ function createMainWindow(url) {
         await waitFor(
           () => !document.querySelector('.detail-panel'),
           'the reopened selected-unit drawer to close'
+        );
+        const accessibleTableNavigation = [...document.querySelectorAll('.sidebar button')].find(
+          (button) => button.textContent.includes('Accessible table')
+        );
+        accessibleTableNavigation.click();
+        const accessibleTablePanel = await waitFor(
+          () => document.querySelector('.table-panel'),
+          'the accessible hierarchy table'
+        );
+        const recordedVacantSummary = [...accessibleTablePanel.querySelectorAll('.table-summary button')].find(
+          (button) => button.textContent.includes('Recorded vacant')
+        );
+        recordedVacantSummary.click();
+        const filteredTableRow = await waitFor(
+          () => document.querySelector('.data-table-wrap tbody th button'),
+          'the recorded-vacant table result'
+        );
+        const accessibleTableFilterApplied =
+          document.querySelector('.table-results-summary strong')?.textContent.trim() === '1' &&
+          document.querySelector('[aria-label="Filter organizational records"] input[type="search"]') instanceof HTMLInputElement;
+        filteredTableRow.click();
+        const tableRecordDrawer = await waitFor(
+          () => document.querySelector('.detail-panel'),
+          'the table record to open in the chart editor'
+        );
+        const accessibleTableRecordOpened =
+          tableRecordDrawer.querySelector('h2')?.textContent.trim() === 'Untitled organization';
+        tableRecordDrawer.querySelector('[aria-label="Close selected unit details"]').click();
+        await waitFor(
+          () => !document.querySelector('.detail-panel'),
+          'the table-opened selected-unit drawer to close'
         );
         const editedChart = {
           ...created.chart,
@@ -799,15 +914,24 @@ function createMainWindow(url) {
         sourceIntakeForm.set('name', 'Synthetic AI import intake');
         sourceIntakeForm.set(
           'evidence',
-          new File(['synthetic staged evidence'], 'staged-source.pdf', { type: 'application/pdf' })
+          new File(
+            ['evidence,value\\nsource,synthetic staged evidence'],
+            'staged-source.csv',
+            { type: 'text/csv' }
+          )
         );
         const sourceIntake = await fetch('/api/import-intakes', {
           method: 'POST',
           body: sourceIntakeForm
         }).then((response) => response.json());
+        const pendingIntakeExtraction = await fetch('/api/source-extractions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ scope: 'intake', id: sourceIntake.intake.id })
+        }).then((response) => response.json());
         const stagedNormalizedCsv = [
           'id,name,shortName,type,parentId,positionTitle,assignmentLabel,positionStatus,effectiveDate,publicationVisibility,source,sourceLocator,sourceCertainty,reviewNote,planningState',
-          'staged-root,Staged Organization,Staged Organization,division,,Director,Position vacant,vacant,October 1 2026,internal,Synthetic staged evidence,Slide 1,inferred,Confirm the source connector,planned'
+          'staged-root,Staged Organization,Staged Organization,division,,Director,Position vacant,vacant,October 1 2026,internal,Synthetic staged evidence,CSV row 2,inferred,Confirm the source record,planned'
         ].join('\\n');
         const stagedImport = await fetch('/api/ai-import-proposals', {
           method: 'POST',
@@ -838,9 +962,14 @@ function createMainWindow(url) {
         const stagedImportedChart = await fetch('/api/charts', { cache: 'no-store' })
           .then((response) => response.json())
           .then((library) => library.charts.find((chart) => chart.name === 'Synthetic staged AI chart'));
+        const linkedChartExtraction = await fetch('/api/source-extractions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ scope: 'chart', id: stagedImportedChart.id })
+        }).then((response) => response.json());
         const stagedImportRoundTrip =
           stagedImportedChart.sources.length === 2 &&
-          stagedImportedChart.nodes[0].data.unit.sourceLocator === 'Slide 1' &&
+          stagedImportedChart.nodes[0].data.unit.sourceLocator === 'CSV row 2' &&
           stagedImportedChart.nodes[0].data.unit.sourceCertainty === 'inferred' &&
           stagedImportedChart.nodes[0].data.unit.planningState === 'planned';
         const importedIntakeDiscardResponse = await fetch('/api/import-intakes', {
@@ -933,6 +1062,7 @@ function createMainWindow(url) {
           }),
           false
         );
+        const initialMcpConfiguration = await window.orgChartDesktop.getMcpConfigurationStatus();
         const aiControlNavigation = [...document.querySelectorAll('.sidebar button')].find(
           (button) => button.textContent.includes('Local AI control')
         );
@@ -941,6 +1071,38 @@ function createMainWindow(url) {
           () => document.body.textContent.includes('Local AI control center'),
           'the local AI control center'
         );
+        const installMcpButton = await waitFor(
+          () => [...document.querySelectorAll('.ai-integration-card button')].find(
+            (button) => button.textContent.includes('Install local AI integration') &&
+              buttonReceivesPointer(button)
+          ),
+          'the local AI integration install button'
+        );
+        const installMcpButtonClickable =
+          installMcpButton instanceof HTMLButtonElement &&
+          !installMcpButton.disabled &&
+          buttonReceivesPointer(installMcpButton);
+        installMcpButton.click();
+        const installedMcpConfiguration = await waitFor(async () => {
+          const status = await window.orgChartDesktop.getMcpConfigurationStatus();
+          return status.installed ? status : null;
+        }, 'the local AI integration to install');
+        const removeMcpButton = await waitFor(
+          () => [...document.querySelectorAll('.ai-integration-card button')].find(
+            (button) => button.textContent.includes('Remove integration') &&
+              buttonReceivesPointer(button)
+          ),
+          'the local AI integration remove button'
+        );
+        const removeMcpButtonClickable =
+          removeMcpButton instanceof HTMLButtonElement &&
+          !removeMcpButton.disabled &&
+          buttonReceivesPointer(removeMcpButton);
+        removeMcpButton.click();
+        const removedMcpConfiguration = await waitFor(async () => {
+          const status = await window.orgChartDesktop.getMcpConfigurationStatus();
+          return status.installed ? null : status;
+        }, 'the local AI integration to be removed');
         const pauseAiButton = [...document.querySelectorAll('.ai-control-panel button')].find(
           (button) => button.textContent.includes('Pause local AI access')
         );
@@ -960,20 +1122,40 @@ function createMainWindow(url) {
           const state = await fetch('/api/mcp-control', { cache: 'no-store' }).then((response) => response.json());
           return state.control.paused ? null : state.control;
         }, 'local AI access to resume');
+        const sourceAccessLabel = [...document.querySelectorAll('.ai-control-panel label')].find(
+          (label) => label.textContent.includes('Allow retained-source extraction for this session')
+        );
+        const sourceAccessCheckbox = sourceAccessLabel?.querySelector('input[type="checkbox"]');
+        sourceAccessCheckbox.click();
+        const sourceEnabledControl = await waitFor(async () => {
+          const state = await fetch('/api/mcp-control', { cache: 'no-store' }).then((response) => response.json());
+          return state.control.sourceAccessEnabled ? state.control : null;
+        }, 'retained-source extraction to enable');
+        sourceAccessCheckbox.click();
+        const sourceDisabledControl = await waitFor(async () => {
+          const state = await fetch('/api/mcp-control', { cache: 'no-store' }).then((response) => response.json());
+          return state.control.sourceAccessEnabled ? null : state.control;
+        }, 'retained-source extraction to turn off');
         return {
           localOnly: location.hostname === '127.0.0.1',
           desktopBridge: window.orgChartDesktop?.isDesktop === true,
           desktopQuitBridge: typeof window.orgChartDesktop?.requestQuit === 'function',
           desktopSaveStateBridge: typeof window.orgChartDesktop?.reportSaveState === 'function',
+          desktopMcpConfigurationBridge:
+            typeof window.orgChartDesktop?.getMcpConfigurationStatus === 'function' &&
+            typeof window.orgChartDesktop?.configureMcp === 'function',
           desktopQuitVisible: Boolean(document.querySelector('[data-desktop-quit]')),
           userAgentIncludesElectron: navigator.userAgent.includes('Electron'),
           externalRequestBlocked: await fetch('https://example.com/orgchart-network-test').then(() => false, () => true),
           chartLibraryVisible: chartLibraryInitiallyVisible,
+          onboardingTourDismissed: Boolean(onboardingTourDismissed),
           mcpLibraryAutoRefresh: Boolean(mcpLibraryAutoRefresh),
           unitDrawerSingleClickClose:
             drawerCloseButtonClickable &&
             drawerClosedOnFirstClick &&
             Boolean(drawerReopensForNextSelection),
+          accessibleTableRoundTrip:
+            Boolean(accessibleTableFilterApplied) && Boolean(accessibleTableRecordOpened),
           sourcesVisible: document.body.textContent.includes('Sources & imports'),
           backupsVisible: document.body.textContent.includes('Backup & restore'),
           startsWithoutExampleCharts: chartLibrary.charts.length === 0,
@@ -1009,7 +1191,17 @@ function createMainWindow(url) {
             stagedImportedDeleted.deleted === stagedImportedChart.id &&
             importedIntakeMetadataCleaned,
           mcpControlRoundTrip:
-            pausedControl.paused === true && resumedControl.paused === false,
+            pausedControl.paused === true &&
+            resumedControl.paused === false &&
+            sourceEnabledControl.sourceAccessEnabled === true &&
+            sourceDisabledControl.sourceAccessEnabled === false,
+          mcpDesktopConfigurationRoundTrip:
+            initialMcpConfiguration.installed === false &&
+            initialMcpConfiguration.needsRepair === false &&
+            installMcpButtonClickable &&
+            removeMcpButtonClickable &&
+            installedMcpConfiguration.installed === true &&
+            removedMcpConfiguration.installed === false,
           assistedImportRoundTrip:
             intakePreview.preview.rowCount === 2 &&
             imported.chart.sources.length === 2 &&
@@ -1019,6 +1211,16 @@ function createMainWindow(url) {
             evidenceDownload.ok &&
             evidenceDownloadText === 'synthetic evidence' &&
             evidenceDownload.headers.get('x-content-type-options') === 'nosniff',
+          retainedSourceExtractionRoundTrip:
+            pendingIntakeExtraction.extractions.length === 1 &&
+            pendingIntakeExtraction.extractions[0].kind === 'text' &&
+            pendingIntakeExtraction.extractions[0].data.text.includes('synthetic staged evidence') &&
+            linkedChartExtraction.extractions.some(
+              (extraction) =>
+                extraction.kind === 'text' &&
+                extraction.data.text.includes('synthetic staged evidence')
+            ) &&
+            !JSON.stringify(linkedChartExtraction).includes('"bytes"'),
           dataOutsideRepository:
             storageSettings.dataDirectoryIsOutsideRepository === true &&
             storageSettings.dataDirectoryIsCloudSynced === false,
@@ -1032,7 +1234,15 @@ function createMainWindow(url) {
             unencryptedBackupSave.fileName === 'orgchart-studio-backup-unencrypted-electron-smoke.orgchart-backup' &&
             unencryptedBackupSave.bytes > 0
         };
-      })()`);
+      })().catch((error) => ({
+        __smokeError: String(error?.message ?? error),
+        __smokeStack: String(error?.stack ?? '')
+      }))`);
+      if (capabilities.__smokeError) {
+        throw new Error(
+          `${capabilities.__smokeError}${capabilities.__smokeStack ? `\n${capabilities.__smokeStack}` : ""}`,
+        );
+      }
       const runtimeFile = mcpRuntimePath();
       const runtimeDescriptor = JSON.parse(fs.readFileSync(runtimeFile, "utf8"));
       capabilities.mcpRuntimePublished =

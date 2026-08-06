@@ -4,7 +4,10 @@ import { z } from "zod";
 import {
   OrgChartAppClient,
   OrgChartAppUnavailableError,
+  runtimeFilePath,
 } from "./orgchart-app-client.mjs";
+import { writePrivateSourceRecheckBackup } from "./private-recheck-backup.mjs";
+import { validateSourceRecheckProposal } from "./source-recheck.mjs";
 
 const SERVER_NAME = "orgchart-studio-local";
 const SERVER_VERSION = "0.1.0";
@@ -48,6 +51,7 @@ async function runWithWriteActivity(client, details, operation) {
     toolName: details.operation,
     chartId: details.chartId,
     mode: "write",
+    sourceAccess: details.sourceAccess === true,
   });
   const activityId = crypto.randomUUID();
   await client
@@ -228,7 +232,7 @@ function registerTools(server, client) {
     {
       title: "Validate normalized chart data",
       description:
-        "Validate AI- or human-normalized CSV or JSON with the app's import pipeline without creating a chart. Use this before import_normalized_chart.",
+        "Validate AI- or human-normalized CSV or JSON with the app's import pipeline without creating a chart. Use this before import_normalized_chart. Before validation, split visible person-and-role cards into assignmentLabel and positionTitle, and do not turn adjacent portfolio, coverage, specialty, or service labels into vacant child units unless the source explicitly establishes that hierarchy.",
       inputSchema: {
         chartName: z.string().min(1).max(160),
         format: z.enum(["csv", "json"]),
@@ -287,6 +291,69 @@ function registerTools(server, client) {
         return success(
           { intakes: pending },
           `Found ${pending.length} pending source intake${pending.length === 1 ? "" : "s"}.`,
+        );
+      } catch (error) {
+        return toolFailure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "extract_import_intake",
+    {
+      title: "Extract one retained source intake",
+      description:
+        "Read a pending local source intake through OrgChart Studio's bounded extractor. This requires the user to enable retained-source extraction in Local AI control for the current app session. Only extracted text, spreadsheet cells, PowerPoint shape geometry, connector metadata, checksums, and warnings enter the AI conversation; raw file bytes are never returned. Use the intake ID when staging its normalized import, and preserve precise extracted locators in card and reporting-line provenance.",
+      inputSchema: { intakeId: z.string().min(1).max(200) },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ intakeId }) => {
+      try {
+        await client.authorizeTool({
+          toolName: "extract_import_intake",
+          mode: "read",
+          sourceAccess: true,
+        });
+        const extraction = await client.extractImportIntake(intakeId);
+        return success(
+          extraction,
+          `Extracted ${extraction.extractions.length} retained source file${extraction.extractions.length === 1 ? "" : "s"} from ${extraction.name}. The extracted content has entered this AI conversation; raw files did not.`,
+        );
+      } catch (error) {
+        return toolFailure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "extract_chart_sources",
+    {
+      title: "Extract retained sources for one chart",
+      description:
+        "Read the retained local source files linked to one existing chart through OrgChart Studio's bounded extractor. Call list_charts and get_chart first, and use only when the user explicitly asks to recheck that chart. This requires retained-source extraction to be enabled in Local AI control for the current session. Raw files are never returned.",
+      inputSchema: { chartId: z.string().min(1).max(200) },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ chartId }) => {
+      try {
+        await client.authorizeTool({
+          toolName: "extract_chart_sources",
+          chartId,
+          mode: "read",
+          sourceAccess: true,
+        });
+        const extraction = await client.extractChartSources(chartId);
+        return success(
+          extraction,
+          `Extracted ${extraction.extractions.length} retained source file${extraction.extractions.length === 1 ? "" : "s"} for ${extraction.name}. The extracted content has entered this AI conversation; raw files did not.`,
         );
       } catch (error) {
         return toolFailure(error);
@@ -371,7 +438,7 @@ function registerTools(server, client) {
     {
       title: "Stage a normalized chart import",
       description:
-        "Preferred AI import path. Stage validated normalized CSV or JSON as a temporary new-chart proposal for field, source, uncertainty, and quality review inside OrgChart Studio. Nothing is added to the chart library until a person chooses Create chart. Optionally associate a pending source intake so its original files remain local evidence.",
+        "Preferred AI import path. Stage validated normalized CSV or JSON as a temporary new-chart proposal for field, source, uncertainty, and quality review inside OrgChart Studio. Nothing is added to the chart library until a person chooses Create chart. Optionally associate a pending source intake so its original files remain local evidence. Staff cards that visibly name a person are filled or acting assignments when the source supports that; nearby portfolio and coverage labels are not vacant seats or child reporting units without explicit evidence.",
       inputSchema: {
         chartName: z.string().min(1).max(160),
         format: z.enum(["csv", "json"]),
@@ -444,6 +511,69 @@ function registerTools(server, client) {
   );
 
   server.registerTool(
+    "stage_source_recheck",
+    {
+      title: "Stage a retained-source recheck",
+      description:
+        "Stage source-backed corrections to an existing chart after extract_chart_sources. This requires retained-source extraction to be enabled. It first writes a private, selected-chart rollback backup beside the desktop connection file, then stages a human-review proposal. It cannot add or remove cards, rewire relationships, change layout or pins, or silently confirm edits: every changed card or line must include a source locator, actionable review note, and sourceCertainty needs_review. The saved chart remains unchanged until a person applies the proposal.",
+      inputSchema: {
+        chart: z.record(z.string(), z.unknown()),
+        reviewedSourceChecksums: z.array(z.string().min(16).max(128)).min(1).max(100),
+        changeSummary: z.string().min(3).max(500),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ chart, reviewedSourceChecksums, changeSummary }) => {
+      try {
+        const result = await runWithWriteActivity(
+          client,
+          {
+            operation: "stage_source_recheck",
+            label: changeSummary,
+            chartId: chart.id,
+            chartName: chart.name,
+            sourceAccess: true,
+          },
+          async () => {
+            const { charts } = await client.listCharts();
+            const current = charts.find((candidate) => candidate.id === chart.id);
+            if (!current) throw new Error("The requested chart was not found.");
+            const validation = validateSourceRecheckProposal({
+              current,
+              proposed: chart,
+              reviewedSourceChecksums,
+            });
+            const backupPackage = await client.createBackup([current.id]);
+            const backup = writePrivateSourceRecheckBackup({
+              backup: backupPackage,
+              runtimePath: client.runtimePath ?? runtimeFilePath(),
+              chartId: current.id,
+            });
+            try {
+              const staged = await client.stageChartProposal(chart, changeSummary);
+              return { ...staged, backup, sourceReview: validation };
+            } catch (error) {
+              throw new Error(
+                `A private rollback backup was saved to ${backup.path}, but the source-review proposal could not be staged: ${error instanceof Error ? error.message : "unknown error"}`,
+              );
+            }
+          },
+        );
+        return success(
+          result,
+          `Created private rollback backup ${result.backup.fileName} and staged ${result.proposal.summary.total} source-backed change${result.proposal.summary.total === 1 ? "" : "s"} for human review. The saved chart has not changed.`,
+        );
+      } catch (error) {
+        return toolFailure(error);
+      }
+    },
+  );
+
+  server.registerTool(
     "save_chart_version",
     {
       title: "Save an immutable chart version",
@@ -495,7 +625,7 @@ export function createOrgChartMcpServer(options = {}) {
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
       instructions:
-        "OrgChart Studio data is local and user-controlled. Respect the app's MCP pause and selected-chart scope. Call list_charts before get_chart or any existing-chart write. Only read a complete chart when the user identifies it and understands that returned fields enter the AI conversation. For new legacy charts, list pending source intakes when relevant, validate normalized data, and prefer stage_normalized_import so a person reviews it in the app before creation. Before existing-chart writes, read the current chart and preserve its id, version, and updatedAt. Preserve source locators, certainty labels, review notes, and planned/current state. Never invent reporting relationships or source facts. Do not delete charts, restore backups, download source files, or change storage settings; this server exposes no such tools.",
+        "OrgChart Studio data is local and user-controlled. Respect the app's MCP pause, selected-chart scope, and retained-source extraction toggle. Call list_charts before get_chart or any existing-chart write. Only read a complete chart or extracted retained source when the user identifies it and understands that returned content enters the AI conversation. Raw retained files are never returned. For new legacy charts, list pending source intakes when relevant, extract only after the user enables it, validate normalized data, and prefer stage_normalized_import so a person reviews it in the app before creation. When a source card names a person and role, map them to assignmentLabel and positionTitle rather than a vacant unit. Treat adjacent shaded strips, portfolios, coverage areas, specialties, and service lists as descriptive content unless an explicit connector or source statement establishes a separate reporting unit. A shared line across staff cards indicates siblings, not a chain. Keep card and reporting-line provenance separate. For an existing source audit, call extract_chart_sources, preserve the returned checksums, and use stage_source_recheck; it creates a private rollback package and permits only review-queued semantic corrections while preserving layout and reporting endpoints. Before any other existing-chart write, read the current chart and preserve its id, version, updatedAt, layout, pins, and sources. Never invent reporting relationships or source facts. Do not delete charts, restore backups, download raw source files, or change storage settings; this server exposes no such tools.",
     },
   );
   registerTools(server, client);

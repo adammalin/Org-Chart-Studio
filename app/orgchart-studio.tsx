@@ -186,6 +186,10 @@ type WorkspaceView =
 type BackupScope = "all" | "selected";
 type ExportFormat = "svg" | "png" | "pdf" | "pptx";
 type PlanningFilter = "all" | PlanningState;
+type TablePositionFilter = "all" | PositionStatus;
+type TableSourceFilter = "all" | SourceCertainty;
+type TableUnitTypeFilter = "all" | UnitType;
+type TableQualityFilter = "all" | "import_placeholder" | "missing_date";
 type SourceReviewFilter = "all" | "cards" | "relationships";
 type LibraryStatusFilter = "active" | "all" | ChartStatus;
 
@@ -383,6 +387,39 @@ const statusLabels = {
   acting: "Acting",
   vacant: "Vacant",
 };
+
+function tableSourceCertainty(flowNode: OrgFlowNode): SourceCertainty {
+  const certainty = flowNode.data.unit.sourceCertainty;
+  return certainty === "inferred" || certainty === "needs_review"
+    ? certainty
+    : "confirmed";
+}
+
+function isLikelyImportPlaceholder(flowNode: OrgFlowNode): boolean {
+  const unit = flowNode.data.unit;
+  return (
+    unit.positionStatus === "vacant" &&
+    /^position vacant$/i.test(unit.assignmentLabel.trim()) &&
+    /^position (shown in source|not supplied)$/i.test(unit.positionTitle.trim())
+  );
+}
+
+function hasMissingSourceDate(flowNode: OrgFlowNode): boolean {
+  const effectiveDate = flowNode.data.unit.effectiveDate.trim();
+  return !effectiveDate || /^source date not supplied$/i.test(effectiveDate);
+}
+
+function tableReviewCue(flowNode: OrgFlowNode): string {
+  if (isLikelyImportPlaceholder(flowNode)) return "Likely import placeholder";
+  if (tableSourceCertainty(flowNode) === "needs_review") return "Source needs review";
+  if (tableSourceCertainty(flowNode) === "inferred") return "Source relationship inferred";
+  if (hasMissingSourceDate(flowNode)) return "Source date not supplied";
+  return "No automated flag";
+}
+
+function formatUnitType(value: UnitType): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
 
 const selectionArrangementLabels: Record<SelectionArrangement, string> = {
   "align-left": "aligning selected cards left",
@@ -755,6 +792,9 @@ function StudioWorkspace() {
   const [backupHealth, setBackupHealth] = useState<BackupHealthState>(storedBackupHealth);
   const [backupClock, setBackupClock] = useState(0);
   const [desktopStorage, setDesktopStorage] = useState<DesktopStorageSettings | null>(null);
+  const [desktopMcpConfiguration, setDesktopMcpConfiguration] =
+    useState<DesktopMcpConfigurationStatus | null>(null);
+  const [desktopMcpConfigurationBusy, setDesktopMcpConfigurationBusy] = useState(false);
   const [storageMode, setStorageMode] = useState<"loading" | "desktop" | "browser">(
     "browser",
   );
@@ -805,6 +845,15 @@ function StudioWorkspace() {
   const [comparisonTargetId, setComparisonTargetId] = useState("");
   const [comparisonBusy, setComparisonBusy] = useState(false);
   const [planningFilter, setPlanningFilter] = useState<PlanningFilter>("all");
+  const [tableSearchQuery, setTableSearchQuery] = useState("");
+  const [tablePositionFilter, setTablePositionFilter] =
+    useState<TablePositionFilter>("all");
+  const [tableSourceFilter, setTableSourceFilter] =
+    useState<TableSourceFilter>("all");
+  const [tableUnitTypeFilter, setTableUnitTypeFilter] =
+    useState<TableUnitTypeFilter>("all");
+  const [tableQualityFilter, setTableQualityFilter] =
+    useState<TableQualityFilter>("all");
   const [sourceReviewFilter, setSourceReviewFilter] =
     useState<SourceReviewFilter>("all");
   const [onboardingStep, setOnboardingStep] = useState<number | null>(null);
@@ -909,13 +958,99 @@ function StudioWorkspace() {
     (total, summary) => total + summary.total,
     0,
   );
-  const planningFilteredNodes = useMemo(
-    () =>
-      planningFilter === "all"
-        ? nodes
-        : nodes.filter((node) => planningStateForNode(node) === planningFilter),
-    [nodes, planningFilter],
+  const deferredTableSearchQuery = useDeferredValue(tableSearchQuery.trim().toLowerCase());
+  const tableNodeById = useMemo(
+    () => new Map(nodes.map((flowNode) => [flowNode.id, flowNode])),
+    [nodes],
   );
+  const tableParentByNodeId = useMemo(
+    () => new Map(edges.map((edge) => [edge.target, edge.source])),
+    [edges],
+  );
+  const tableUnitTypes = useMemo(
+    () => [...new Set(nodes.map((flowNode) => flowNode.data.unit.type))].sort(),
+    [nodes],
+  );
+  const tableCounts = useMemo(
+    () => ({
+      all: nodes.length,
+      filled: nodes.filter((flowNode) => flowNode.data.unit.positionStatus === "filled").length,
+      acting: nodes.filter((flowNode) => flowNode.data.unit.positionStatus === "acting").length,
+      vacant: nodes.filter((flowNode) => flowNode.data.unit.positionStatus === "vacant").length,
+      importPlaceholders: nodes.filter(isLikelyImportPlaceholder).length,
+    }),
+    [nodes],
+  );
+  const accessibleTableNodes = useMemo(
+    () =>
+      nodes.filter((flowNode) => {
+        const unit = flowNode.data.unit;
+        const parentId = tableParentByNodeId.get(flowNode.id);
+        const parentName = parentId
+          ? tableNodeById.get(parentId)?.data.unit.shortName ?? ""
+          : "Root";
+        const matchesSearch = !deferredTableSearchQuery || [
+          unit.name,
+          unit.shortName,
+          unit.positionTitle,
+          unit.assignmentLabel,
+          parentName,
+          unit.source,
+          unit.sourceLocator ?? "",
+          tableReviewCue(flowNode),
+        ].some((value) => value.toLowerCase().includes(deferredTableSearchQuery));
+        const matchesPlanning =
+          planningFilter === "all" || planningStateForNode(flowNode) === planningFilter;
+        const matchesPosition =
+          tablePositionFilter === "all" || unit.positionStatus === tablePositionFilter;
+        const matchesSource =
+          tableSourceFilter === "all" || tableSourceCertainty(flowNode) === tableSourceFilter;
+        const matchesUnitType =
+          tableUnitTypeFilter === "all" || unit.type === tableUnitTypeFilter;
+        const matchesQuality =
+          tableQualityFilter === "all" ||
+          (tableQualityFilter === "import_placeholder" && isLikelyImportPlaceholder(flowNode)) ||
+          (tableQualityFilter === "missing_date" && hasMissingSourceDate(flowNode));
+        return (
+          matchesSearch &&
+          matchesPlanning &&
+          matchesPosition &&
+          matchesSource &&
+          matchesUnitType &&
+          matchesQuality
+        );
+      }),
+    [
+      deferredTableSearchQuery,
+      nodes,
+      planningFilter,
+      tableNodeById,
+      tableParentByNodeId,
+      tablePositionFilter,
+      tableQualityFilter,
+      tableSourceFilter,
+      tableUnitTypeFilter,
+    ],
+  );
+  const tableImportWarningCount =
+    activeChart?.sources.reduce((total, source) => total + source.warningCount, 0) ?? 0;
+  const hasActiveTableFilters = Boolean(
+    tableSearchQuery.trim() ||
+    planningFilter !== "all" ||
+    tablePositionFilter !== "all" ||
+    tableSourceFilter !== "all" ||
+    tableUnitTypeFilter !== "all" ||
+    tableQualityFilter !== "all",
+  );
+
+  const clearTableFilters = useCallback(() => {
+    setTableSearchQuery("");
+    setPlanningFilter("all");
+    setTablePositionFilter("all");
+    setTableSourceFilter("all");
+    setTableUnitTypeFilter("all");
+    setTableQualityFilter("all");
+  }, []);
 
   const comparisonCharts = charts.filter((chart) => chart.status !== "archived");
   const effectiveComparisonTargetId = comparisonCharts.some((chart) => chart.id === comparisonTargetId)
@@ -1183,6 +1318,23 @@ function StudioWorkspace() {
   useEffect(() => {
     window.orgChartDesktop?.reportSaveState(saveState);
   }, [saveState]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const bridge = window.orgChartDesktop;
+    if (!bridge) return;
+    bridge
+      .getMcpConfigurationStatus()
+      .then((status) => {
+        if (!cancelled) setDesktopMcpConfiguration(status);
+      })
+      .catch(() => {
+        if (!cancelled) setDesktopMcpConfiguration(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const changeConnectorRoutingMode = useCallback(
     (mode: ConnectorRoutingMode) => {
@@ -3415,12 +3567,18 @@ function StudioWorkspace() {
   };
 
   const updateMcpControl = async (
-    patch: Partial<Pick<McpControlState, "paused" | "chartScope" | "allowedChartIds">>,
+    patch: Partial<
+      Pick<
+        McpControlState,
+        "paused" | "chartScope" | "allowedChartIds" | "sourceAccessEnabled"
+      >
+    >,
   ) => {
     const current = mcpControl ?? {
       paused: false,
       chartScope: "all" as const,
       allowedChartIds: [],
+      sourceAccessEnabled: false,
       revision: 0,
       events: [],
     };
@@ -3437,6 +3595,8 @@ function StudioWorkspace() {
       setNotice(
         data.control.paused
           ? "Local AI access is paused. MCP reads and writes are blocked until you resume it."
+          : data.control.sourceAccessEnabled
+            ? "Local AI access is active, including explicitly requested extraction of retained source content for this app session."
           : data.control.chartScope === "selected"
             ? `Local AI access is limited to ${data.control.allowedChartIds.length} selected chart${data.control.allowedChartIds.length === 1 ? "" : "s"}.`
             : "Local AI access is active for charts you explicitly ask the assistant to use.",
@@ -3445,6 +3605,29 @@ function StudioWorkspace() {
       setNotice(error instanceof Error ? error.message : "Local AI controls could not be updated.");
     } finally {
       setMcpControlBusy(false);
+    }
+  };
+
+  const configureDesktopMcp = async (action: "install" | "remove") => {
+    const bridge = window.orgChartDesktop;
+    if (!bridge || desktopMcpConfigurationBusy) return;
+    setDesktopMcpConfigurationBusy(true);
+    try {
+      const status = await bridge.configureMcp(action);
+      setDesktopMcpConfiguration(status);
+      setNotice(
+        action === "install"
+          ? "Local AI integration installed or updated. Restart ChatGPT Desktop or Codex once so it can find OrgChart Studio."
+          : "Local AI integration removed. Restart ChatGPT Desktop or Codex once to finish disconnecting it.",
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "The local AI integration could not be changed.",
+      );
+    } finally {
+      setDesktopMcpConfigurationBusy(false);
     }
   };
 
@@ -3600,7 +3783,10 @@ function StudioWorkspace() {
           id: edge.id,
           source: edge.source,
           target: edge.target,
-          type: edge.data?.relationshipType ?? "primary supervisory",
+          relationshipType: edge.data?.relationshipType ?? "primary supervisory",
+          sourceLocator: edge.data?.sourceLocator ?? "",
+          sourceCertainty: edge.data?.sourceCertainty ?? "needs_review",
+          reviewNote: edge.data?.reviewNote ?? "",
         })),
       },
     };
@@ -5290,20 +5476,12 @@ function StudioWorkspace() {
               <div>
                 <span className="eyebrow">Parallel accessible output</span>
                 <h1 id="table-title">Organizational hierarchy table</h1>
-                <p>Generated from the same current chart data as the visual editor.</p>
+                <p>
+                  A searchable, keyboard-friendly view of the same records. Use it to audit
+                  status, hierarchy, dates, and source confidence, then open a unit in the editor.
+                </p>
               </div>
               <div className="table-panel__actions">
-                <label>
-                  <span>Effective state</span>
-                  <select
-                    value={planningFilter}
-                    onChange={(event) => setPlanningFilter(event.target.value as PlanningFilter)}
-                  >
-                    <option value="all">In effect and planned</option>
-                    <option value="current">In effect now</option>
-                    <option value="planned">Planned only</option>
-                  </select>
-                </label>
                 <button
                   type="button"
                   className="button button--secondary"
@@ -5313,6 +5491,168 @@ function StudioWorkspace() {
                   Return to chart
                 </button>
               </div>
+            </div>
+
+            {tableImportWarningCount > 0 ? (
+              <aside className="table-audit-notice" role="note" aria-label="Import review notice">
+                <WarningDiamond size={24} weight="fill" aria-hidden="true" />
+                <div>
+                  <strong>
+                    {tableImportWarningCount} warning{tableImportWarningCount === 1 ? " was" : "s were"}
+                    {" recorded during import."}
+                  </strong>
+                  <p>
+                    “Recorded vacant” means the saved chart data says vacant; it is not an HR
+                    vacancy confirmation. Review the current records against their source. Rows
+                    marked Likely import placeholder used fallback text because the import did not
+                    separate the unit, position, and person reliably.
+                  </p>
+                </div>
+              </aside>
+            ) : null}
+
+            <div className="table-summary" aria-label="Chart record summary">
+              <button
+                type="button"
+                className={tablePositionFilter === "all" ? "is-active" : ""}
+                onClick={() => setTablePositionFilter("all")}
+                aria-pressed={tablePositionFilter === "all"}
+              >
+                <strong>{tableCounts.all}</strong>
+                <span>All records</span>
+              </button>
+              <button
+                type="button"
+                className={tablePositionFilter === "filled" ? "is-active" : ""}
+                onClick={() => setTablePositionFilter("filled")}
+                aria-pressed={tablePositionFilter === "filled"}
+              >
+                <strong>{tableCounts.filled}</strong>
+                <span>Filled</span>
+              </button>
+              <button
+                type="button"
+                className={tablePositionFilter === "acting" ? "is-active" : ""}
+                onClick={() => setTablePositionFilter("acting")}
+                aria-pressed={tablePositionFilter === "acting"}
+              >
+                <strong>{tableCounts.acting}</strong>
+                <span>Acting</span>
+              </button>
+              <button
+                type="button"
+                className={tablePositionFilter === "vacant" ? "is-active" : ""}
+                onClick={() => setTablePositionFilter("vacant")}
+                aria-pressed={tablePositionFilter === "vacant"}
+              >
+                <strong>{tableCounts.vacant}</strong>
+                <span>Recorded vacant</span>
+              </button>
+              <button
+                type="button"
+                className={tableQualityFilter === "import_placeholder" ? "is-active" : ""}
+                onClick={() => setTableQualityFilter(
+                  tableQualityFilter === "import_placeholder" ? "all" : "import_placeholder",
+                )}
+                aria-pressed={tableQualityFilter === "import_placeholder"}
+              >
+                <strong>{tableCounts.importPlaceholders}</strong>
+                <span>Import placeholders</span>
+              </button>
+            </div>
+
+            <div className="table-filters" role="group" aria-label="Filter organizational records">
+              <label className="table-filters__search">
+                <span>Search records</span>
+                <span className="table-search-input">
+                  <MagnifyingGlass size={16} aria-hidden="true" />
+                  <input
+                    type="search"
+                    value={tableSearchQuery}
+                    onChange={(event) => setTableSearchQuery(event.target.value)}
+                    placeholder="Unit, person, position, parent, or source"
+                  />
+                </span>
+              </label>
+              <label>
+                <span>Position status</span>
+                <select
+                  value={tablePositionFilter}
+                  onChange={(event) => setTablePositionFilter(
+                    event.target.value as TablePositionFilter,
+                  )}
+                >
+                  <option value="all">All position statuses</option>
+                  <option value="filled">Filled</option>
+                  <option value="acting">Acting</option>
+                  <option value="vacant">Recorded vacant</option>
+                </select>
+              </label>
+              <label>
+                <span>Unit type</span>
+                <select
+                  value={tableUnitTypeFilter}
+                  onChange={(event) => setTableUnitTypeFilter(
+                    event.target.value as TableUnitTypeFilter,
+                  )}
+                >
+                  <option value="all">All unit types</option>
+                  {tableUnitTypes.map((unitType) => (
+                    <option key={unitType} value={unitType}>{formatUnitType(unitType)}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Effective state</span>
+                <select
+                  value={planningFilter}
+                  onChange={(event) => setPlanningFilter(event.target.value as PlanningFilter)}
+                >
+                  <option value="all">In effect and planned</option>
+                  <option value="current">In effect now</option>
+                  <option value="planned">Planned only</option>
+                </select>
+              </label>
+              <label>
+                <span>Source confidence</span>
+                <select
+                  value={tableSourceFilter}
+                  onChange={(event) => setTableSourceFilter(
+                    event.target.value as TableSourceFilter,
+                  )}
+                >
+                  <option value="all">All source confidence</option>
+                  <option value="confirmed">Source label confirmed</option>
+                  <option value="inferred">Inferred</option>
+                  <option value="needs_review">Needs review</option>
+                </select>
+              </label>
+              <label>
+                <span>Data quality</span>
+                <select
+                  value={tableQualityFilter}
+                  onChange={(event) => setTableQualityFilter(
+                    event.target.value as TableQualityFilter,
+                  )}
+                >
+                  <option value="all">All records</option>
+                  <option value="import_placeholder">Likely import placeholders</option>
+                  <option value="missing_date">Source date not supplied</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                className="button button--secondary table-filters__clear"
+                onClick={clearTableFilters}
+                disabled={!hasActiveTableFilters}
+              >
+                Clear filters
+              </button>
+            </div>
+
+            <div className="table-results-summary" role="status" aria-live="polite">
+              <strong>{accessibleTableNodes.length}</strong> of {nodes.length} records shown
+              {hasActiveTableFilters ? " with the current filters" : ""}.
             </div>
             <div className="data-table-wrap">
               <table>
@@ -5328,40 +5668,54 @@ function StudioWorkspace() {
                     <th scope="col">Position</th>
                     <th scope="col">Assignment</th>
                     <th scope="col">Status</th>
+                    <th scope="col">Review cue</th>
                     <th scope="col">Effective</th>
                     <th scope="col">State</th>
-                    <th scope="col">Source</th>
+                    <th scope="col">Source confidence</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {planningFilteredNodes.map((flowNode) => {
-                    const parentEdge = edges.find((edge) => edge.target === flowNode.id);
-                    const parent = nodes.find((candidate) => candidate.id === parentEdge?.source);
+                  {accessibleTableNodes.map((flowNode) => {
+                    const parentId = tableParentByNodeId.get(flowNode.id);
+                    const parent = parentId ? tableNodeById.get(parentId) : undefined;
+                    const placeholder = isLikelyImportPlaceholder(flowNode);
                     return (
-                      <tr key={flowNode.id}>
+                      <tr key={flowNode.id} className={placeholder ? "has-import-placeholder" : ""}>
                         <th scope="row">
-                          <button type="button" onClick={() => focusNode(flowNode.id)}>
+                          <button
+                            type="button"
+                            onClick={() => focusNode(flowNode.id)}
+                            aria-label={`Open ${flowNode.data.unit.name} in the chart editor`}
+                            title="Open this record in the chart editor"
+                          >
                             {flowNode.data.unit.name}
                           </button>
                         </th>
-                        <td>{flowNode.data.unit.type}</td>
+                        <td>{formatUnitType(flowNode.data.unit.type)}</td>
                         <td>{parent?.data.unit.shortName ?? "Root"}</td>
                         <td>{flowNode.data.unit.positionTitle}</td>
                         <td>{flowNode.data.unit.assignmentLabel}</td>
                         <td>
                           <span className={`table-status status--${flowNode.data.unit.positionStatus}`}>
                             <i className="status-marker" aria-hidden="true" />
-                            {statusLabels[flowNode.data.unit.positionStatus]}
+                            {flowNode.data.unit.positionStatus === "vacant"
+                              ? "Recorded vacant"
+                              : statusLabels[flowNode.data.unit.positionStatus]}
+                          </span>
+                        </td>
+                        <td>
+                          <span className={`table-review-cue ${placeholder ? "is-warning" : ""}`}>
+                            {tableReviewCue(flowNode)}
                           </span>
                         </td>
                         <td>{flowNode.data.unit.effectiveDate}</td>
                         <td>{planningStateForNode(flowNode) === "planned" ? "Planned" : "In effect"}</td>
                         <td>
-                          {flowNode.data.unit.sourceCertainty === "needs_review"
+                          {tableSourceCertainty(flowNode) === "needs_review"
                             ? "Needs review"
-                            : flowNode.data.unit.sourceCertainty === "inferred"
+                            : tableSourceCertainty(flowNode) === "inferred"
                               ? "Inferred"
-                              : "Confirmed"}
+                              : "Source label confirmed"}
                           {flowNode.data.unit.sourceLocator
                             ? ` · ${flowNode.data.unit.sourceLocator}`
                             : ""}
@@ -5369,6 +5723,14 @@ function StudioWorkspace() {
                       </tr>
                     );
                   })}
+                  {!accessibleTableNodes.length ? (
+                    <tr>
+                      <td colSpan={10} className="table-empty-state">
+                        <strong>No records match these filters.</strong>
+                        <button type="button" onClick={clearTableFilters}>Clear filters</button>
+                      </td>
+                    </tr>
+                  ) : null}
                 </tbody>
               </table>
             </div>
@@ -5993,6 +6355,62 @@ function StudioWorkspace() {
               </button>
             </div>
 
+            {storageMode === "desktop" ? (
+              <section className="ai-integration-card" aria-labelledby="ai-integration-title">
+                <div>
+                  <span className="eyebrow">Desktop connection</span>
+                  <h2 id="ai-integration-title">ChatGPT Desktop and Codex</h2>
+                  <p>
+                    Install this private local connection once, then restart your AI app.
+                    OrgChart Studio must be open before you ask AI to read or propose a change.
+                  </p>
+                  <p className="ai-integration-card__privacy">
+                    Chart data stays in the storage folder you chose. Source extraction remains
+                    off unless you enable it for the running session.
+                  </p>
+                </div>
+                <div className="ai-integration-card__actions">
+                  <strong
+                    className={
+                      desktopMcpConfiguration?.needsRepair
+                        ? "is-warning"
+                        : desktopMcpConfiguration?.installed
+                          ? "is-ready"
+                          : ""
+                    }
+                  >
+                    {desktopMcpConfiguration?.needsRepair
+                      ? "Needs repair"
+                      : desktopMcpConfiguration?.installed
+                        ? "Installed"
+                        : "Not installed"}
+                  </strong>
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    onClick={() => void configureDesktopMcp("install")}
+                    disabled={desktopMcpConfigurationBusy}
+                  >
+                    {desktopMcpConfigurationBusy
+                      ? "Working…"
+                      : desktopMcpConfiguration?.installed
+                        ? "Update local AI integration"
+                        : "Install local AI integration"}
+                  </button>
+                  {desktopMcpConfiguration?.installed ? (
+                    <button
+                      type="button"
+                      className="button button--secondary"
+                      onClick={() => void configureDesktopMcp("remove")}
+                      disabled={desktopMcpConfigurationBusy}
+                    >
+                      Remove integration
+                    </button>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
+
             <div className="ai-control-metrics">
               <div>
                 <span>Access state</span>
@@ -6009,6 +6427,10 @@ function StudioWorkspace() {
               <div>
                 <span>Session receipts</span>
                 <strong>{mcpControl?.events.length ?? 0}</strong>
+              </div>
+              <div>
+                <span>Retained sources</span>
+                <strong>{mcpControl?.sourceAccessEnabled ? "Enabled" : "Off"}</strong>
               </div>
             </div>
 
@@ -6058,6 +6480,23 @@ function StudioWorkspace() {
                     ))}
                   </div>
                 ) : null}
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={mcpControl?.sourceAccessEnabled ?? false}
+                    onChange={(event) =>
+                      void updateMcpControl({ sourceAccessEnabled: event.target.checked })
+                    }
+                  />
+                  <span>
+                    <strong>Allow retained-source extraction for this session</strong>
+                    <small>
+                      Off by default. When enabled and explicitly requested, MCP may return
+                      locally extracted text, spreadsheet cells, PowerPoint shape geometry,
+                      and connector metadata to the AI conversation. Raw files are never returned.
+                    </small>
+                  </span>
+                </label>
               </fieldset>
 
               <section className="ai-control-receipts" aria-labelledby="ai-control-receipts-title">
@@ -6188,13 +6627,13 @@ function StudioWorkspace() {
                   <FilePpt size={22} aria-hidden="true" />
                   <span>
                     <strong>{intakeFiles.length ? `${intakeFiles.length} original file${intakeFiles.length === 1 ? "" : "s"}` : "Choose original source files"}</strong>
-                    <small>{intakeFiles.length ? intakeFiles.map((file) => file.name).join(" · ") : "PowerPoint, Word, PDF, PNG, or JPEG · retained locally"}</small>
+                    <small>{intakeFiles.length ? intakeFiles.map((file) => file.name).join(" · ") : "PowerPoint, Word, PDF, image, CSV, or Excel · retained locally"}</small>
                   </span>
                   <input
                     key={intakeFiles.map((file) => file.name).join("|") || "empty-intake"}
                     type="file"
                     multiple
-                    accept=".pptx,.docx,.pdf,.png,.jpg,.jpeg"
+                    accept=".pptx,.docx,.pdf,.png,.jpg,.jpeg,.csv,.xlsx"
                     onChange={(event) => setIntakeFiles(Array.from(event.target.files ?? []).slice(0, 10))}
                   />
                 </label>
@@ -6293,7 +6732,7 @@ function StudioWorkspace() {
                     <strong>
                       {importEvidenceFiles.length
                         ? `${importEvidenceFiles.length} reference file${importEvidenceFiles.length === 1 ? "" : "s"} selected`
-                        : "Attach original PowerPoint, Word, PDF, or image references (optional)"}
+                        : "Attach original PowerPoint, Word, PDF, image, CSV, or Excel references (optional)"}
                     </strong>
                     <small>
                       {importEvidenceFiles.length
@@ -6305,7 +6744,7 @@ function StudioWorkspace() {
                     key={importEvidenceFiles.map((file) => file.name).join("|") || "empty-evidence"}
                     type="file"
                     multiple
-                    accept=".pptx,.docx,.pdf,.png,.jpg,.jpeg,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg"
+                    accept=".pptx,.docx,.pdf,.png,.jpg,.jpeg,.csv,.xlsx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     onChange={(event) => {
                       setImportEvidenceFiles(Array.from(event.target.files ?? []).slice(0, 10));
                       setImportPreview(null);

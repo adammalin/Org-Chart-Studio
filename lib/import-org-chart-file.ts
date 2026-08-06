@@ -26,6 +26,24 @@ const headerAliases: Record<(typeof importColumns)[number], string[]> = {
   sourceCertainty: ["sourcecertainty", "certainty", "confidence", "reviewstatus"],
   reviewNote: ["reviewnote", "reviewquestion", "ambiguity", "uncertaintynote"],
   planningState: ["planningstate", "organizationstate", "orgstate", "scenario"],
+  relationshipType: ["relationshiptype", "reportingrelationshiptype", "edgetype"],
+  relationshipSourceLocator: [
+    "relationshipsourcelocator",
+    "relationshiplocator",
+    "connectorlocator",
+    "reportinglinelocator",
+  ],
+  relationshipSourceCertainty: [
+    "relationshipsourcecertainty",
+    "relationshipcertainty",
+    "connectorcertainty",
+    "reportinglinecertainty",
+  ],
+  relationshipReviewNote: [
+    "relationshipreviewnote",
+    "connectorreviewnote",
+    "reportinglinereviewnote",
+  ],
 };
 
 function decodeXml(value: string): string {
@@ -223,6 +241,14 @@ function normalizeWorkbookRows(matrix: string[][]): {
             ? "public"
             : "internal",
         source: read("source"),
+        sourceLocator: read("sourceLocator"),
+        sourceCertainty: read("sourceCertainty"),
+        reviewNote: read("reviewNote"),
+        planningState: read("planningState"),
+        relationshipType: read("relationshipType"),
+        relationshipSourceLocator: read("relationshipSourceLocator"),
+        relationshipSourceCertainty: read("relationshipSourceCertainty"),
+        relationshipReviewNote: read("relationshipReviewNote"),
       } as ImportRow;
     });
 
@@ -256,8 +282,9 @@ function normalizeWorkbookRows(matrix: string[][]): {
   return { rows, findings };
 }
 
-export function parseXlsxImport(bytes: Uint8Array): ImportPreview & {
+export function extractFirstWorksheetMatrix(bytes: Uint8Array): {
   worksheetName: string;
+  rows: string[][];
 } {
   let uncompressedBytes = 0;
   const files = unzipSync(bytes, {
@@ -281,12 +308,19 @@ export function parseXlsxImport(bytes: Uint8Array): ImportPreview & {
     : [];
   const worksheet = firstWorksheetPath(files);
   const matrix = worksheetRows(strFromU8(files[worksheet.path]), sharedStrings);
-  const normalized = normalizeWorkbookRows(matrix);
+  return { worksheetName: worksheet.name, rows: matrix };
+}
+
+export function parseXlsxImport(bytes: Uint8Array): ImportPreview & {
+  worksheetName: string;
+} {
+  const worksheet = extractFirstWorksheetMatrix(bytes);
+  const normalized = normalizeWorkbookRows(worksheet.rows);
   const preview = rowsToChart(normalized.rows);
   return {
     ...preview,
     findings: [...normalized.findings, ...preview.findings],
-    worksheetName: worksheet.name,
+    worksheetName: worksheet.worksheetName,
   };
 }
 

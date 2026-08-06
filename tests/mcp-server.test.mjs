@@ -42,13 +42,28 @@ function chartFixture() {
       },
     ],
     edges: [],
-    sources: [],
+    sources: [
+      {
+        id: "source-public-fixture",
+        chartId: "chart-public-fixture",
+        fileName: "fixture.pdf",
+        contentType: "application/pdf",
+        fileSize: 100,
+        checksum: "f".repeat(64),
+        storageKey: "chart-sources/fixture.pdf",
+        sourceType: "guided_extraction",
+        importedAt: "2026-08-03T12:00:00.000Z",
+        rowCount: 0,
+        warningCount: 0,
+      },
+    ],
   };
 }
 
 async function startFakeApp(token) {
   const chart = chartFixture();
   const activityEvents = [];
+  const authorizationRequests = [];
   const server = http.createServer(async (request, response) => {
     response.setHeader("content-type", "application/json");
     if (request.headers["x-orgchart-desktop-token"] !== token) {
@@ -58,15 +73,47 @@ async function startFakeApp(token) {
     }
     const url = new URL(request.url, "http://127.0.0.1");
     if (request.method === "POST" && url.pathname === "/api/mcp-control") {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      authorizationRequests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
       response.end(
         JSON.stringify({
           control: {
             paused: false,
             chartScope: "all",
             allowedChartIds: [],
+            sourceAccessEnabled: true,
             revision: 1,
             events: [],
           },
+        }),
+      );
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/source-extractions") {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      response.end(
+        JSON.stringify({
+          scope: body.scope,
+          id: body.id,
+          name: body.scope === "chart" ? chart.name : "Public Fixture Intake",
+          extractedAt: chart.updatedAt,
+          notice: "Synthetic extracted content only.",
+          sourceChecksums: ["f".repeat(64)],
+          extractions: [
+            {
+              id: "source-public-fixture",
+              fileName: "fixture.pdf",
+              contentType: "application/pdf",
+              checksum: "f".repeat(64),
+              kind: "pdf",
+              truncated: false,
+              warnings: [],
+              data: { text: "Synthetic fixture source text" },
+            },
+          ],
         }),
       );
       return;
@@ -84,12 +131,16 @@ async function startFakeApp(token) {
       for await (const chunk of request) chunks.push(chunk);
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       assert.equal(body.action, "stage");
-      assert.equal(body.changeSummary, "The synthetic assignment changed after owner review.");
+      assert.ok([
+        "The synthetic assignment changed after owner review.",
+        "Recheck the synthetic fixture against its retained source.",
+      ].includes(body.changeSummary));
+      const sourceRecheck = body.changeSummary.startsWith("Recheck");
       response.statusCode = 201;
       response.end(
         JSON.stringify({
           proposal: {
-            id: "proposal-public-fixture",
+            id: sourceRecheck ? "proposal-source-recheck" : "proposal-public-fixture",
             chartId: chart.id,
             chartName: chart.name,
             operation: "replace_chart_draft",
@@ -108,6 +159,25 @@ async function startFakeApp(token) {
               text: "1 field change across 1 unit and 0 relationships.",
             },
           },
+        }),
+      );
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/backups") {
+      response.end(
+        JSON.stringify({
+          format: "orgchart-studio-library-backup",
+          schemaVersion: 4,
+          scope: "selected",
+          exportedAt: chart.updatedAt,
+          chartCount: 1,
+          sourceFileCount: 0,
+          versionCount: 0,
+          aiActivityCount: 0,
+          charts: [chart],
+          chartVersions: [],
+          aiActivities: [],
+          sourceFiles: [],
         }),
       );
       return;
@@ -215,7 +285,7 @@ async function startFakeApp(token) {
     response.end(JSON.stringify({ error: "not found" }));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { server, port: server.address().port, activityEvents };
+  return { server, port: server.address().port, activityEvents, authorizationRequests };
 }
 
 test("local STDIO MCP exposes bounded tools and reaches only the authorized running app", async () => {
@@ -258,10 +328,13 @@ test("local STDIO MCP exposes bounded tools and reaches only the authorized runn
       "list_chart_versions",
       "validate_normalized_import",
       "list_import_intakes",
+      "extract_import_intake",
+      "extract_chart_sources",
       "create_chart_draft",
       "import_normalized_chart",
       "stage_normalized_import",
       "replace_chart_draft",
+      "stage_source_recheck",
       "save_chart_version",
     ]);
     assert.equal(
@@ -271,6 +344,14 @@ test("local STDIO MCP exposes bounded tools and reaches only the authorized runn
     assert.equal(
       listed.tools.find((tool) => tool.name === "replace_chart_draft")?.annotations?.readOnlyHint,
       false,
+    );
+    assert.match(
+      listed.tools.find((tool) => tool.name === "validate_normalized_import")?.description ?? "",
+      /do not turn adjacent portfolio, coverage, specialty, or service labels into vacant child units/,
+    );
+    assert.match(
+      listed.tools.find((tool) => tool.name === "stage_normalized_import")?.description ?? "",
+      /nearby portfolio and coverage labels are not vacant seats/,
     );
     assert.equal(names.includes("delete_chart"), false);
     assert.equal(names.includes("restore_backup"), false);
@@ -298,6 +379,20 @@ test("local STDIO MCP exposes bounded tools and reaches only the authorized runn
 
     const intakes = await client.callTool({ name: "list_import_intakes", arguments: {} });
     assert.equal(intakes.structuredContent.intakes[0].id, "intake-public-fixture");
+
+    const extractedIntake = await client.callTool({
+      name: "extract_import_intake",
+      arguments: { intakeId: "intake-public-fixture" },
+    });
+    assert.match(extractedIntake.structuredContent.extractions[0].data.text, /fixture source/i);
+    assert.equal(fake.authorizationRequests.at(-1).sourceAccess, true);
+
+    const extractedChartSources = await client.callTool({
+      name: "extract_chart_sources",
+      arguments: { chartId: "chart-public-fixture" },
+    });
+    assert.deepEqual(extractedChartSources.structuredContent.sourceChecksums, ["f".repeat(64)]);
+    assert.equal(fake.authorizationRequests.at(-1).chartId, "chart-public-fixture");
 
     const stagedImport = await client.callTool({
       name: "stage_normalized_import",
@@ -342,6 +437,24 @@ test("local STDIO MCP exposes bounded tools and reaches only the authorized runn
     assert.match(staged.content[0].text, /saved chart has not changed/i);
     assert.equal(fake.activityEvents.at(-1).completionKind, "review_ready");
     assert.equal(fake.activityEvents.at(-1).proposalId, "proposal-public-fixture");
+
+    const sourceRecheck = structuredClone(chartFixture());
+    sourceRecheck.nodes[0].data.unit.assignmentLabel = "Synthetic reviewed assignment";
+    sourceRecheck.nodes[0].data.unit.sourceLocator = "PDF page 1";
+    sourceRecheck.nodes[0].data.unit.sourceCertainty = "needs_review";
+    sourceRecheck.nodes[0].data.unit.reviewNote = "Confirm the extracted assignment.";
+    const stagedRecheck = await client.callTool({
+      name: "stage_source_recheck",
+      arguments: {
+        chart: sourceRecheck,
+        reviewedSourceChecksums: ["f".repeat(64)],
+        changeSummary: "Recheck the synthetic fixture against its retained source.",
+      },
+    });
+    assert.equal(stagedRecheck.isError, undefined);
+    assert.equal(stagedRecheck.structuredContent.proposal.id, "proposal-source-recheck");
+    assert.equal(fs.existsSync(stagedRecheck.structuredContent.backup.path), true);
+    assert.equal(fake.authorizationRequests.at(-1).sourceAccess, true);
   } finally {
     await client.close();
     await new Promise((resolve) => fake.server.close(resolve));

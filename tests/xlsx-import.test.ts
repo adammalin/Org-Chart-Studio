@@ -68,3 +68,69 @@ test("Excel import blocks a worksheet without a recognizable name column", () =>
     ),
   );
 });
+
+test("Excel import preserves unit and relationship provenance columns", () => {
+  const preview = parseXlsxImport(
+    workbookWithRows([
+      [
+        "Unit Name",
+        "Type",
+        "Reports To",
+        "Position",
+        "Leader",
+        "Status",
+        "Source",
+        "Source Locator",
+        "Source Certainty",
+        "Review Note",
+        "Planning State",
+        "Relationship Type",
+        "Relationship Source Locator",
+        "Relationship Source Certainty",
+        "Relationship Review Note",
+      ],
+      [
+        "Example Division",
+        "division",
+        "",
+        "Director",
+        "Alex Example",
+        "filled",
+        "Reviewed deck",
+        "Slide 1 shape 2",
+        "confirmed",
+        "",
+        "current",
+        "",
+        "",
+        "",
+        "",
+      ],
+      [
+        "Example Group",
+        "group",
+        "Example Division",
+        "Group Leader",
+        "Jordan Example",
+        "filled",
+        "Reviewed deck",
+        "Slide 1 shape 5",
+        "inferred",
+        "Verify title",
+        "planned",
+        "primary supervisory",
+        "Slide 1 connector 7",
+        "needs_review",
+        "Verify connector",
+      ],
+    ]),
+  );
+
+  assert.equal(preview.nodes[1].data.unit.sourceLocator, "Slide 1 shape 5");
+  assert.equal(preview.nodes[1].data.unit.sourceCertainty, "inferred");
+  assert.equal(preview.nodes[1].data.unit.reviewNote, "Verify title");
+  assert.equal(preview.nodes[1].data.unit.planningState, "planned");
+  assert.equal(preview.edges[0].data?.sourceLocator, "Slide 1 connector 7");
+  assert.equal(preview.edges[0].data?.sourceCertainty, "needs_review");
+  assert.equal(preview.edges[0].data?.reviewNote, "Verify connector");
+});

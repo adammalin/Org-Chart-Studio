@@ -1,0 +1,162 @@
+name: Build unsigned native app experiments
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installers-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-preflight:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Validate manual package candidate
+        run: node scripts/validate-release-metadata.mjs
+
+  macos-arm64:
+    name: macOS Apple Silicon installer
+    needs: release-preflight
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.23.1
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Prepare macOS installer helpers
+        run: npm rebuild macos-alias fs-xattr
+
+      - name: Run deterministic test suite
+        run: npm test
+
+      - name: Build DMG and ZIP
+        run: npm run package:mac
+
+      - name: Test packaged desktop runtime
+        timeout-minutes: 5
+        run: |
+          ORGCHART_ELECTRON_SMOKE=1 \
+            "out/ORNL OrgChart Studio-darwin-arm64/ORNL OrgChart Studio.app/Contents/MacOS/ORNL OrgChart Studio"
+
+      - name: Verify packaged Mac contents
+        run: node scripts/verify-packaged-app.mjs "out/ORNL OrgChart Studio-darwin-arm64/ORNL OrgChart Studio.app/Contents/Resources/app"
+
+      - name: Verify Mac artifacts
+        run: |
+          codesign --verify --deep --strict \
+            "out/ORNL OrgChart Studio-darwin-arm64/ORNL OrgChart Studio.app"
+          cd releases
+          shasum -a 256 -c OrgChart-Studio-Mac-arm64-v*.zip.sha256
+          shasum -a 256 -c OrgChart-Studio-Mac-arm64-v*.dmg.sha256
+
+      - name: Archive Mac artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: orgchart-studio-macos-arm64
+          path: |
+            releases/OrgChart-Studio-Mac-arm64-v*.zip
+            releases/OrgChart-Studio-Mac-arm64-v*.zip.sha256
+            releases/OrgChart-Studio-Mac-arm64-v*.dmg
+            releases/OrgChart-Studio-Mac-arm64-v*.dmg.sha256
+          compression-level: 0
+
+  windows-x64:
+    name: Windows x64 installer
+    needs: release-preflight
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.23.1
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Prepare Windows installer helper
+        run: npm rebuild electron-winstaller
+
+      - name: Run deterministic test suite
+        run: npm test
+
+      - name: Build Setup executable
+        run: npm run package:windows
+
+      - name: Test packaged desktop runtime
+        timeout-minutes: 5
+        shell: powershell
+        run: |
+          $env:ORGCHART_ELECTRON_SMOKE = "1"
+          $app = Get-ChildItem `
+            -Path "out/ORNL OrgChart Studio-win32-x64" `
+            -Filter "ORNL OrgChart Studio.exe" |
+            Select-Object -First 1
+          if (-not $app) { throw "Packaged OrgChart Studio executable was not found." }
+          $stdoutLog = Join-Path $env:RUNNER_TEMP "orgchart-smoke-stdout.log"
+          $stderrLog = Join-Path $env:RUNNER_TEMP "orgchart-smoke-stderr.log"
+          $process = Start-Process `
+            -FilePath $app.FullName `
+            -RedirectStandardOutput $stdoutLog `
+            -RedirectStandardError $stderrLog `
+            -PassThru
+          if (-not $process.WaitForExit(120000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            if (Test-Path $stdoutLog) { Get-Content $stdoutLog }
+            if (Test-Path $stderrLog) { Get-Content $stderrLog }
+            throw "Packaged desktop smoke test timed out."
+          }
+          $stdoutContent = if (Test-Path $stdoutLog) { Get-Content $stdoutLog -Raw } else { "" }
+          if ($stdoutContent) { Write-Host $stdoutContent }
+          if (Test-Path $stderrLog) { Get-Content $stderrLog }
+          if (-not $stdoutContent.Contains('ORGCHART_ELECTRON_SMOKE {"passed":true')) {
+            throw "Packaged desktop smoke result was incomplete."
+          }
+          $process.Refresh()
+          if (-not $process.HasExited) { throw "Electron remained active after its smoke test." }
+          if ($null -ne $process.ExitCode -and [int]$process.ExitCode -ne 0) {
+            throw "Electron returned Windows exit code $($process.ExitCode)."
+          }
+
+      - name: Verify packaged Windows contents
+        run: node scripts/verify-packaged-app.mjs "out/ORNL OrgChart Studio-win32-x64/resources/app"
+
+      - name: Verify Windows artifact
+        shell: powershell
+        run: |
+          $installer = Get-ChildItem releases/OrgChart-Studio-Windows-x64-Setup-v*.exe
+          $expected = (Get-Content "$($installer.FullName).sha256").Split()[0]
+          $actual = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash
+          if ($actual.ToLowerInvariant() -ne $expected.ToLowerInvariant()) {
+            throw "Windows installer checksum mismatch."
+          }
+
+      - name: Archive Windows artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: orgchart-studio-windows-x64
+          path: |
+            releases/OrgChart-Studio-Windows-x64-Setup-v*.exe
+            releases/OrgChart-Studio-Windows-x64-Setup-v*.exe.sha256
+          compression-level: 0

@@ -44,7 +44,9 @@ use_portable_node() {
   checksums_url="https://nodejs.org/dist/v${PINNED_NODE_VERSION}/SHASUMS256.txt"
   runtime_directory="${PORTABLE_RUNTIME_ROOT}/node-v${PINNED_NODE_VERSION}-darwin-${node_architecture}"
 
-  if [[ ! -x "${runtime_directory}/bin/node" ]]; then
+  if [[ ! -x "${runtime_directory}/bin/node" ||
+        ! -x "${runtime_directory}/bin/npm" ]] ||
+     [[ "$("${runtime_directory}/bin/node" -p 'const [major, minor] = process.versions.node.split(".").map(Number); major === 22 && minor >= 13 ? "1" : "0"' 2>/dev/null || print 0)" != "1" ]]; then
     mkdir -p "${PORTABLE_RUNTIME_ROOT}"
     temporary_directory="$(mktemp -d "${PORTABLE_RUNTIME_ROOT}/download.XXXXXX")"
     archive_path="${temporary_directory}/${archive_name}"
@@ -89,12 +91,16 @@ use_portable_node() {
     trap - EXIT INT TERM
   fi
 
+  if [[ -e "${PORTABLE_NODE_LINK}" && ! -L "${PORTABLE_NODE_LINK}" ]]; then
+    mv "${PORTABLE_NODE_LINK}" "${PORTABLE_NODE_LINK}.invalid.$(date +%Y%m%d-%H%M%S)"
+  fi
   ln -sfn "${runtime_directory:t}" "${PORTABLE_NODE_LINK}"
   export PATH="${PORTABLE_NODE_LINK}/bin:${PATH}"
 }
 
 SYSTEM_NODE_USABLE=0
-if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+if [[ "${ORGCHART_FORCE_PORTABLE_NODE:-0}" != "1" ]] &&
+   command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
   if [[ "$(node -p 'const [major, minor] = process.versions.node.split(".").map(Number); major === 22 && minor >= 13 ? "1" : "0"')" == "1" ]]; then
     SYSTEM_NODE_USABLE=1
   fi
@@ -142,9 +148,14 @@ MCP_CONFIG_ROOT="${CODEX_HOME:-${HOME}/.codex}"
 MCP_CONFIG_PATH="${MCP_CONFIG_ROOT}/config.toml"
 MCP_MANAGED_MARKER="# BEGIN ORGCHART STUDIO MCP - managed by installer"
 MCP_SETUP_CHOICE="${ORGCHART_SETUP_MCP:-ask}"
-
+MCP_ALREADY_MANAGED=0
 if [[ -f "${MCP_CONFIG_PATH}" ]] &&
    grep -Fq "${MCP_MANAGED_MARKER}" "${MCP_CONFIG_PATH}"; then
+  MCP_ALREADY_MANAGED=1
+fi
+
+if [[ "${MCP_SETUP_CHOICE}" == "ask" &&
+     "${MCP_ALREADY_MANAGED}" == "1" ]]; then
   MCP_SETUP_CHOICE="install"
 elif [[ "${MCP_SETUP_CHOICE}" == "ask" ]]; then
   if [[ -r /dev/tty && -w /dev/tty ]]; then
@@ -182,8 +193,12 @@ if [[ "${MCP_SETUP_CHOICE}" == "1" ||
   print "Restart ChatGPT Desktop or Codex once so it discovers OrgChart Studio MCP."
   print "After restarting, open OrgChart Studio before asking the AI to use its tools."
 else
-  print "Optional local MCP integration was not installed."
-  print "Install it later with: npm run mcp:configure"
+  if (( MCP_ALREADY_MANAGED )); then
+    print "Existing local MCP integration was left unchanged."
+  else
+    print "Optional local MCP integration was not installed."
+    print "Install it later with: npm run mcp:configure"
+  fi
 fi
 
 print ""
@@ -192,6 +207,7 @@ print "The app stores its working data under your macOS Application Support fold
 print "Use Backup & restore to choose a different local data folder and a separate backup folder. Cloud-sync folders require encryption."
 print "Source updates do not replace working data. Live chart data is blocked from normal Git commits and pushes."
 print "For later launches, run: /bin/zsh \"${PROJECT_ROOT}/scripts/start-mac-source-test.zsh\""
+print "Or double-click Start-OrgChart-Studio.command in the installed application folder."
 print ""
 
 if [[ "${ORGCHART_SETUP_STAGE_ONLY:-0}" == "1" ]]; then

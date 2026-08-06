@@ -428,12 +428,12 @@ export async function POST(request: Request) {
       );
     }
     const unsupportedEvidence = evidenceFiles.find(
-      (evidence) => !/\.(pptx|docx|pdf|png|jpe?g)$/i.test(evidence.name),
+      (evidence) => !/\.(pptx|docx|pdf|png|jpe?g|csv|xlsx)$/i.test(evidence.name),
     );
     if (unsupportedEvidence) {
       return Response.json(
         {
-          error: `Source evidence must be a PowerPoint, Word, PDF, PNG, or JPEG file (${unsupportedEvidence.name}).`,
+          error: `Source evidence must be a PowerPoint, Word, PDF, image, CSV, or Excel file (${unsupportedEvidence.name}).`,
         },
         { status: 415 },
       );
