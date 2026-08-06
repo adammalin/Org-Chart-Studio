@@ -1131,7 +1131,14 @@ function createMainWindow(url) {
           const state = await fetch('/api/mcp-control', { cache: 'no-store' }).then((response) => response.json());
           return state.control.sourceAccessEnabled ? state.control : null;
         }, 'retained-source extraction to enable');
-        sourceAccessCheckbox.click();
+        const enabledSourceAccessCheckbox = await waitFor(() => {
+          const currentLabel = [...document.querySelectorAll('.ai-control-panel label')].find(
+            (label) => label.textContent.includes('Allow retained-source extraction for this session')
+          );
+          const currentCheckbox = currentLabel?.querySelector('input[type="checkbox"]');
+          return currentCheckbox?.checked && !currentCheckbox.disabled ? currentCheckbox : null;
+        }, 'retained-source extraction control to reflect enabled state');
+        enabledSourceAccessCheckbox.click();
         const sourceDisabledControl = await waitFor(async () => {
           const state = await fetch('/api/mcp-control', { cache: 'no-store' }).then((response) => response.json());
           return state.control.sourceAccessEnabled ? null : state.control;

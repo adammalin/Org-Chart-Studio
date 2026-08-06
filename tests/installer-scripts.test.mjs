@@ -48,7 +48,13 @@ test("macOS bootstrap preserves local output and moves the bundled guide into do
   );
 });
 
-test("macOS source-test shell entry points pass zsh syntax checking", () => {
+test("macOS source-test shell entry points pass zsh syntax checking", (context) => {
+  const zshVersion = spawnSync("zsh", ["--version"], { encoding: "utf8" });
+  if (zshVersion.error?.code === "ENOENT") {
+    context.skip("zsh is unavailable on this host; the macOS CI job exercises these scripts.");
+    return;
+  }
+
   const scripts = [
     "../Start-OrgChart-Studio.command",
     "bootstrap-mac-source-test.zsh",
@@ -149,6 +155,9 @@ test("Windows command-line installer matches the macOS safety and setup flow", (
   assert.match(commandLauncher, /start-windows-source-test\.ps1/i);
   assert.match(commandLauncher, /Repeat the command-line installation to repair it/i);
   assert.match(commandLauncher, /ORGCHART_EXIT_CODE/);
+  assert.equal(packageJson.scripts.build, "node scripts/run-vinext.mjs build");
+  assert.equal(packageJson.scripts.dev, "node scripts/run-vinext.mjs dev");
+  assert.equal(packageJson.scripts.start, "node scripts/run-vinext.mjs start");
   assert.equal(packageJson.scripts["desktop:smoke"], "node scripts/start-electron.mjs --smoke");
 });
 
