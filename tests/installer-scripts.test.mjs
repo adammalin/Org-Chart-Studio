@@ -26,6 +26,7 @@ test("macOS bootstrap uses public-only downloads and records provenance", () => 
   );
   assert.match(source, /INSTALL-REVISION\.txt/);
   assert.match(source, /Archive SHA-256:/);
+  assert.match(source, /--user-agent "ORNL-OrgChart-Studio-Installer"/);
   assert.match(source, /adammalin\/Org-Chart-Studio/);
   assert.doesNotMatch(source, /\bgh\b/);
 });
@@ -122,6 +123,7 @@ test("Windows command-line installer matches the macOS safety and setup flow", (
   assert.match(bootstrapSource, /INSTALL-REVISION\.txt/);
   assert.match(bootstrapSource, /Platform: Windows/);
   assert.match(bootstrapSource, /robocopy\.exe/);
+  assert.match(bootstrapSource, /\$global:LASTEXITCODE = 0/);
   assert.match(bootstrapSource, /"\.runtime"/);
   assert.match(bootstrapSource, /"node_modules"/);
   assert.doesNotMatch(bootstrapSource, /git clone|\bgh\b/i);

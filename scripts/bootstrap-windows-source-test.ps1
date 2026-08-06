@@ -147,6 +147,9 @@ try {
     if ($LASTEXITCODE -gt 7) {
       throw "The existing application folder could not be updated. robocopy exit code: $LASTEXITCODE"
     }
+    # Robocopy uses nonzero exit codes for successful copy/update outcomes.
+    # Clear that native-process status so PowerShell itself exits successfully.
+    $global:LASTEXITCODE = 0
   } else {
     Move-Item -LiteralPath $ExpandedDirectory -Destination $TargetDirectory
   }

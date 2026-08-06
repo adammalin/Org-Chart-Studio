@@ -79,6 +79,9 @@ mkdir -p "${EXTRACT_DIRECTORY}"
 download_public_revision() {
   local candidate_revision public_archive_url
   if ! curl --fail --location --show-error --retry 3 \
+      --header "Accept: application/vnd.github+json" \
+      --header "X-GitHub-Api-Version: 2022-11-28" \
+      --user-agent "ORNL-OrgChart-Studio-Installer" \
       --output "${COMMIT_METADATA_PATH}" \
       "https://api.github.com/repos/${SOURCE_REPOSITORY}/commits/${SOURCE_REF}"; then
     return 1
@@ -94,6 +97,7 @@ download_public_revision() {
   RESOLVED_SOURCE_REVISION="${candidate_revision}"
   public_archive_url="https://github.com/${SOURCE_REPOSITORY}/archive/${RESOLVED_SOURCE_REVISION}.zip"
   curl --fail --location --show-error --retry 3 \
+    --user-agent "ORNL-OrgChart-Studio-Installer" \
     --output "${ARCHIVE_PATH}" \
     "${public_archive_url}"
 }
