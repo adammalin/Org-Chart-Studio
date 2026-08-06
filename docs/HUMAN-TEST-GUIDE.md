@@ -22,11 +22,11 @@ Before recording results, open `INSTALL-REVISION.txt` in the installed applicati
 2. Under **Desktop file locations**, confirm the live chart library shows a path outside the Git checkout and is labeled **Local only**.
 3. Choose a new empty local folder that is not in OneDrive, Dropbox, iCloud, or the source repository. Confirm the app schedules the change instead of switching while its database service is running.
 4. Restart from the storage panel. Confirm the app reopens, the live path changes, and existing test charts still load. Confirm the old folder remains available as a recovery copy.
-5. Choose a different backup folder. A OneDrive or Dropbox folder is allowed only for encrypted backups.
-6. Create an encrypted backup and confirm a timestamped `.orgchart-backup` file appears in that folder. Confirm no SQLite, D1, R2, JSON, CSV, or original source-evidence file is written beside it.
+5. Choose a different backup folder. Confirm a local, OneDrive, or Dropbox location is accepted as a backup destination while it remains blocked as the live-data folder.
+6. Choose encrypted or unencrypted protection, select **Run backup now**, and confirm a timestamped `.orgchart-backup` file appears in that folder. Confirm no SQLite, D1, R2, loose JSON, CSV, or original source-evidence file is written beside it.
 7. Run `npm run security:scan` from the source checkout and confirm the tracked-data scan passes.
 
-Pass when live data remains local and outside the repository, the two configured paths do not overlap, migration preserves all charts after checksum verification, and the backup location receives only the encrypted package.
+Pass when live data remains local and outside the repository, the two configured paths do not overlap, migration preserves all charts after checksum verification, and the backup location receives only the selected single-file package.
 
 ## Before testing
 
@@ -136,11 +136,11 @@ Pass when all outputs derive from the same data and geometry, public-safe output
 6. Confirm restored charts, source records, and saved versions appear as new drafts with new identifiers.
 7. Confirm existing charts were not overwritten or deleted.
 8. Try a wrong passphrase and confirm restore fails without creating partial charts.
-9. Choose **Unencrypted**, acknowledge the readable-file warning, create a backup in a local folder, and restore it without entering a passphrase.
-10. Configure a OneDrive or Dropbox backup folder, choose **Unencrypted**, and confirm creation is blocked until encryption is turned on or a local folder is selected.
+9. Choose **Unencrypted**, acknowledge the readable-file warning, select **Run backup now**, and restore the result without entering a passphrase.
+10. Configure a OneDrive or Dropbox backup folder, choose **Unencrypted**, select **Run backup now**, and confirm the readable package is saved there. Repeat with **Encrypted** and confirm both formats use the configured destination.
 11. In **Backup health**, set a reminder interval, confirm the latest backup records its time, included-chart count, and encryption status, then perform a successful restore and confirm **Last verified restore** updates. Reopen the app and confirm these device-local indicators remain without asking for or displaying a passphrase.
 
-Pass when both formats can be recovered without destructive replacement and unencrypted packages cannot be written directly to a recognized cloud-sync folder.
+Pass when both formats can be written to the configured local or cloud-synced backup folder and recovered without destructive replacement.
 
 ## Test 7: optional local MCP companion
 

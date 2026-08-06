@@ -289,7 +289,7 @@ function registerStorageHandlers() {
   });
   ipcMain.handle("storage:choose-backup-directory", async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
-      title: "Choose a folder for encrypted OrgChart Studio backups",
+      title: "Choose a folder for OrgChart Studio backups",
       buttonLabel: "Use as backup folder",
       properties: ["openDirectory", "createDirectory"],
     });
@@ -1004,6 +1004,45 @@ function createMainWindow(url) {
           if (!response.ok) throw new Error('The smoke-test chart could not be archived for cleanup.');
           return response.json().then((result) => result.chart);
         };
+        const backupNavigation = [...document.querySelectorAll('.sidebar button')].find(
+          (button) => button.textContent.includes('Backup & restore')
+        );
+        backupNavigation.click();
+        await waitFor(
+          () => document.body.textContent.includes('Portable database backup'),
+          'the backup workspace'
+        );
+        const unencryptedProtectionLabel = [...document.querySelectorAll('.backup-protection label')].find(
+          (label) => label.textContent.includes('Unencrypted')
+        );
+        const unencryptedProtectionInput = unencryptedProtectionLabel?.querySelector('input[type="radio"]');
+        unencryptedProtectionInput.click();
+        const readableBackupConfirmation = await waitFor(
+          () => [...document.querySelectorAll('.backup-unencrypted-warning label')].find(
+            (label) => label.textContent.includes('will not be protected by a passphrase')
+          )?.querySelector('input[type="checkbox"]'),
+          'the readable backup confirmation'
+        );
+        readableBackupConfirmation.click();
+        const backupRunButton = await waitFor(
+          () => [...document.querySelectorAll('.backup-action button')].find(
+            (button) => button.textContent.trim() === 'Run backup now' &&
+              !button.disabled
+          ),
+          'the configured-folder Run backup now action'
+        );
+        backupRunButton.scrollIntoView({ block: 'center' });
+        await waitFor(
+          () => buttonReceivesPointer(backupRunButton),
+          'the configured-folder Run backup now action to receive pointer input'
+        );
+        const backupRunActionReady =
+          backupRunButton instanceof HTMLButtonElement &&
+          !backupRunButton.disabled &&
+          buttonReceivesPointer(backupRunButton);
+        const optionalBackupProtectionVisible =
+          document.body.textContent.includes('Encrypted or explicitly confirmed unencrypted') &&
+          !document.body.textContent.includes('Choose a local folder or turn encryption on');
         await archiveChartForDeletion(imported.chart.id);
         const importedDeleted = await fetch('/api/charts', {
           method: 'POST',
@@ -1239,7 +1278,9 @@ function createMainWindow(url) {
             encryptedBackupSave.bytes > 0,
           unencryptedBackupFolderRoundTrip:
             unencryptedBackupSave.fileName === 'orgchart-studio-backup-unencrypted-electron-smoke.orgchart-backup' &&
-            unencryptedBackupSave.bytes > 0
+            unencryptedBackupSave.bytes > 0,
+          backupRunActionReady,
+          optionalBackupProtectionVisible
         };
       })().catch((error) => ({
         __smokeError: String(error?.message ?? error),

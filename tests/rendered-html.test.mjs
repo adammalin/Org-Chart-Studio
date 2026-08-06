@@ -64,6 +64,8 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.match(bundle, /Encrypted \(recommended\)/);
   assert.match(bundle, /Unencrypted/);
   assert.match(bundle, /will not be protected by a passphrase/i);
+  assert.match(bundle, /Run backup now/);
+  assert.match(bundle, /Choose a backup folder first/);
   assert.match(bundle, /one recovery file/i);
   assert.match(bundle, /Restore without overwriting/);
   assert.match(bundle, /Download PPTX/);

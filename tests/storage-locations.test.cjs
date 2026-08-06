@@ -116,7 +116,7 @@ test("live data folder rejects repositories, cloud folders, and non-empty target
   }
 });
 
-test("encrypted backups may be written to a separate cloud-sync folder", () => {
+test("encrypted and unencrypted backups may be written to a separate cloud-sync folder", () => {
   const item = fixture();
   try {
     const backupDirectory = path.join(item.root, "Dropbox", "OrgChart Backups");
@@ -159,16 +159,17 @@ test("encrypted backups may be written to a separate cloud-sync folder", () => {
       chartVersions: [],
       sourceFiles: [],
     });
-    assert.throws(
-      () =>
-        saveBackup({
-          userDataPath: item.userDataPath,
-          fileName: "orgchart-studio-backup-unencrypted-cloud.orgchart-backup",
-          backupJson: unencryptedJson,
-          encrypted: false,
-        }),
-      /cannot be saved.*cloud-sync/i,
+    const unencryptedSaved = saveBackup({
+      userDataPath: item.userDataPath,
+      fileName: "orgchart-studio-backup-unencrypted-cloud.orgchart-backup",
+      backupJson: unencryptedJson,
+      encrypted: false,
+    });
+    const unencryptedPersisted = JSON.parse(
+      fs.readFileSync(unencryptedSaved.path, "utf8"),
     );
+    assert.equal(unencryptedPersisted.format, "orgchart-studio-library-backup");
+    assert.equal(unencryptedPersisted.chartCount, 1);
 
     const snapshot = storageSettingsSnapshot({
       userDataPath: item.userDataPath,

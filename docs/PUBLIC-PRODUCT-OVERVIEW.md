@@ -18,13 +18,13 @@ The repository intentionally contains no operational organizational charts, pers
 - Route connectors in separate lanes or optional same-parent sibling combs, then pin and manually move individual orthogonal lanes when a chart needs visual judgment. A per-connector reset returns the relationship to automatic routing, and diagonal segments are never created.
 - Export SVG, PNG, vector PDF, editable PowerPoint, and accessible CSV from one shared scene model.
 - Use a dedicated Backup & restore workspace to create one encrypted-by-default or explicitly unencrypted package for the full library or selected charts, then restore merge-only copies.
-- Choose separate desktop folders for local working data and encrypted recovery packages.
+- Choose separate desktop folders for local working data and recovery packages, with encryption available per backup.
 
 ## Data boundary
 
 The desktop application runs a private loopback service and blocks renderer requests to non-loopback network destinations. Working chart data is stored outside the downloaded application folder under the current user's macOS Application Support or Windows AppData folder by default.
 
-The application rejects a live-data folder located inside the source repository or a recognized cloud-sync root. A separate OneDrive or Dropbox folder may be used for an encrypted backup package. Unencrypted backup packages require an explicit warning acknowledgement and a local backup folder. The backup passphrase is not stored by the application.
+The application rejects a live-data folder located inside the source repository or a recognized cloud-sync root. A separate local, OneDrive, Dropbox, iCloud, or other cloud-synced folder may be used for backup packages. Encryption is optional per backup; an unencrypted package requires an explicit readable-file acknowledgement. The backup passphrase is not stored by the application.
 
 Repository hooks and automated scans reject common database files, chart-shaped structured data, backup packages, source-evidence documents, known personnel examples, credentials, and user-specific filesystem paths. These safeguards reduce accidental disclosure but do not replace approved data handling, code review, or access controls.
 

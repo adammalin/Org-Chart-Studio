@@ -238,6 +238,8 @@ test("desktop guide covers both command-line installs, updates, storage, and opt
   assert.match(generatorSource, /Install the local MCP integration\? \[y\/N\]/);
   assert.match(generatorSource, /Install local AI integration/);
   assert.match(generatorSource, /OneDrive or Dropbox/);
+  assert.match(generatorSource, /Encryption is optional/);
+  assert.match(generatorSource, /Run backup now/);
   assert.match(generatorSource, /Retained-source extraction starts off/);
 });
 

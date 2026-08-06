@@ -70,7 +70,7 @@ def footer(pdf, page_number):
     pdf.rect(0, 0, PAGE_W, 52, stroke=0, fill=1)
     pdf.setFillColor(WHITE)
     pdf.setFont("Helvetica", 7.2)
-    pdf.drawString(40, 30, "ORNL OrgChart Studio | Command-line desktop quick start | August 5, 2026")
+    pdf.drawString(40, 30, "ORNL OrgChart Studio | Command-line desktop quick start | August 6, 2026")
     pdf.drawRightString(572, 30, f"PAGE {page_number} OF 3")
 
 
@@ -212,14 +212,14 @@ def build_pdf(output):
         leading=12.2,
     )
     step_card(pdf, "1", "LIVE LIBRARY", "Defaults to Application Support on Mac or AppData on Windows, outside the downloaded application folder.", 40, 212, 166, 104)
-    step_card(pdf, "2", "BACKUP FOLDER", "Choose a different folder in Backup & restore. OneDrive or Dropbox is allowed for encrypted packages.", 223, 212, 166, 104, SOFT_NAVY, NAVY)
-    step_card(pdf, "3", "RECOVERY FILE", "Back up all charts or selected charts to one .orgchart-backup file before an update or migration.", 406, 212, 166, 104, PALE, DARK)
+    step_card(pdf, "2", "BACKUP FOLDER", "Choose a separate local folder, OneDrive or Dropbox. Encryption is optional for each backup.", 223, 212, 166, 104, SOFT_NAVY, NAVY)
+    step_card(pdf, "3", "RUN BACKUP", "Choose all or selected charts, choose protection, then use Run backup now before an update or migration.", 406, 212, 166, 104, PALE, DARK)
     pdf.setFillColor(NAVY)
     pdf.rect(40, 76, 532, 110, stroke=0, fill=1)
     label(pdf, "Privacy boundary", 56, 160, ENERGY)
     wrapped(
         pdf,
-        "GitHub receives no charts, source documents, databases, or backup packages. The desktop window can contact only its private loopback server. Keep live data out of Git and cloud-sync folders; use optional encryption before placing backup packages in OneDrive or Dropbox.",
+        "GitHub receives no charts, source documents, databases, or backup packages. The desktop window can contact only its private loopback server. Keep live data out of Git and cloud-sync folders. A cloud backup may be encrypted or readable; choose protection appropriate for the data and access controls.",
         56,
         139,
         500,

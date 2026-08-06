@@ -161,3 +161,10 @@ test("accessible hierarchy table supports data auditing and practical filters", 
   assert.match(workspaceStyles, /\.table-filters \{/);
   assert.match(workspaceStyles, /\.table-audit-notice \{/);
 });
+
+test("desktop backups allow optional encryption and expose a configured-folder run action", () => {
+  assert.match(workspaceSource, /desktopBackupDestinationMissing/);
+  assert.match(workspaceSource, /Run backup now/);
+  assert.match(workspaceSource, /Encrypted or explicitly confirmed unencrypted/);
+  assert.doesNotMatch(workspaceSource, /unencryptedCloudBackupBlocked/);
+});

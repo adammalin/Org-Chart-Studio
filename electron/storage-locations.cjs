@@ -152,7 +152,7 @@ function scheduleDataDirectoryMigration({
   assertOutsideProject(selected, projectRoot);
   if (isCloudSyncedPath(selected)) {
     throw new Error(
-      "The live data folder cannot be inside OneDrive, Dropbox, iCloud, or another cloud-sync folder. Choose a local folder and use the separate backup folder for encrypted cloud copies.",
+      "The live data folder cannot be inside OneDrive, Dropbox, iCloud, or another cloud-sync folder. Choose a local folder and use the separate backup folder for cloud recovery copies.",
     );
   }
 
@@ -350,11 +350,6 @@ function saveBackup({ userDataPath, fileName, backupJson, encrypted }) {
     throw new Error("Choose a backup folder before saving directly from the desktop app.");
   }
   const directory = assertDirectoryExists(config.backupDirectory, "The backup folder");
-  if (!encrypted && isCloudSyncedPath(directory)) {
-    throw new Error(
-      "Unencrypted backups cannot be saved to OneDrive, Dropbox, iCloud, or another cloud-sync folder. Choose a local backup folder or turn encryption on.",
-    );
-  }
   const safeName = sanitizeBackupFileName(fileName);
   if (encrypted) validateEncryptedBackup(backupJson);
   else validateUnencryptedBackup(backupJson);

@@ -361,7 +361,7 @@ function run() {
     console.error(`- ${finding.filePath}: ${finding.reason}`);
   }
   console.error(
-    "\nMove live data outside the repository. Store recovery copies in the configured backup folder as encrypted .orgchart-backup files.\n",
+    "\nMove live data outside the repository. Store recovery copies in the configured backup folder as .orgchart-backup files, using optional encryption when appropriate.\n",
   );
   process.exitCode = 1;
 }

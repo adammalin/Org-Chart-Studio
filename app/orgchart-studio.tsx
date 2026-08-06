@@ -899,8 +899,8 @@ function StudioWorkspace() {
       )
     : null;
   const backupIsDue = backupAgeDays === null || backupAgeDays >= backupHealth.reminderDays;
-  const unencryptedCloudBackupBlocked =
-    backupProtection === "unencrypted" && Boolean(desktopStorage?.backupIsCloudSynced);
+  const desktopBackupDestinationMissing =
+    storageMode === "desktop" && !desktopStorage?.backupDirectory;
   const version = activeChart
     ? `${chartStatusLabels[activeChart.status]} v${activeChart.version}`
     : libraryLoading
@@ -3829,8 +3829,8 @@ function StudioWorkspace() {
       if (settings.backupDirectory) {
         setStorageMessage(
           settings.backupIsCloudSynced
-            ? "Backup folder set. Only passphrase-encrypted .orgchart-backup files are written to this cloud-sync location."
-            : "Backup folder set. Encrypted backups will be saved directly to this separate location.",
+            ? "Cloud-synced backup folder set. Encrypted or explicitly confirmed unencrypted .orgchart-backup files can be saved here."
+            : "Backup folder set. Encrypted or explicitly confirmed unencrypted backups will be saved directly to this separate location.",
         );
       }
     } catch (error) {
@@ -3901,6 +3901,10 @@ function StudioWorkspace() {
       setBackupMessage("Select at least one chart to include in this backup.");
       return;
     }
+    if (desktopBackupDestinationMissing) {
+      setBackupMessage("Choose a backup folder before running a desktop backup.");
+      return;
+    }
     if (backupProtection === "encrypted") {
       if (backupPassphrase.length < 12) {
         setBackupMessage("Use a passphrase containing at least 12 characters.");
@@ -3913,12 +3917,6 @@ function StudioWorkspace() {
     } else {
       if (!unencryptedBackupConfirmed) {
         setBackupMessage("Confirm that you understand the unencrypted backup will be readable.");
-        return;
-      }
-      if (unencryptedCloudBackupBlocked) {
-        setBackupMessage(
-          "Choose a local backup folder or turn encryption on. Unencrypted backups cannot be saved directly to a cloud-sync folder.",
-        );
         return;
       }
     }
@@ -3975,13 +3973,9 @@ function StudioWorkspace() {
             ? "Encrypted backup saved to the configured backup folder. Store its passphrase separately."
             : "Encrypted backup downloaded. Store its passphrase separately."
           : savedBackup
-            ? "Unencrypted backup saved to the configured local folder. Anyone with the file can read its contents."
+            ? "Unencrypted backup saved to the configured backup folder. Anyone with the file can read its contents."
             : "Unencrypted backup downloaded. Anyone with the file can read its contents.",
       );
-      saveBackupHealth({
-        ...backupHealth,
-        lastRestoreVerifiedAt: new Date().toISOString(),
-      });
     } catch (error) {
       setBackupMessage(error instanceof Error ? error.message : "The backup could not be created.");
     } finally {
@@ -7053,9 +7047,9 @@ function StudioWorkspace() {
                       <div className="storage-location__label">
                         <CloudArrowUp size={18} aria-hidden="true" />
                         <div>
-                          <span>Encrypted backups</span>
+                          <span>Backup destination</span>
                           <strong>
-                            {desktopStorage.backupIsCloudSynced ? "Cloud-sync allowed" : "Separate folder"}
+                            {desktopStorage.backupIsCloudSynced ? "Cloud-synced folder" : "Separate local folder"}
                           </strong>
                         </div>
                       </div>
@@ -7064,7 +7058,7 @@ function StudioWorkspace() {
                       </code>
                       <p>
                         {desktopStorage.backupIsCloudSynced
-                          ? "Encrypted backups may be saved here. Unencrypted backups require a local folder."
+                          ? "Encrypted or explicitly confirmed unencrypted .orgchart-backup packages may be saved here. Choose protection each time you run a backup."
                           : "Encrypted or explicitly confirmed unencrypted .orgchart-backup packages may be saved here."}
                       </p>
                       <button
@@ -7253,11 +7247,6 @@ function StudioWorkspace() {
                       <div>
                         <strong>No encryption will be applied</strong>
                         <p>Anyone with this file can read its chart data, source records, and retained source files.</p>
-                        {unencryptedCloudBackupBlocked ? (
-                          <p className="backup-unencrypted-warning__blocked">
-                            The configured backup folder is cloud-synced. Choose a local folder or turn encryption on.
-                          </p>
-                        ) : null}
                         <label>
                           <input
                             type="checkbox"
@@ -7275,9 +7264,9 @@ function StudioWorkspace() {
                     disabled={
                       backupBusy !== null ||
                       !charts.length ||
+                      desktopBackupDestinationMissing ||
                       (backupScope === "selected" && !selectedBackupCharts.length) ||
-                      (backupProtection === "unencrypted" &&
-                        (!unencryptedBackupConfirmed || unencryptedCloudBackupBlocked))
+                      (backupProtection === "unencrypted" && !unencryptedBackupConfirmed)
                     }
                     onClick={() => void createBackup()}
                   >
@@ -7288,18 +7277,23 @@ function StudioWorkspace() {
                     )}
                     {backupBusy === "export"
                       ? backupProtection === "encrypted"
-                        ? "Encrypting backup…"
-                        : "Creating backup…"
-                      : unencryptedCloudBackupBlocked
-                        ? "Choose a local backup folder"
-                      : desktopStorage?.backupDirectory
-                        ? backupProtection === "encrypted"
-                          ? "Encrypt and save to backup folder"
-                          : "Save unencrypted backup"
-                        : backupProtection === "encrypted"
-                          ? "Encrypt and download"
-                          : "Download unencrypted backup"}
+                        ? "Encrypting and running backup…"
+                        : "Running backup…"
+                      : desktopBackupDestinationMissing
+                        ? "Choose a backup folder first"
+                        : desktopStorage?.backupDirectory
+                          ? "Run backup now"
+                          : backupProtection === "encrypted"
+                            ? "Encrypt and download"
+                            : "Download unencrypted backup"}
                   </button>
+                  <p className="backup-run-note">
+                    {desktopStorage?.backupDirectory
+                      ? `Runs the selected contents as one ${backupProtection} timestamped file in the configured backup folder.`
+                      : storageMode === "desktop"
+                        ? "Choose a backup folder above before running the desktop backup."
+                        : "The browser downloads one timestamped backup file using the selected protection."}
+                  </p>
                 </div>
 
                 <div className="backup-action">

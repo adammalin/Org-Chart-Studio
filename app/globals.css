@@ -5382,6 +5382,13 @@ button:disabled {
   margin-top: 14px;
 }
 
+.backup-run-note {
+  margin: -6px 0 0;
+  color: color-mix(in srgb, var(--ornl-dark-matter) 68%, var(--ornl-polar));
+  font-size: 9px;
+  line-height: 1.45;
+}
+
 .backup-action {
   display: flex;
   flex-direction: column;

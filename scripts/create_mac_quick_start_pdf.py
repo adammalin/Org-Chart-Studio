@@ -103,7 +103,7 @@ def draw_header_flow(pdf: canvas.Canvas) -> None:
         pdf.setFont("Helvetica-Bold", 8.2)
         pdf.drawCentredString(x + node_width / 2, node_y + 22, label)
         pdf.setFont("Helvetica", 6.8)
-        sublabel = ["DATA", "VIEW", "ENCRYPTED"][index]
+        sublabel = ["DATA", "VIEW", "FILE"][index]
         pdf.drawCentredString(x + node_width / 2, node_y + 10, sublabel)
         if index < 2:
             line_start = x + node_width
@@ -199,7 +199,7 @@ def build_pdf(output: Path) -> None:
     pdf.setFillColor(ENERGY)
     pdf.rect(0, PAGE_H - 172, PAGE_W, 6, stroke=0, fill=1)
 
-    draw_label(pdf, "ORNL workflow | macOS quick start | updated August 5, 2026", 40, 756, WHITE)
+    draw_label(pdf, "ORNL workflow | macOS quick start | updated August 6, 2026", 40, 756, WHITE)
     pdf.setFillColor(WHITE)
     pdf.setFont("Helvetica-Bold", 28)
     pdf.drawString(40, 716, "Install once.")
@@ -268,8 +268,8 @@ def build_pdf(output: Path) -> None:
     draw_wrapped_text(
         pdf,
         "Create a blank chart, or use Sources & imports to validate a reviewed CSV, Excel, or JSON file. "
-        "Then open Backup & restore. Keep the live library in a local folder and select a different backup "
-        "folder. OneDrive or Dropbox is appropriate only for the encrypted backup package.",
+        "Then open Backup & restore. Keep the live library in a local folder and select a different local, "
+        "OneDrive, or Dropbox backup folder. Choose encrypted or unencrypted, then use Run backup now.",
         40,
         232,
         532,
@@ -291,9 +291,9 @@ def build_pdf(output: Path) -> None:
             220,
             SOFT_NAVY,
             HALE_NAVY,
-            "ENCRYPTED BACKUP",
+            "BACKUP FILE",
             "Choose separately",
-            "A OneDrive or Dropbox folder may receive the encrypted .orgchart-backup file.",
+            "A local, OneDrive, or Dropbox folder may receive encrypted or readable .orgchart-backup files.",
         ),
         (
             400,
