@@ -45,7 +45,7 @@ Set-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) "setup-co
     );
     const bootstrap = new URL("scripts/bootstrap-windows-source-test.ps1", root);
     const { fileURLToPath } = await import("node:url");
-    for (const shell of ["cmd", "powershell"]) {
+    for (const shell of ["cmd", "powershell", "pwsh"]) {
       const target = path.join(directory, `${shell} installed app's & shortcuts`);
       const env = {
         ...process.env,
@@ -59,7 +59,7 @@ Set-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) "setup-co
       };
       const invoke = () => shell === "cmd"
         ? run("cmd.exe", ["/d", "/s", "/c", command], { env, windowsVerbatimArguments: true })
-        : run("powershell.exe", ["-NoProfile", "-Command", command], { env });
+        : run(shell === "pwsh" ? "pwsh.exe" : "powershell.exe", ["-NoProfile", "-Command", command], { env });
       const first = await invoke();
       assert.match(first.stdout, /OrgChart Studio is ready/);
       assert.equal((await readFile(path.join(target, "setup-complete.txt"), "utf8")).trim(), "verified");

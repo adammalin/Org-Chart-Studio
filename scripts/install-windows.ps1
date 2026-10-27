@@ -6,6 +6,7 @@ param(
 # Public one-paste entry point. Keep the transcript limited to setup, never app use.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$env:PSModulePath = $PSHOME + "\Modules;" + $env:PSModulePath
 $ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 

@@ -6,6 +6,9 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+# A parent PowerShell 7 session can leave its module paths in Windows PowerShell.
+# Prefer this process's own built-in modules without changing system settings.
+$env:PSModulePath = $PSHOME + "\Modules;" + $env:PSModulePath
 $ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
