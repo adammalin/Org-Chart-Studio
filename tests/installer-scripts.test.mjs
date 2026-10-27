@@ -233,7 +233,9 @@ test("desktop guide covers both command-line installs, updates, storage, and opt
   assert.equal(guide.getPageCount(), 3);
   assert.match(generatorSource, /No signed installer required/);
   assert.match(generatorSource, /Mac - paste all five lines into Terminal/);
-  assert.match(generatorSource, /Windows - paste all six lines into PowerShell/);
+  assert.match(generatorSource, /Windows - one command in Terminal, Command Prompt, or PowerShell/);
+  assert.match(generatorSource, /install-windows-command\.txt/);
+  assert.match(generatorSource, /ActualText/);
   assert.match(generatorSource, /Repeat the same installation commands from page 1/i);
   assert.match(generatorSource, /Install the local MCP integration\? \[y\/N\]/);
   assert.match(generatorSource, /Install local AI integration/);
@@ -241,6 +243,19 @@ test("desktop guide covers both command-line installs, updates, storage, and opt
   assert.match(generatorSource, /Encryption is optional/);
   assert.match(generatorSource, /Run backup now/);
   assert.match(generatorSource, /Retained-source extraction starts off/);
+});
+
+test("public Windows install instructions use one shell-independent command", () => {
+  const command = readFileSync(path.join(projectRoot, "scripts/install-windows-command.txt"), "utf8").trim();
+  const readme = readFileSync(path.join(projectRoot, "README.md"), "utf8");
+  assert.equal(command.split(/\r?\n/).length, 1);
+  assert.ok(command.startsWith("powershell.exe "));
+  assert.match(command, /-ExecutionPolicy Bypass -Command/);
+  assert.match(command, /install-windows\.ps1/);
+  assert.match(command, /-ErrorAction Stop/);
+  // A parent PowerShell session must not expand variables meant for the child.
+  assert.doesNotMatch(command, /\$|`|%TEMP%|%USERPROFILE%/);
+  assert.ok(readme.includes(command));
 });
 
 test("unsigned native packaging stays manual while retaining per-platform smoke checks", () => {

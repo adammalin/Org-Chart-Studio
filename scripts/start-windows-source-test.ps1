@@ -25,7 +25,7 @@ $NpmExecutable = if (Test-Path -LiteralPath $NpmCommandRecord -PathType Leaf) {
 if (-not $NodeExecutable -or -not $NpmExecutable -or
     -not (Test-Path -LiteralPath $NodeExecutable -PathType Leaf) -or
     -not (Test-Path -LiteralPath $NpmExecutable -PathType Leaf)) {
-  throw "OrgChart Studio needs its local setup refreshed. Run the two-command installer again."
+  throw "OrgChart Studio needs its local setup refreshed. Paste the one-line install command again."
 }
 
 & $NodeExecutable -e "const [major,minor]=process.versions.node.split('.').map(Number);process.exit(major===22&&minor>=13?0:1)"
@@ -35,7 +35,7 @@ if ($LASTEXITCODE -ne 0) {
 
 if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot "dist\server\wrangler.json") -PathType Leaf) -or
     -not (Test-Path -LiteralPath (Join-Path $ProjectRoot "node_modules\electron") -PathType Container)) {
-  throw "OrgChart Studio is not fully built. Run the two-command installer again to complete setup."
+  throw "OrgChart Studio is not fully built. Paste the one-line install command again to complete setup."
 }
 
 $env:Path = (Split-Path -Parent $NodeExecutable) + ";" + $env:Path

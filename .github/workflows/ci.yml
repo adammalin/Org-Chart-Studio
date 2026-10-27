@@ -164,6 +164,11 @@ jobs:
           if (-not $revision.Contains("Installed commit: $env:GITHUB_SHA")) { throw "The exact revision was not recorded." }
           if (-not $revision.Contains("Platform: Windows")) { throw "The Windows platform was not recorded." }
 
+      - name: Test one-paste Windows installation from both shells
+        if: matrix.platform == 'windows'
+        shell: powershell
+        run: node --test tests/windows-install-command.test.mjs
+
       - name: Exercise public no-auth Windows bootstrap
         if: matrix.platform == 'windows' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: powershell
@@ -171,9 +176,13 @@ jobs:
           GH_TOKEN: ""
           GITHUB_TOKEN: ""
           ORGCHART_BOOTSTRAP_SKIP_SETUP: "1"
+          ORGCHART_INSTALL_NO_PAUSE: "1"
         run: |
           $target = Join-Path $env:RUNNER_TEMP "OrgChart-Studio-public-download"
-          & .\scripts\bootstrap-windows-source-test.ps1 -TargetDirectory $target
+          $env:ORGCHART_INSTALL_TARGET_DIRECTORY = $target
+          $publicCommand = (Get-Content -LiteralPath .\scripts\install-windows-command.txt -Raw).Trim()
+          & powershell.exe -NoLogo -NoProfile -Command $publicCommand
+          if ($LASTEXITCODE -ne 0) { throw "The public one-paste installer failed." }
           $revision = Get-Content "$target\INSTALL-REVISION.txt" -Raw
           if (-not $revision.Contains("Installed commit: $env:GITHUB_SHA")) {
             throw "The public Windows bootstrap did not install the triggering revision."

@@ -143,6 +143,7 @@ try {
   Write-Host "Node:    $(& $NodeExecutable --version)"
   Write-Host "npm:     $(& $NpmExecutable --version)"
   Write-Host ""
+  Write-Host "[3/4] Installing required components and checking the application..."
   Write-Host "Installing exact dependency versions from package-lock.json..."
   & $NpmExecutable ci --no-audit --no-fund
   if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit code $LASTEXITCODE." }
@@ -170,12 +171,16 @@ $McpManagedMarker = "# BEGIN ORGCHART STUDIO MCP - managed by installer"
 $McpSetupChoice = if ($env:ORGCHART_SETUP_MCP) {
   $env:ORGCHART_SETUP_MCP.ToLowerInvariant()
 } else {
-  "ask"
+  "auto"
 }
 $McpAlreadyManaged = (
   (Test-Path -LiteralPath $McpConfigPath -PathType Leaf) -and
   (Select-String -LiteralPath $McpConfigPath -SimpleMatch $McpManagedMarker -Quiet)
 )
+
+if ($McpSetupChoice -eq "auto") {
+  $McpSetupChoice = if ($McpAlreadyManaged) { "install" } else { "skip" }
+}
 
 if ($McpSetupChoice -eq "ask" -and
     $McpAlreadyManaged) {
@@ -225,15 +230,19 @@ else {
 }
 
 $StartScript = Join-Path $ProjectRoot "scripts\start-windows-source-test.ps1"
+try {
+  & (Join-Path $ScriptDirectory "create-windows-shortcuts.ps1")
+} catch {
+  Write-Warning "Windows could not create all shortcuts. You can still open Start-OrgChart-Studio.cmd in $ProjectRoot. $($_.Exception.Message)"
+}
 Write-Host ""
 Write-Host "Setup verified."
 Write-Host "Working data is stored under your Windows application-data folder by default."
 Write-Host "Use Backup & restore to choose a different local data folder and a separate backup folder."
 Write-Host "The backup folder may be local or cloud-synced; encryption is optional per backup."
 Write-Host "Source updates do not replace working chart data."
-Write-Host "For later launches, run:"
-Write-Host "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$StartScript`""
-Write-Host "Or double-click Start-OrgChart-Studio.cmd in the installed application folder."
+Write-Host "For later launches, choose OrgChart Studio from the Start menu or desktop."
+Write-Host "You can also double-click Start-OrgChart-Studio.cmd in the installed application folder."
 Write-Host ""
 
 if ($env:ORGCHART_SETUP_STAGE_ONLY -eq "1") {

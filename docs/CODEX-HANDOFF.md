@@ -4,7 +4,7 @@ OrgChart Studio remains usable with Codex after the Mac or Windows command-line 
 
 ## Use the optional local MCP companion
 
-1. At **Install the local MCP integration? [y/N]** during setup, type `y` and press Return. Pressing Return alone skips it; install it later with `npm run mcp:configure` from the installed source folder.
+1. In **Local AI control**, choose **Install local AI integration** after installing the app. On macOS you can also type `y` at **Install the local MCP integration? [y/N]** during setup. Windows installation skips this prompt; existing managed connections are refreshed during updates.
 2. Restart ChatGPT Desktop or Codex once after registration.
 3. Open OrgChart Studio before asking the AI to use an OrgChart Studio tool. The MCP process connects only to the running app's loopback service with its per-launch token.
 4. Open **AI & MCP control**. Leave MCP paused until the intended session, then choose **All charts** or explicitly select the charts the AI may access. Leave retained-source extraction off unless the source material and AI environment are approved for one another. Session receipts show authorized operations without retaining prompts.
