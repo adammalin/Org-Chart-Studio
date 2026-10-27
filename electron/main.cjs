@@ -1112,10 +1112,14 @@ function createMainWindow(url) {
         );
         const installMcpButton = await waitFor(
           () => [...document.querySelectorAll('.ai-integration-card button')].find(
-            (button) => button.textContent.includes('Install local AI integration') &&
-              buttonReceivesPointer(button)
+            (button) => button.textContent.includes('Install local AI integration')
           ),
           'the local AI integration install button'
+        );
+        installMcpButton.scrollIntoView({ block: 'center' });
+        await waitFor(
+          () => buttonReceivesPointer(installMcpButton),
+          'the local AI integration install button to receive pointer events'
         );
         const installMcpButtonClickable =
           installMcpButton instanceof HTMLButtonElement &&
@@ -1128,10 +1132,14 @@ function createMainWindow(url) {
         }, 'the local AI integration to install');
         const removeMcpButton = await waitFor(
           () => [...document.querySelectorAll('.ai-integration-card button')].find(
-            (button) => button.textContent.includes('Remove integration') &&
-              buttonReceivesPointer(button)
+            (button) => button.textContent.includes('Remove integration')
           ),
           'the local AI integration remove button'
+        );
+        removeMcpButton.scrollIntoView({ block: 'center' });
+        await waitFor(
+          () => buttonReceivesPointer(removeMcpButton),
+          'the local AI integration remove button to receive pointer events'
         );
         const removeMcpButtonClickable =
           removeMcpButton instanceof HTMLButtonElement &&

@@ -2,16 +2,20 @@
 """Create the selectable-text command-line desktop quick-start guide."""
 
 from pathlib import Path
+import textwrap
 
 from reportlab.lib.colors import HexColor, white
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfbase.pdfdoc import PDFString
 from reportlab.pdfgen import canvas
 
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "docs" / "ORNL-OrgChart-Studio-Desktop-Quick-Start.pdf"
 PAGE_W, PAGE_H = letter
+WINDOWS_COMMAND = (ROOT / "scripts" / "install-windows-command.txt").read_text().strip()
+INSTALL_PAGE = "https://adammalin.github.io/Team-App-Library/apps/orgchart-studio/install/#windows-install"
 
 GREEN = HexColor("#00662C")
 NAVY = HexColor("#00454D")
@@ -70,11 +74,11 @@ def footer(pdf, page_number):
     pdf.rect(0, 0, PAGE_W, 52, stroke=0, fill=1)
     pdf.setFillColor(WHITE)
     pdf.setFont("Helvetica", 7.2)
-    pdf.drawString(40, 30, "ORNL OrgChart Studio | Command-line desktop quick start | August 6, 2026")
+    pdf.drawString(40, 30, "ORNL OrgChart Studio | Desktop quick start | October 27, 2026")
     pdf.drawRightString(572, 30, f"PAGE {page_number} OF 3")
 
 
-def code_box(pdf, title, lines, x, y, width, height, accent):
+def code_box(pdf, title, lines, x, y, width, height, accent, actual_text=None):
     pdf.setFillColor(PALE)
     pdf.setStrokeColor(BORDER)
     pdf.rect(x, y, width, height, stroke=1, fill=1)
@@ -86,9 +90,15 @@ def code_box(pdf, title, lines, x, y, width, height, accent):
     pdf.setFillColor(DARK)
     pdf.setFont("Courier", 6.35)
     cursor = y + height - 48
+    if actual_text:
+        # Preserve a single command when viewers copy visually wrapped PDF text.
+        encoded = PDFString(actual_text).format(pdf._doc).decode("latin1")
+        pdf._code.append(f"/Span << /ActualText {encoded} >> BDC")
     for line in lines:
         pdf.drawString(x + 13, cursor, line)
         cursor -= 11.1
+    if actual_text:
+        pdf._code.append("EMC")
 
 
 def step_card(pdf, number, title, body, x, y, width, height, fill=SOFT_GREEN, accent=GREEN):
@@ -111,14 +121,14 @@ def build_pdf(output):
     page_header(
         pdf,
         "No signed installer required | macOS and Windows",
-        "Install from the command line.",
+        "Install and get to work.",
         "Public GitHub download, verified local runtime, private desktop app.",
         1,
     )
     label(pdf, "Before you begin", 40, 602)
     wrapped(
         pdf,
-        "Use Terminal on Mac or Windows PowerShell on Windows. Do not run as administrator. These commands download public application code only; no GitHub account or GitHub login is needed.",
+        "Use Terminal on Mac. On Windows, open Terminal, Command Prompt, or PowerShell. Copy the full command, paste, and press Enter. Use your normal account; administrator access and GitHub login are not needed.",
         40,
         583,
         532,
@@ -143,27 +153,24 @@ def build_pdf(output):
     )
     code_box(
         pdf,
-        "Windows - paste all six lines into PowerShell",
-        [
-            "Invoke-WebRequest -UseBasicParsing `",
-            "  -Uri \"https://raw.githubusercontent.com/adammalin/Org-Chart-Studio/main/scripts/bootstrap-windows-source-test.ps1\" `",
-            "  -OutFile \"$env:TEMP\\orgchart-studio-install.ps1\"",
-            "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `",
-            "  -File \"$env:TEMP\\orgchart-studio-install.ps1\" `",
-            "  -TargetDirectory \"$env:USERPROFILE\\OrgChart-Studio-source-test\"",
-        ],
+        "Windows - one command in Terminal, Command Prompt, or PowerShell",
+        textwrap.wrap(WINDOWS_COMMAND, width=125, break_long_words=False, break_on_hyphens=False),
         40,
         191,
         532,
         166,
         NAVY,
+        actual_text=WINDOWS_COMMAND,
     )
+    label(pdf, "OPEN INSTALL PAGE AND CLICK COPY", 54, 224, NAVY)
+    pdf.linkURL(INSTALL_PAGE, (54, 215, 558, 239), relative=0, thickness=0)
+    wrapped(pdf, "The command above is shown wrapped. The web page copies it as one line.", 54, 207, 500, size=7.5, leading=10)
     pdf.setFillColor(SOFT_GREEN)
     pdf.rect(40, 76, 532, 92, stroke=0, fill=1)
     label(pdf, "During setup", 56, 145)
     wrapped(
         pdf,
-        "The script records the exact GitHub commit and archive SHA-256, prepares a pinned Node.js runtime if needed, installs exact dependencies, builds the app, and runs its Electron/GUI/storage/AI smoke check. At Install the local MCP integration? [y/N], type y for ChatGPT Desktop or Codex access, or press Return to skip it.",
+        "Allow several minutes. Setup downloads, installs, checks, and opens the app. Windows setup creates Start menu and desktop shortcuts; optional AI setup is available in the app later. On Mac, type y at Install the local MCP integration? [y/N] to connect AI, or press Return to skip.",
         56,
         125,
         500,
@@ -194,7 +201,7 @@ def build_pdf(output):
     code_box(
         pdf,
         "Windows - easiest option",
-        ["Double-click Start-OrgChart-Studio.cmd in the OrgChart-Studio-source-test folder."],
+        ["Choose OrgChart Studio from the Start menu or desktop.", "Fallback: double-click Start-OrgChart-Studio.cmd in the installed folder."],
         40,
         410,
         532,
@@ -238,7 +245,7 @@ def build_pdf(output):
         "AI proposes. You review. OrgChart Studio remains the source of truth.",
         3,
     )
-    step_card(pdf, "1", "INSTALL", "Type y at the setup prompt, or use Install local AI integration in the app later.", 40, 516, 166, 82)
+    step_card(pdf, "1", "INSTALL", "In the app, use Install local AI integration. On Mac, you can also type y at the setup prompt.", 40, 516, 166, 82)
     step_card(pdf, "2", "RESTART AI", "Quit and reopen ChatGPT Desktop or Codex once so it discovers orgchart_studio.", 223, 516, 166, 82, SOFT_NAVY, NAVY)
     step_card(pdf, "3", "OPEN THE APP", "OrgChart Studio must be running before an AI can call its local tools.", 406, 516, 166, 82, PALE, DARK)
 
@@ -284,7 +291,7 @@ def build_pdf(output):
     pdf.rect(40, 76, 532, 58, stroke=0, fill=1)
     wrapped(
         pdf,
-        "If setup fails, repeat the page 1 commands. They safely repair the application copy. Never give an AI backup passphrases or ask it to return raw retained source files.",
+        "Windows setup logs: %LOCALAPPDATA%\\ORNL OrgChart Studio\\Installer. If setup fails, keep the log and repeat the page 1 command to repair. Never share backup passphrases or raw retained source files with AI.",
         56,
         111,
         500,

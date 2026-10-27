@@ -8,7 +8,7 @@ The test is intended to answer whether staff can maintain several charts, normal
 
 ## Install or update the command-line desktop app
 
-Follow the three-page [Mac and Windows desktop quick start](ORNL-OrgChart-Studio-Desktop-Quick-Start.pdf). The public setup needs no GitHub account, signing certificate, or administrator shell. It resolves `main` to one exact commit, records that revision and the archive SHA-256 in `INSTALL-REVISION.txt`, prepares a verified Node runtime when necessary, installs exact dependency versions, builds the app, and runs a hidden Electron/GUI/storage/AI smoke test before opening the desktop window.
+Follow the three-page [Mac and Windows desktop quick start](ORNL-OrgChart-Studio-Desktop-Quick-Start.pdf). Windows users paste the single command from the README into Terminal, Command Prompt, or PowerShell; it starts the correct shell automatically, records a setup log, creates user shortcuts, and opens the app. The public setup needs no GitHub account, signing certificate, or administrator shell. It resolves `main` to one exact commit, records that revision and the archive SHA-256 in `INSTALL-REVISION.txt`, prepares a verified Node runtime when necessary, installs exact dependency versions, builds the app, and runs a hidden Electron/GUI/storage/AI smoke test before opening the desktop window.
 
 Repeat the same platform commands to update or repair the app. On Mac, double-click `Start-OrgChart-Studio.command` in the installed folder or run its start script. On Windows, double-click `Start-OrgChart-Studio.cmd` in the installed folder.
 
@@ -144,7 +144,7 @@ Pass when both formats can be written to the configured local or cloud-synced ba
 
 ## Test 7: optional local MCP companion
 
-1. During command-line setup, answer `y` at **Install the local MCP integration? [y/N]**. Or open **Local AI control** later and choose **Install local AI integration**. Confirm the status changes to **Installed**, then restart ChatGPT Desktop or Codex once.
+1. Open **Local AI control** and choose **Install local AI integration**. On macOS you can also answer `y` at **Install the local MCP integration? [y/N]** during setup. Windows installation skips this prompt. Confirm the status changes to **Installed**, then restart ChatGPT Desktop or Codex once.
 2. Open OrgChart Studio, then inspect MCP servers and confirm `orgchart_studio` is enabled. Open **AI & MCP control**, pause MCP, and confirm a tool call is refused. Resume it.
 3. Select **Selected charts**, allow one approved test chart, and confirm `get_chart` is refused for a different chart. Switch to **All charts** only for the remainder of this synthetic test. Confirm a session receipt appears for each authorized or denied operation and contains no prompt text.
 4. Call `list_charts` and verify it returns summaries without full node data. Call `get_chart` only on the approved test chart and confirm the current saved layout is returned.

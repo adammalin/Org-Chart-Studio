@@ -55,21 +55,19 @@ On macOS, paste these commands into Terminal:
   "$HOME/OrgChart-Studio-source-test"
 ```
 
-On Windows 10 or 11, paste these commands into a normal, non-administrator PowerShell window:
+On Windows 10 or 11, open **Terminal**, **Command Prompt**, or **PowerShell** as your normal user. Copy this complete one-line command, paste it once, and press Enter:
 
-```powershell
-Invoke-WebRequest -UseBasicParsing `
-  -Uri "https://raw.githubusercontent.com/adammalin/Org-Chart-Studio/main/scripts/bootstrap-windows-source-test.ps1" `
-  -OutFile "$env:TEMP\orgchart-studio-install.ps1"
-
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
-  -File "$env:TEMP\orgchart-studio-install.ps1" `
-  -TargetDirectory "$env:USERPROFILE\OrgChart-Studio-source-test"
+```text
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Set-Location ([IO.Path]::GetTempPath()); Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/adammalin/Org-Chart-Studio/main/scripts/install-windows.ps1' -OutFile orgchart-install.ps1 -ErrorAction Stop; & .\orgchart-install.ps1"
 ```
 
-The `ExecutionPolicy Bypass` option applies only to that one setup process; the script does not permanently change PowerShell policy. During either setup, type `y` at `Install the local MCP integration? [y/N]` to connect ChatGPT Desktop or Codex, or press Return to skip it. Restart that AI client once after installation. The app must be open for AI tools to work.
+The command opens PowerShell automatically. You do not need to switch shells, install Node.js yourself, or run as administrator. Setup downloads the app, prepares its required components, checks it, creates Start menu and desktop shortcuts, and opens OrgChart Studio. Allow several minutes for the first installation. If Windows restricts shortcut creation, use `Start-OrgChart-Studio.cmd` in the installed folder.
 
-Repeat the same two commands later to update or repair the installed copy. The update preserves `.runtime`, exact installed dependencies until they are refreshed, local tool state, and output folders. Working chart data is stored under the current user's normal Application Support or AppData location, not in the application folder, and is not replaced by an application update.
+Windows setup saves a diagnostic log in `%LOCALAPPDATA%\ORNL OrgChart Studio\Installer`. If setup fails, the installer shows the log location and keeps its error visible. Close the app and repeat the same command to update or repair. The selectable command is also available in [a plain-text file](scripts/install-windows-command.txt).
+
+The `ExecutionPolicy Bypass` option applies only to that setup process; it does not permanently change PowerShell policy. Windows users can enable optional AI access after installation in **Local AI control** by choosing **Install local AI integration**. Existing managed AI connections are refreshed during updates. On macOS, type `y` at `Install the local MCP integration? [y/N]` during setup or enable it in the app later. Restart the AI client once after registration. The app must be open for AI tools to work.
+
+Repeat the same platform installation command(s) later to update or repair the installed copy. The update preserves `.runtime`, exact installed dependencies until they are refreshed, local tool state, and output folders. Working chart data is stored under the current user's normal Application Support or AppData location, not in the application folder, and is not replaced by an application update.
 
 See the [cross-platform desktop quick-start guide](docs/ORNL-OrgChart-Studio-Desktop-Quick-Start.pdf) for installation, updates, start commands, storage, recovery, and the reviewed AI workflow. Unsigned native packages remain developer experiments only and are not the current distribution path.
 
@@ -83,7 +81,7 @@ Click a connector to select it. Its automatic corner handles appear as hollow co
 
 The command-line copy wraps the local application in an Electron window. It starts a private service bound to `127.0.0.1`, gives each launch a new secret token, blocks the window from making non-loopback network requests, and runs the renderer with context isolation and sandboxing enabled and without Node.js access in the page.
 
-Start the Mac copy by double-clicking `Start-OrgChart-Studio.command` in the installed folder or running `/bin/zsh "$HOME/OrgChart-Studio-source-test/scripts/start-mac-source-test.zsh"`. On Windows, double-click `Start-OrgChart-Studio.cmd` in the installed folder or run its PowerShell start script. The red X in the app stops both the interface and its private local service.
+Start the Mac copy by double-clicking `Start-OrgChart-Studio.command` in the installed folder or running `/bin/zsh "$HOME/OrgChart-Studio-source-test/scripts/start-mac-source-test.zsh"`. On Windows, choose **OrgChart Studio** from the Start menu or desktop, or double-click `Start-OrgChart-Studio.cmd` in the installed folder. The red X in the app stops both the interface and its private local service.
 
 Working chart data is stored separately from the downloaded application at `~/Library/Application Support/ORNL OrgChart Studio/local-worker-data` on macOS or the corresponding per-user AppData location on Windows. In **Backup & restore**, staff can choose another empty local folder for the live chart library and a different folder for backups. A live-folder change takes effect only after restart: the app copies every file, compares SHA-256 checksums, switches only after verification, and retains the prior folder as a recovery copy. Live data locations inside the application source, OneDrive, Dropbox, iCloud, or another recognized cloud-sync root are rejected. A backup folder may be local or inside OneDrive, Dropbox, iCloud, or another cloud-sync location. Each run can create either an encrypted package or an explicitly confirmed readable package.
 

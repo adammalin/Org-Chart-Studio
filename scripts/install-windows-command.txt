@@ -1,0 +1,1 @@
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Set-Location ([IO.Path]::GetTempPath()); Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/adammalin/Org-Chart-Studio/main/scripts/install-windows.ps1' -OutFile orgchart-install.ps1 -ErrorAction Stop; & .\orgchart-install.ps1"
