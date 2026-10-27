@@ -18,7 +18,7 @@ test("macOS bootstrap uses public-only downloads and records provenance", () => 
 
   assert.match(
     source,
-    /github\.com\/\$\{SOURCE_REPOSITORY\}\/commit\/\$\{SOURCE_REF\}\.patch/,
+    /github\.com\/\$\{SOURCE_REPOSITORY\}\/commits\/\$\{SOURCE_REF\}\.atom/,
   );
   assert.match(
     source,
@@ -128,7 +128,7 @@ test("Windows command-line installer matches the macOS safety and setup flow", (
   );
   const packageJson = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8"));
 
-  assert.match(bootstrapSource, /github\.com\/\$SourceRepository\/commit\/\$SourceRef\.patch/);
+  assert.match(bootstrapSource, /github\.com\/\$SourceRepository\/commits\/\$SourceRef\.atom/);
   assert.match(bootstrapSource, /codeload\.github\.com\/\$SourceRepository\/zip\/\$ResolvedSourceRevision/);
   assert.doesNotMatch(bootstrapSource, /api\.github\.com/);
   assert.match(bootstrapSource, /Get-FileHash[^\n]+SHA256/);

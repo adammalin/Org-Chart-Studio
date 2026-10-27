@@ -63,7 +63,7 @@ fi
 TEMPORARY_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/orgchart-studio-bootstrap.XXXXXX")"
 ARCHIVE_PATH="${TEMPORARY_DIRECTORY}/Org-Chart-Studio-main.zip"
 EXTRACT_DIRECTORY="${TEMPORARY_DIRECTORY}/extract"
-COMMIT_PATCH_PATH="${TEMPORARY_DIRECTORY}/commit.patch"
+COMMIT_FEED_PATH="${TEMPORARY_DIRECTORY}/commits.atom"
 
 cleanup() {
   if [[ -n "${TEMPORARY_DIRECTORY:-}" &&
@@ -79,14 +79,16 @@ mkdir -p "${EXTRACT_DIRECTORY}"
 download_public_revision() {
   local candidate_revision public_archive_url
   if ! curl --fail --location --show-error --retry 3 \
-      --header "Accept: text/plain" \
+      --header "Accept: application/atom+xml" \
       --user-agent "ORNL-OrgChart-Studio-Installer" \
-      --output "${COMMIT_PATCH_PATH}" \
-      "https://github.com/${SOURCE_REPOSITORY}/commit/${SOURCE_REF}.patch"; then
+      --output "${COMMIT_FEED_PATH}" \
+      "https://github.com/${SOURCE_REPOSITORY}/commits/${SOURCE_REF}.atom"; then
     return 1
   fi
+  # The feed identifies main itself; a merge patch can start with an older PR commit.
   candidate_revision="$(
-    awk 'NR == 1 && $1 == "From" { print $2 }' "${COMMIT_PATCH_PATH}"
+    sed -nE 's/^[[:space:]]*<id>tag:github[.]com,2008:Grit::Commit\/([0-9a-f]{40})<\/id>[[:space:]]*$/\1/p' "${COMMIT_FEED_PATH}" |
+      awk 'NR == 1 { print }'
   )"
   if [[ ! "${candidate_revision}" =~ '^[0-9a-f]{40}$' ]]; then
     print -u2 "GitHub did not return a valid public commit revision for ${SOURCE_REF}."

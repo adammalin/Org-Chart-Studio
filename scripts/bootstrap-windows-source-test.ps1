@@ -88,13 +88,14 @@ try {
   Write-Host "Downloading the latest main-branch source ZIP..."
   if ($SourceArchiveUrl -eq $DefaultSourceArchiveUrl) {
     Write-Host "Using public GitHub access; no account or authentication is required..."
-    $commitPatch = Invoke-WebRequest `
-      -Uri "https://github.com/$SourceRepository/commit/$SourceRef.patch" `
+    $commitFeed = Invoke-WebRequest `
+      -Uri "https://github.com/$SourceRepository/commits/$SourceRef.atom" `
       -Headers $Headers `
       -UseBasicParsing
+    # Match the newest feed entry, including merge commits, rather than a PR patch.
     $commitMatch = [regex]::Match(
-      [string]$commitPatch.Content,
-      "\AFrom ([0-9a-f]{40}) "
+      [string]$commitFeed.Content,
+      "<id>tag:github[.]com,2008:Grit::Commit/([0-9a-f]{40})</id>"
     )
     $candidateRevision = if ($commitMatch.Success) { $commitMatch.Groups[1].Value } else { "" }
     if ($candidateRevision -notmatch "^[0-9a-f]{40}$") {

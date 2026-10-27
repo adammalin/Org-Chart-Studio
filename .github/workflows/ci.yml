@@ -67,6 +67,9 @@ jobs:
         if: matrix.platform == 'mac'
         run: git archive --format=zip --prefix=Org-Chart-Studio-ci/ HEAD -o "$RUNNER_TEMP/orgchart-source.zip"
 
+      - name: Verify merged public revisions on both platforms
+        run: node --test tests/public-revision.test.mjs
+
       - name: Exercise macOS fresh install and update bootstrap
         if: matrix.platform == 'mac'
         env:
