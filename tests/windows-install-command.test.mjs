@@ -71,9 +71,12 @@ Set-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) "setup-co
       await assert.rejects(readFile(path.join(target, "obsolete.txt")), { code: "ENOENT" });
       const shortcut = await run("powershell.exe", ["-NoProfile", "-Command", `
 $shell = New-Object -ComObject WScript.Shell
+$files = New-Object -ComObject Scripting.FileSystemObject
+$expected = $files.GetFile(${quote(path.join(target, "Start-OrgChart-Studio.cmd"))}).ShortPath
 foreach ($folder in @("Programs", "DesktopDirectory")) {
   $link = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath($folder)) "OrgChart Studio.lnk"))
-  if ($link.TargetPath -ne ${quote(path.join(target, "Start-OrgChart-Studio.cmd"))}) { throw "Incorrect shortcut target." }
+  # Windows expands short profile paths such as RUNNER~1 when saving shortcuts.
+  if ($files.GetFile($link.TargetPath).ShortPath -ne $expected) { throw "Incorrect shortcut target." }
 }
 Write-Output "Shortcuts verified"
 `]);
