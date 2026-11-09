@@ -1,5 +1,5 @@
 import type { Edge } from "@xyflow/react";
-import type { ChartDocument } from "./chart-library";
+import type { ChartDocument, ChartStatus } from "./chart-library";
 import type { OrgFlowNode, OrganizationalUnit } from "./org-chart";
 
 export type AiChangeKind = "added" | "changed" | "removed";
@@ -40,7 +40,7 @@ export interface AiChartProposal {
   status: AiProposalStatus;
   changeSummary: string | null;
   createdAt: string;
-  expiresAt: string;
+  expiresAt: string | null;
   current: ChartDocument;
   proposed: ChartDocument;
   changes: AiFieldChange[];
@@ -53,8 +53,9 @@ export interface AiPendingProposalSummary {
   chartName: string;
   changeSummary: string | null;
   createdAt: string;
-  expiresAt: string;
+  expiresAt: string | null;
   summary: AiChangeSummary;
+  proposedStatus?: ChartStatus;
 }
 
 export interface AiActivityRecord {

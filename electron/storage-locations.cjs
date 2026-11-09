@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const CONFIG_FILE_NAME = "storage-locations.json";
 const DEFAULT_DATA_FOLDER_NAME = "local-worker-data";
-const MAX_BACKUP_BYTES = 100 * 1024 * 1024;
+const MAX_BACKUP_BYTES = 512 * 1024 * 1024;
 
 function normalized(value) {
   const absolute = path.resolve(value);
@@ -297,7 +297,7 @@ function validateEncryptedBackup(encryptedJson) {
   }
   const byteLength = Buffer.byteLength(encryptedJson, "utf8");
   if (byteLength < 2 || byteLength > MAX_BACKUP_BYTES) {
-    throw new Error("The encrypted backup is empty or exceeds the 100 MB safety limit.");
+    throw new Error("The encrypted backup is empty or exceeds the 512 MB safety limit.");
   }
   let parsed;
   try {
@@ -324,7 +324,7 @@ function validateUnencryptedBackup(backupJson) {
   }
   const byteLength = Buffer.byteLength(backupJson, "utf8");
   if (byteLength < 2 || byteLength > MAX_BACKUP_BYTES) {
-    throw new Error("The unencrypted backup is empty or exceeds the 100 MB safety limit.");
+    throw new Error("The unencrypted backup is empty or exceeds the 512 MB safety limit.");
   }
   let parsed;
   try {
@@ -334,11 +334,12 @@ function validateUnencryptedBackup(backupJson) {
   }
   if (
     parsed?.format !== "orgchart-studio-library-backup" ||
-    ![1, 2, 3, 4].includes(parsed?.schemaVersion) ||
+    ![1, 2, 3, 4, 5].includes(parsed?.schemaVersion) ||
     !Array.isArray(parsed?.charts) ||
     !Array.isArray(parsed?.sourceFiles) ||
     parsed.chartCount !== parsed.charts.length ||
-    parsed.sourceFileCount !== parsed.sourceFiles.length
+    parsed.sourceFileCount !== parsed.sourceFiles.length ||
+    (parsed.schemaVersion === 5 && (!Array.isArray(parsed.checkpoints) || !Array.isArray(parsed.monthlyUpdates)))
   ) {
     throw new Error("The file is not an OrgChart Studio unencrypted backup package.");
   }

@@ -1,7 +1,7 @@
 {
   "name": "ornl-orgchart-studio",
   "productName": "ORNL OrgChart Studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "UNLICENSED",
   "description": "Local desktop prototype for governed organizational chart data, layout, review, backup, and export.",

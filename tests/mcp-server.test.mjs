@@ -336,6 +336,15 @@ test("local STDIO MCP exposes bounded tools and reaches only the authorized runn
       "replace_chart_draft",
       "stage_source_recheck",
       "save_chart_version",
+      "search_library",
+      "list_history",
+      "get_history_checkpoint",
+      "list_monthly_updates",
+      "begin_monthly_update",
+      "complete_monthly_update",
+      "check_chart_consistency",
+      "get_monthly_update_status",
+      "answer_saved_history",
     ]);
     assert.equal(
       listed.tools.find((tool) => tool.name === "list_charts")?.annotations?.readOnlyHint,

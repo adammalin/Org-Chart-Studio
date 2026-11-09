@@ -280,7 +280,7 @@ def build_pdf(output):
     label(pdf, "Controls that stay with you", 56, 238)
     wrapped(
         pdf,
-        "Pause local AI access, limit it to selected charts, or remove the integration without changing charts. Retained-source extraction starts off and is session-only. Chart fields returned through MCP enter that AI conversation, so use only content approved for that AI environment.",
+        "Pause local AI access, limit it to selected charts, or remove the integration without changing charts. Retained-source extraction starts on and can be switched off for the session. Chart fields returned through MCP enter that AI conversation, so use only content approved for that AI environment.",
         56,
         217,
         500,

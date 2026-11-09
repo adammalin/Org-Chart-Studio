@@ -1,3 +1,5 @@
+import { registerInsightTools } from "./insight-tools.mjs";
+import { registerHistoryTools } from "./history-tools.mjs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -303,7 +305,7 @@ function registerTools(server, client) {
     {
       title: "Extract one retained source intake",
       description:
-        "Read a pending local source intake through OrgChart Studio's bounded extractor. This requires the user to enable retained-source extraction in Local AI control for the current app session. Only extracted text, spreadsheet cells, PowerPoint shape geometry, connector metadata, checksums, and warnings enter the AI conversation; raw file bytes are never returned. Use the intake ID when staging its normalized import, and preserve precise extracted locators in card and reporting-line provenance.",
+        "Read a pending local source intake through OrgChart Studio's bounded extractor. This requires retained-source extraction to be enabled in Local AI control for the current app session. Only extracted text, spreadsheet cells, PowerPoint shape geometry, connector metadata, checksums, and warnings enter the AI conversation; raw file bytes are never returned. Use the intake ID when staging its normalized import, and preserve precise extracted locators in card and reporting-line provenance.",
       inputSchema: { intakeId: z.string().min(1).max(200) },
       annotations: {
         readOnlyHint: true,
@@ -625,10 +627,12 @@ export function createOrgChartMcpServer(options = {}) {
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
       instructions:
-        "OrgChart Studio data is local and user-controlled. Respect the app's MCP pause, selected-chart scope, and retained-source extraction toggle. Call list_charts before get_chart or any existing-chart write. Only read a complete chart or extracted retained source when the user identifies it and understands that returned content enters the AI conversation. Raw retained files are never returned. For new legacy charts, list pending source intakes when relevant, extract only after the user enables it, validate normalized data, and prefer stage_normalized_import so a person reviews it in the app before creation. When a source card names a person and role, map them to assignmentLabel and positionTitle rather than a vacant unit. Treat adjacent shaded strips, portfolios, coverage areas, specialties, and service lists as descriptive content unless an explicit connector or source statement establishes a separate reporting unit. A shared line across staff cards indicates siblings, not a chain. Keep card and reporting-line provenance separate. For an existing source audit, call extract_chart_sources, preserve the returned checksums, and use stage_source_recheck; it creates a private rollback package and permits only review-queued semantic corrections while preserving layout and reporting endpoints. Before any other existing-chart write, read the current chart and preserve its id, version, updatedAt, layout, pins, and sources. Never invent reporting relationships or source facts. Do not delete charts, restore backups, download raw source files, or change storage settings; this server exposes no such tools.",
+        "OrgChart Studio data is local and user-controlled. Respect the app's MCP pause, selected-chart scope, and retained-source extraction toggle. Call list_charts before get_chart or any existing-chart write. Only read a complete chart or extracted retained source when the user identifies it and understands that returned content enters the AI conversation. Raw retained files are never returned. For new legacy charts, list pending source intakes when relevant, extract only while that control is enabled, validate normalized data, and prefer stage_normalized_import so a person reviews it in the app before creation. When a source card names a person and role, map them to assignmentLabel and positionTitle rather than a vacant unit. Treat adjacent shaded strips, portfolios, coverage areas, specialties, and service lists as descriptive content unless an explicit connector or source statement establishes a separate reporting unit. A shared line across staff cards indicates siblings, not a chain. Keep card and reporting-line provenance separate. For an existing source audit, call extract_chart_sources, preserve the returned checksums, and use stage_source_recheck; it creates a private rollback package and permits only review-queued semantic corrections while preserving layout and reporting endpoints. For monthly changes, use begin_monthly_update to preserve all previous states and capture the change list, then stage reviewed changes and complete_monthly_update after review. Applied changes automatically preserve before/after checkpoints. Before any other existing-chart write, read the current chart and preserve its id, version, updatedAt, layout, pins, and sources. Never invent reporting relationships or source facts. Do not delete charts, restore backups, download raw source files, or change storage settings; this server exposes no such tools.",
     },
   );
   registerTools(server, client);
+  registerHistoryTools(server, client);
+  registerInsightTools(server, client);
   return server;
 }
 

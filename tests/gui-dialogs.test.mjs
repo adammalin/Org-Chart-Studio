@@ -79,10 +79,10 @@ test("completed MCP work refreshes the visible library and opens review screens 
   assert.match(workspaceSource, /setCharts\(data\.charts\)/);
 });
 
-test("retained-source AI access is explicit, session-only, and off by default", () => {
-  assert.match(workspaceSource, /sourceAccessEnabled: false/);
-  assert.match(workspaceSource, /Allow retained-source extraction for this session/);
-  assert.match(workspaceSource, /Off by default/);
+test("retained-source AI access defaults on with an explicit session opt-out", () => {
+  assert.match(workspaceSource, /sourceAccessEnabled: true/);
+  assert.match(workspaceSource, /Allow retained-source extraction/);
+  assert.match(workspaceSource, /Enabled by default/);
   assert.match(workspaceSource, /Raw files are never returned/);
 });
 
@@ -165,6 +165,6 @@ test("accessible hierarchy table supports data auditing and practical filters", 
 test("desktop backups allow optional encryption and expose a configured-folder run action", () => {
   assert.match(workspaceSource, /desktopBackupDestinationMissing/);
   assert.match(workspaceSource, /Run backup now/);
-  assert.match(workspaceSource, /Encrypted or explicitly confirmed unencrypted/);
+  assert.match(workspaceSource, /Encrypted or unencrypted/);
   assert.doesNotMatch(workspaceSource, /unencryptedCloudBackupBlocked/);
 });

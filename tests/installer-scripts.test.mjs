@@ -212,7 +212,7 @@ test("bundled quick-start has a second page for the reviewed local AI workflow",
   assert.match(generatorSource, /Use the orgchart_studio MCP server/);
   assert.match(generatorSource, /AI stages edits and imports\. You decide\. The app remains the source of truth\./);
   assert.match(generatorSource, /Stage a reviewed import or source recheck/);
-  assert.match(generatorSource, /Source extraction is off by default/);
+  assert.match(generatorSource, /Source extraction is on by default/);
   assert.match(generatorSource, /Return raw source files or passphrases/);
   assert.match(generatorSource, /Bypass review for chart replacement/);
   assert.match(generatorSource, /not ChatGPT web/);
@@ -242,7 +242,7 @@ test("desktop guide covers both command-line installs, updates, storage, and opt
   assert.match(generatorSource, /OneDrive or Dropbox/);
   assert.match(generatorSource, /Encryption is optional/);
   assert.match(generatorSource, /Run backup now/);
-  assert.match(generatorSource, /Retained-source extraction starts off/);
+  assert.match(generatorSource, /Retained-source extraction starts on/);
 });
 
 test("public Windows install instructions use one shell-independent command", () => {

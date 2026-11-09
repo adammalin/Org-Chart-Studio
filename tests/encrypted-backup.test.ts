@@ -38,6 +38,8 @@ function fixture(): LibraryBackup {
     ],
     aiActivities: [],
     sourceFiles: [],
+    checkpoints: [],
+    monthlyUpdates: [],
   };
 }
 

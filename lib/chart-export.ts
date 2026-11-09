@@ -170,6 +170,7 @@ const STATUS_LABELS: Record<PositionStatus, string> = {
   filled: "Filled",
   acting: "Acting",
   vacant: "Vacant",
+  not_specified: "Not specified",
 };
 
 const HEADER_HEIGHT = 74;
@@ -635,6 +636,7 @@ function fitExportFontSize(
 }
 
 function statusColor(status: PositionStatus): string {
+  if (status === "not_specified") return EXPORT_COLORS.ink;
   if (status === "vacant") return EXPORT_COLORS.orange;
   if (status === "acting") return EXPORT_COLORS.blue;
   return EXPORT_COLORS.green;

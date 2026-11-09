@@ -478,7 +478,7 @@ def build_pdf(output: Path) -> None:
     pdf.drawString(40, 35, "If it says unavailable, open OrgChart Studio. Local MCP works in the desktop app/Codex, not ChatGPT web.")
     pdf.setFillColor(ENERGY)
     pdf.setFont("Helvetica-Bold", 7.2)
-    pdf.drawString(40, 19, "Source extraction is off by default. Returned chart fields and extracted content enter the AI conversation.")
+    pdf.drawString(40, 19, "Source extraction is on by default; switch it off in Local AI control when needed. Returned chart fields and extracted content enter the AI conversation.")
 
     pdf.showPage()
     pdf.save()

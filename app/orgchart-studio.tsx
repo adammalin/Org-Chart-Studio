@@ -1,4 +1,11 @@
 "use client";
+import { MonthlyWorkspace } from "./monthly-workspace";
+import { PortfolioReview } from "./portfolio-review";
+import { auditPortfolio, nodeReviewPriority } from "../lib/portfolio-consistency";
+import { DesktopRecovery } from "./desktop-recovery";
+import { HistoryTimeline } from "./history-timeline";
+import { LibraryTree } from "./library-tree";
+import { chartMatches, searchLibrary } from "../lib/library-navigation";
 
 import {
   Background,
@@ -175,6 +182,8 @@ import type { McpControlResponse, McpControlState } from "../lib/mcp-control";
 type LayoutMode = "preserve" | "branch" | "respect-pins" | "full";
 type WorkspaceView =
   | "library"
+  | "consistency"
+  | "monthly"
   | "canvas"
   | "table"
   | "review"
@@ -267,7 +276,7 @@ const ONBOARDING_TOUR_STEPS: OnboardingTourStep[] = [
     eyebrow: "Step 3",
     title: "Follow the chart lifecycle",
     body:
-      "The top bar shows Draft, In review, Current, or Archived alongside the saved version and validation result. Current means approved and in use; Archived is historical and read-only. “Not applied” means an AI proposal is still only a preview.",
+      "The top bar shows Draft, In review, Current, or Archived alongside the saved version and validation result. Current means designated as the working chart; Archived is historical and read-only. “Not applied” means an AI proposal is still only a preview.",
     target: "chart-status",
     placement: "bottom",
   },
@@ -386,6 +395,7 @@ const statusLabels = {
   filled: "Filled",
   acting: "Acting",
   vacant: "Vacant",
+  not_specified: "Not specified",
 };
 
 function tableSourceCertainty(flowNode: OrgFlowNode): SourceCertainty {
@@ -747,6 +757,13 @@ function StudioWorkspace() {
   const [selectedEdgeId, setSelectedEdgeId] = useState("");
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen,setSearchOpen]=useState(false);
+  useEffect(()=>{const close=(e:PointerEvent)=>{if(e.target instanceof Element&&!e.target.closest(".global-search"))setSearchOpen(false);};document.addEventListener("pointerdown",close);return()=>document.removeEventListener("pointerdown",close);},[]);
+  const [searchArchives,setSearchArchives]=useState(false);
+  const [libraryView,setLibraryView]=useState<"flat"|"tree">("flat");
+  const [libraryViewReady,setLibraryViewReady]=useState(false);
+  useEffect(()=>{let active=true;void fetch("/api/preferences",{cache:"no-store"}).then(async response=>{if(!response.ok)throw new Error("Library view preference could not be loaded.");const p=await response.json() as {libraryView:string};if(active)setLibraryView(p.libraryView==="tree"?"tree":"flat");}).catch(()=>undefined).finally(()=>{if(active)setLibraryViewReady(true);});return()=>{active=false;};},[]);
+  const chooseLibraryView=async(view:"flat"|"tree")=>{setLibraryView(view);try{const response=await fetch("/api/preferences",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({libraryView:view})});if(!response.ok)throw new Error();}catch{setNotice("Library view changed for this session, but the preference could not be saved.");}};
   const [presentationMode, setPresentationMode] = useState<ChartPresentationMode>(
     storedPresentationMode,
   );
@@ -779,8 +796,7 @@ function StudioWorkspace() {
   const [importBusy, setImportBusy] = useState(false);
   const [backupPassphrase, setBackupPassphrase] = useState("");
   const [backupPassphraseConfirm, setBackupPassphraseConfirm] = useState("");
-  const [backupProtection, setBackupProtection] = useState<BackupProtection>("encrypted");
-  const [unencryptedBackupConfirmed, setUnencryptedBackupConfirmed] = useState(false);
+  const [backupProtection, setBackupProtection] = useState<BackupProtection>("unencrypted");
   const [backupScope, setBackupScope] = useState<BackupScope>("all");
   const [backupSelectedChartIds, setBackupSelectedChartIds] = useState<Set<string>>(
     new Set(),
@@ -831,6 +847,8 @@ function StudioWorkspace() {
   const [pendingAiProposalSummaries, setPendingAiProposalSummaries] = useState<
     AiPendingProposalSummary[]
   >([]);
+  const [pendingReviewChoice, setPendingReviewChoice] = useState("");
+  const [pendingReviewScope, setPendingReviewScope] = useState<"updates" | "archives">("updates");
   const [pendingAiImportProposal, setPendingAiImportProposal] =
     useState<AiImportProposal | null>(null);
   const [aiProposalBusy, setAiProposalBusy] = useState<"load" | "accept" | "reject" | null>(null);
@@ -882,10 +900,13 @@ function StudioWorkspace() {
   const activeChart = charts.find((chart) => chart.id === activeChartId) ?? charts[0];
   const activeChartReadOnly = activeChart?.status === "archived";
   const visibleLibraryCharts = charts.filter((chart) => {
+    if (!chartMatches(chart,searchQuery)) return false;
     if (libraryStatusFilter === "all") return true;
     if (libraryStatusFilter === "active") return chart.status !== "archived";
     return chart.status === libraryStatusFilter;
   });
+  const librarySearchResults=useMemo(()=>searchLibrary(charts.filter(c=>searchArchives||c.status!=="archived"),searchQuery),[charts,searchArchives,searchQuery]);
+  const treeCharts=charts.filter(c=>libraryStatusFilter==="all"||libraryStatusFilter==="active"?libraryStatusFilter==="all"||c.status!=="archived":c.status===libraryStatusFilter);
   const switchableCharts = charts.filter(
     (chart) => chart.status !== "archived" || chart.id === activeChart?.id,
   );
@@ -918,12 +939,13 @@ function StudioWorkspace() {
         : null,
     [activeChart, charts, edges, nodes],
   );
+  const portfolioIssues=useMemo(()=>auditPortfolio(charts),[charts]);
   const sourceReviewNodes = useMemo(
     () =>
       activeChartReadOnly ? [] : nodes.filter(
         (flowNode) => flowNode.data.unit.sourceCertainty === "needs_review",
-      ),
-    [activeChartReadOnly, nodes],
+      ).sort((a,b)=>nodeReviewPriority(a,activeChartId,portfolioIssues)-nodeReviewPriority(b,activeChartId,portfolioIssues)),
+    [activeChartReadOnly, nodes,activeChartId,portfolioIssues],
   );
   const sourceReviewEdges = useMemo(
     () => activeChartReadOnly
@@ -1346,7 +1368,7 @@ function StudioWorkspace() {
           : "Separate connector lanes enabled. Every relationship receives an independent non-overlapping route.",
       );
     },
-    [],
+    [setNotice],
   );
 
   const changePresentationMode = useCallback(
@@ -1363,7 +1385,7 @@ function StudioWorkspace() {
         void fitView({ duration: 420, padding: 0.14 });
       });
     },
-    [compactLayoutOrientation, fitView],
+    [compactLayoutOrientation, fitView, setPresentationMode, setNotice],
   );
 
   const changeCompactLayoutOrientation = useCallback(
@@ -1380,7 +1402,7 @@ function StudioWorkspace() {
         void fitView({ duration: 420, padding: 0.14 });
       });
     },
-    [fitView],
+    [fitView, setCompactLayoutOrientation, setNotice],
   );
 
   useEffect(() => {
@@ -1435,7 +1457,7 @@ function StudioWorkspace() {
         void fitView({ duration: 420, padding: 0.14 });
       });
     },
-    [activeChartId, fitView, saveState, setEdges, setNodes],
+    [activeChartId, fitView, saveState, setEdges, setNodes, setWorkspaceView, setNotice],
   );
 
   const retryCurrentSave = () => {
@@ -1484,7 +1506,7 @@ function StudioWorkspace() {
       );
       window.requestAnimationFrame(() => void fitView({ duration: 420, padding: 0.14 }));
     },
-    [fitView, setEdges, setNodes],
+    [fitView, setEdges, setNodes, setWorkspaceView, setNotice],
   );
 
   const reviewPendingAiProposal = useCallback(
@@ -1511,7 +1533,7 @@ function StudioWorkspace() {
         setAiProposalBusy(null);
       }
     },
-    [aiProposalBusy, loadPendingAiProposals, pendingAiProposalSummaries, showAiProposal],
+    [aiProposalBusy, loadPendingAiProposals, pendingAiProposalSummaries, showAiProposal, setNotice],
   );
 
   const deferAiProposal = useCallback(() => {
@@ -1524,18 +1546,12 @@ function StudioWorkspace() {
     setSelectedEdgeId("");
     setSaveState("saved");
     setDismissedMcpRevision(mcpActivity.revision);
-    const deadline = new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(new Date(proposal.expiresAt));
-    setNotice(
-      `Review deferred. The saved chart is unchanged, and this proposal remains available from the pending-review banner until ${deadline}.`,
-    );
+    setNotice("Review deferred. The saved chart is unchanged, and this proposal is saved locally until you apply, reject, or replace it.");
     window.requestAnimationFrame(() => {
       hydratedChartRef.current = proposal.current.id;
       void fitView({ duration: 320, padding: 0.14 });
     });
-  }, [aiProposalBusy, fitView, mcpActivity.revision, pendingAiProposal, setEdges, setNodes]);
+  }, [aiProposalBusy, fitView, mcpActivity.revision, pendingAiProposal, setEdges, setNodes, setNotice]);
 
   const startOnboardingTour = useCallback(() => {
     setOnboardingStep(0);
@@ -1549,7 +1565,7 @@ function StudioWorkspace() {
     }
     setOnboardingStep(null);
     setNotice(noticeMessage);
-  }, []);
+  }, [setNotice]);
 
   const loadMcpReview = useCallback(async (activity: McpActivitySnapshot) => {
     if (!activity.proposalId) return false;
@@ -1599,7 +1615,7 @@ function StudioWorkspace() {
       setAiProposalBusy(null);
       setAiImportBusy(null);
     }
-  }, [showAiProposal]);
+  }, [showAiProposal, setWorkspaceView, setNotice]);
 
   const reviewMcpUpdate = useCallback(async () => {
     if (!mcpActivity.chartId && !mcpActivity.proposalId) return;
@@ -1642,7 +1658,7 @@ function StudioWorkspace() {
       setAiProposalBusy(null);
       setAiImportBusy(null);
     }
-  }, [loadMcpReview, mcpActivity, openChart]);
+  }, [loadMcpReview, mcpActivity, openChart, setNotice]);
 
   useEffect(() => {
     if (
@@ -1820,15 +1836,7 @@ function StudioWorkspace() {
         setAiProposalBusy(null);
       }
     },
-    [
-      aiProposalBusy,
-      dismissMcpActivity,
-      fitView,
-      loadAiActivities,
-      pendingAiProposal,
-      setEdges,
-      setNodes,
-    ],
+    [aiProposalBusy, dismissMcpActivity, fitView, loadAiActivities, pendingAiProposal, setEdges, setNodes, setNotice],
   );
 
   const resolveAiImportProposal = useCallback(
@@ -1881,7 +1889,7 @@ function StudioWorkspace() {
         setAiImportBusy(null);
       }
     },
-    [aiImportBusy, dismissMcpActivity, loadImportIntakes, openChart, pendingAiImportProposal],
+    [aiImportBusy, dismissMcpActivity, loadImportIntakes, openChart, pendingAiImportProposal, setNotice],
   );
 
   useEffect(() => {
@@ -1993,7 +2001,7 @@ function StudioWorkspace() {
         }
         if (data.returnedToDraft) {
           setNotice(
-            `Editing began from Current v${chartSnapshot.version}. That approved checkpoint is preserved, and the working chart is now a Draft.`,
+            `Editing began from Current v${chartSnapshot.version}. That Current checkpoint is preserved, and the working chart is now a Draft.`,
           );
         }
       } catch {
@@ -2240,7 +2248,7 @@ function StudioWorkspace() {
         "Connector lane pinned. Its saved route remains horizontal and vertical and will be used by exports.",
       );
     },
-    [pushUndoSnapshot],
+    [pushUndoSnapshot, setNotice],
   );
 
   const sourcePortCounts = useMemo(() => {
@@ -2285,7 +2293,7 @@ function StudioWorkspace() {
     setSelectedId(id);
     setSelectedEdgeId("");
     setNotice("Listed assignment selected. Its complete record remains available in the detail panel.");
-  }, []);
+  }, [setNotice]);
 
   const displayNodes = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -2433,7 +2441,7 @@ function StudioWorkspace() {
     setNotice(
       "Current connector corners pinned. Drag a pin to move that horizontal or vertical lane.",
     );
-  }, [recordCurrentState, selectedEdge, selectedEdgeRoute, setEdges]);
+  }, [recordCurrentState, selectedEdge, selectedEdgeRoute, setEdges, setNotice]);
 
   const resetSelectedConnector = useCallback(() => {
     if (!selectedEdge || !manualEdgeRouteForEdge(selectedEdge)) return;
@@ -2446,7 +2454,7 @@ function StudioWorkspace() {
     setNotice(
       "Connector pins cleared. Automatic non-overlapping routing is controlling this relationship again.",
     );
-  }, [recordCurrentState, selectedEdge, setEdges]);
+  }, [recordCurrentState, selectedEdge, setEdges, setNotice]);
   const selectedCardCount = nodes.filter((flowNode) => flowNode.selected).length;
   const selectedParentEdge = edges.find((edge) => edge.target === selectedNode?.id);
   const findings = useMemo(
@@ -2556,7 +2564,7 @@ function StudioWorkspace() {
         `Applied ${label} to ${selectedCardCount} cards and pinned their positions. Only the selected cards moved; reporting lines did not change.`,
       );
     },
-    [recordCurrentState, selectedCardCount, setNodes],
+    [recordCurrentState, selectedCardCount, setNodes, setNotice],
   );
 
   const undoChange = useCallback(() => {
@@ -2571,7 +2579,7 @@ function StudioWorkspace() {
     setEdges(cloneEditorEdges(previous.edges));
     setSelectedId(previous.selectedId);
     setNotice(`Undid ${previous.label}.`);
-  }, [edges, nodes, selectedId, setEdges, setNodes, undoStack]);
+  }, [edges, nodes, selectedId, setEdges, setNodes, undoStack, setNotice]);
 
   const redoChange = useCallback(() => {
     const next = redoStack.at(-1);
@@ -2585,7 +2593,7 @@ function StudioWorkspace() {
     setEdges(cloneEditorEdges(next.edges));
     setSelectedId(next.selectedId);
     setNotice(`Redid ${next.label}.`);
-  }, [edges, nodes, redoStack, selectedId, setEdges, setNodes]);
+  }, [edges, nodes, redoStack, selectedId, setEdges, setNodes, setNotice]);
 
   useEffect(() => {
     const handleHistoryShortcut = (event: KeyboardEvent) => {
@@ -2811,7 +2819,7 @@ function StudioWorkspace() {
         void fitView({ nodes: [{ id: visibleId }], duration: 420, padding: 1.8 });
       });
     },
-    [compactPresentation.listedNodeIds, compactPresentation.parentById, fitView, presentationMode],
+    [compactPresentation.listedNodeIds, compactPresentation.parentById, fitView, presentationMode, setWorkspaceView],
   );
 
   const resolveCardSourceReview = (
@@ -2925,32 +2933,7 @@ function StudioWorkspace() {
     if (nextSummary) openChart(nextSummary.chart, "review");
   };
 
-  const handleSearch = (value: string) => {
-    setSearchQuery(value);
-    const query = value.trim().toLowerCase();
-    if (query.length < 2) return;
-
-    const match = nodes.find((flowNode) =>
-      [
-        flowNode.data.unit.name,
-        flowNode.data.unit.shortName,
-        flowNode.data.unit.positionTitle,
-        flowNode.data.unit.assignmentLabel,
-      ].some((candidate) => candidate.toLowerCase().includes(query)),
-    );
-
-    if (match) {
-      setSelectedId(match.id);
-      setCollapsedIds(new Set());
-      const visibleId =
-        presentationMode === "compact" && compactPresentation.listedNodeIds.has(match.id)
-          ? (compactPresentation.parentById.get(match.id) ?? match.id)
-          : match.id;
-      window.requestAnimationFrame(() => {
-        void fitView({ nodes: [{ id: visibleId }], duration: 420, padding: 1.8 });
-      });
-    }
-  };
+  const handleSearch = (value: string) => {setSearchQuery(value);setSearchOpen(true);};
 
   const handleNodeClick: NodeMouseHandler<OrgFlowNode> = (_event, flowNode) => {
     dismissedSelectionIdsRef.current.clear();
@@ -3282,7 +3265,7 @@ function StudioWorkspace() {
 
   const updateChartMetadata = async (
     chart: ChartDocument,
-    patch: Partial<Pick<ChartDocument, "name" | "description">>,
+    patch: Partial<Pick<ChartDocument, "name" | "description" | "libraryParentId">>,
   ) => {
     if (chart.status === "archived") {
       setNotice("Archived charts are read-only. Restore this chart as a Draft before editing it.");
@@ -3375,6 +3358,7 @@ function StudioWorkspace() {
           expectedUpdatedAt: chart.updatedAt,
           currentBy: String(formData.get("currentBy") ?? "").trim(),
           approvalNote: String(formData.get("approvalNote") ?? "").trim(),
+          acknowledgeReview:formData.get("acknowledgeReview")==="on",
         }),
       });
       const data = (await response.json()) as {
@@ -3402,7 +3386,7 @@ function StudioWorkspace() {
       }
       setNotice(
         targetStatus === "current"
-          ? `${data.chart.name} is now Current. Version ${data.chart.version} is the approved checkpoint.`
+          ? `${data.chart.name} is now Current. Version ${data.chart.version} is the designated checkpoint; source notes remain visible.`
           : targetStatus === "archived"
             ? `${data.chart.name} is archived and read-only. It is hidden from the active library view.`
             : targetStatus === "in_review"
@@ -3578,7 +3562,7 @@ function StudioWorkspace() {
       paused: false,
       chartScope: "all" as const,
       allowedChartIds: [],
-      sourceAccessEnabled: false,
+      sourceAccessEnabled: true,
       revision: 0,
       events: [],
     };
@@ -3829,8 +3813,8 @@ function StudioWorkspace() {
       if (settings.backupDirectory) {
         setStorageMessage(
           settings.backupIsCloudSynced
-            ? "Cloud-synced backup folder set. Encrypted or explicitly confirmed unencrypted .orgchart-backup files can be saved here."
-            : "Backup folder set. Encrypted or explicitly confirmed unencrypted backups will be saved directly to this separate location.",
+            ? "Cloud-synced backup folder set. Encrypted or unencrypted .orgchart-backup files can be saved here."
+            : "Backup folder set. Encrypted or unencrypted backups will be saved directly to this separate location.",
         );
       }
     } catch (error) {
@@ -3914,11 +3898,6 @@ function StudioWorkspace() {
         setBackupMessage("The backup passphrases do not match.");
         return;
       }
-    } else {
-      if (!unencryptedBackupConfirmed) {
-        setBackupMessage("Confirm that you understand the unencrypted backup will be readable.");
-        return;
-      }
     }
 
     setBackupBusy("export");
@@ -3956,10 +3935,9 @@ function StudioWorkspace() {
       }
       setBackupPassphrase("");
       setBackupPassphraseConfirm("");
-      setUnencryptedBackupConfirmed(false);
       const protectionLabel = backupProtection === "encrypted" ? "Encrypted" : "Unencrypted";
       setBackupMessage(
-        `${protectionLabel} backup created with ${data.chartCount} charts, ${data.versionCount ?? 0} saved versions, ${data.aiActivityCount ?? 0} AI review records, and ${data.sourceFileCount} stored source files.${savedBackup ? ` Saved to ${savedBackup.path}.` : " Downloaded through the browser."}`,
+        `${protectionLabel} backup created with ${data.chartCount} charts, ${data.versionCount ?? 0} saved versions, ${data.aiActivityCount ?? 0} AI review records, ${data.checkpoints?.length ?? 0} historical checkpoints, ${data.monthlyUpdates?.length ?? 0} monthly updates, and ${data.sourceFileCount} stored source files.${savedBackup ? ` Saved to ${savedBackup.path}.` : " Downloaded through the browser."}`,
       );
       saveBackupHealth({
         ...backupHealth,
@@ -4185,7 +4163,15 @@ function StudioWorkspace() {
         (change) => aiReviewCategory === "all" || change.category === aiReviewCategory,
       )
     : [];
-  const nextPendingAiProposal = pendingAiProposalSummaries[0];
+  const pendingUpdateReviews = pendingAiProposalSummaries.filter((item) => item.proposedStatus !== "archived");
+  const pendingArchiveReviews = pendingAiProposalSummaries.filter((item) => item.proposedStatus === "archived");
+  const effectivePendingReviewScope = pendingReviewScope === "updates"
+    ? pendingUpdateReviews.length ? "updates" : "archives"
+    : pendingArchiveReviews.length ? "archives" : "updates";
+  const visiblePendingReviews = effectivePendingReviewScope === "archives" ? pendingArchiveReviews : pendingUpdateReviews;
+  const nextPendingAiProposal = visiblePendingReviews.find((item) => item.id === pendingReviewChoice)
+    ?? visiblePendingReviews.find((item) => item.chartId === activeChart?.id)
+    ?? visiblePendingReviews[0];
   const reviewNeedsAttention =
     pendingAiProposal !== null ||
     pendingAiImportProposal !== null ||
@@ -4219,6 +4205,7 @@ function StudioWorkspace() {
         detailPanelVisible ? " studio-shell--detail-open" : ""
       }`}
     >
+      <DesktopRecovery charts={charts} activeChart={activeChart} nodes={nodes} edges={edges} saveState={saveState} onRecover={(draft,chart)=>{if(saveState!=="saved")return;openChart(chart);setNodes(draft.nodes);setEdges(draft.edges);setWorkspaceView("canvas");setNotice("Editor recovery copy restored for review. Saving automatically…");}}/>
       <div className="mcp-activity-frame" aria-hidden="true" />
       {mcpActivityVisible ? (
         <section
@@ -4280,19 +4267,37 @@ function StudioWorkspace() {
           </span>
         </div>
 
-        <label className="global-search">
+        <div className="global-search" role="search">
           <MagnifyingGlass size={18} aria-hidden="true" />
           <span className="sr-only">Search units, positions, and assignments</span>
           <input
             ref={searchInputRef}
             type="search"
+            role="combobox"
+            aria-autocomplete="list"
             value={searchQuery}
             onChange={(event) => handleSearch(event.target.value)}
-            placeholder="Search units, positions, or assignments"
-            disabled={!activeChart}
+            aria-label="Search all organizations, people, or roles"
+            placeholder="Search all organizations, people, or roles"
+            onFocus={()=>setSearchOpen(true)}
+            onKeyDown={event=>{if(event.key==="Escape")setSearchOpen(false);}}
+            aria-expanded={searchOpen&&!!searchQuery.trim()}
+            aria-controls="library-search-results"
           />
           <kbd>/</kbd>
-        </label>
+          {searchOpen&&searchQuery.trim()?<div className="global-search-results" id="library-search-results" role="region" aria-label="Library search results">
+            <div><strong>{librarySearchResults.length} matching records</strong><button type="button" onClick={()=>setSearchOpen(false)} aria-label="Close search results">×</button></div>
+            <label><input type="checkbox" checked={searchArchives} onChange={e=>setSearchArchives(e.target.checked)}/>Include archived charts</label>
+            <button type="button" className="button button--secondary" onClick={()=>{setSearchOpen(false);setWorkspaceView("history");}}>Search historical checkpoints</button>
+            <div className="global-search-list">{librarySearchResults.map((r,i)=><button type="button" key={r.chartId+":"+r.nodeId+":"+i} onClick={()=>{
+              const chart=charts.find(c=>c.id===r.chartId);if(!chart)return;
+              if(saveState!=="saved"){setNotice("Wait for Saved before opening a search result.");return;}
+              openChart(chart);setSearchOpen(false);setSearchQuery("");setSelectedId(r.nodeId??"");setCollapsedIds(new Set());
+              if(r.nodeId){const presentation=deriveCompactPresentation(chart.nodes,chart.edges);const visibleId=presentationMode==="compact"&&presentation.listedNodeIds.has(r.nodeId)?presentation.parentById.get(r.nodeId)??r.nodeId:r.nodeId;window.requestAnimationFrame(()=>{void fitView({nodes:[{id:visibleId}],duration:420,padding:1.8});});}
+            }}><strong>{r.person||r.organization}</strong><span>{r.role}{r.person?` · ${r.organization}`:""}</span><small>{r.chartName} · {r.status.replace("_"," ")}</small></button>)}</div>
+            {!librarySearchResults.length?<p>No active matches. Include archived charts or search history.</p>:null}
+          </div>:null}
+        </div>
 
         <button
           type="button"
@@ -4327,6 +4332,7 @@ function StudioWorkspace() {
             </select>
           </label>
           <span className="version-chip">{version}</span>
+          {activeChart&&activeChart.status!=="current"&&activeChart.status!=="archived"?<button type="button" className="save-retry-button" onClick={()=>requestLifecycleTransition(activeChart,"current")}>Mark Current</button>:null}
           <span className={`save-status save-status--${saveState}`}>
             {saveState === "saving"
               ? "Saving"
@@ -4435,6 +4441,8 @@ function StudioWorkspace() {
               <span className="nav-count nav-count--neutral">0</span>
             )}
           </button>
+          <button type="button" className={workspaceView==="monthly"?"is-active":""} onClick={()=>setWorkspaceView("monthly")}><ClockCounterClockwise size={19} aria-hidden="true"/><span>Monthly updates</span></button>
+          <button type="button" className={workspaceView==="consistency"?"is-active":""} onClick={()=>setWorkspaceView("consistency")}><ShieldWarning size={19} aria-hidden="true"/><span>Consistency & priorities</span><span className="nav-count nav-count--warning">{portfolioIssues.length}</span></button>
           <button
             type="button"
             className={workspaceView === "sources" ? "is-active" : ""}
@@ -4483,7 +4491,7 @@ function StudioWorkspace() {
             disabled={!activeChart}
           >
             <ClockCounterClockwise size={19} aria-hidden="true" />
-            <span>Version history</span>
+            <span>History / Timeline</span>
             <span className="nav-count nav-count--neutral">
               {versions.length || activeChart?.version || 0}
             </span>
@@ -4520,18 +4528,33 @@ function StudioWorkspace() {
                 {pendingAiProposalSummaries.length === 1 ? "" : "s"} awaiting review
               </strong>
               <span>
-                Nothing has been applied. Review the Before and After fields to decide what
-                happens to the saved chart.
+                Saved locally until you decide. Nothing has been applied.
               </span>
             </span>
-            <button
-              type="button"
-              className="button button--primary"
-              onClick={() => void reviewPendingAiProposal(nextPendingAiProposal.id)}
-              disabled={aiProposalBusy !== null}
-            >
-              {aiProposalBusy === "load" ? "Opening…" : "Review proposal"}
-            </button>
+            <div className="pending-review-banner__actions">
+              <label className="pending-review-banner__chooser">
+                Review set
+                <select aria-label="Review set" value={effectivePendingReviewScope}
+                  onChange={(event) => { setPendingReviewScope(event.target.value as "updates" | "archives"); setPendingReviewChoice(""); }}>
+                  <option value="updates" disabled={!pendingUpdateReviews.length}>Chart updates ({pendingUpdateReviews.length})</option>
+                  <option value="archives" disabled={!pendingArchiveReviews.length}>Archive proposals ({pendingArchiveReviews.length})</option>
+                </select>
+              </label>
+              <label className="pending-review-banner__chooser">
+                Chart to review
+                <select aria-label="Chart to review" value={nextPendingAiProposal.id}
+                  onChange={(event) => setPendingReviewChoice(event.target.value)}>
+                  {visiblePendingReviews.map((item) => (
+                    <option key={item.id} value={item.id}>{item.chartName}</option>
+                  ))}
+                </select>
+              </label>
+              <button type="button" className="button button--primary"
+                onClick={() => void reviewPendingAiProposal(nextPendingAiProposal.id)}
+                disabled={aiProposalBusy !== null}>
+                {aiProposalBusy === "load" ? "Opening…" : "Review proposal"}
+              </button>
+            </div>
           </section>
         ) : null}
         <section className="prototype-notice" aria-live="polite">
@@ -5298,7 +5321,7 @@ function StudioWorkspace() {
                   ) : activeChart?.status === "current" ? (
                     <strong>
                       Current v{activeChart.lifecycle.lastCurrentVersion ?? activeChart.version} is
-                      the approved checkpoint.
+                      the Current checkpoint.
                     </strong>
                   ) : null}
                   {hasAnotherChartForSourceReview ? (
@@ -5319,7 +5342,7 @@ function StudioWorkspace() {
                 {visibleSourceReviewNodes.map((flowNode) => {
                   const parentEdge = edges.find((edge) => edge.target === flowNode.id);
                   return (
-                    <article key={flowNode.id} className="source-review-item">
+                    <article id={`source-review-${flowNode.id}`} key={flowNode.id} className="source-review-item">
                       <header>
                         <span className="source-review-item__kind">Card</span>
                         <span className="source-review-item__status">Needs review</span>
@@ -5580,6 +5603,7 @@ function StudioWorkspace() {
                   <option value="filled">Filled</option>
                   <option value="acting">Acting</option>
                   <option value="vacant">Recorded vacant</option>
+                  <option value="not_specified">Not specified in source</option>
                 </select>
               </label>
               <label>
@@ -5729,7 +5753,7 @@ function StudioWorkspace() {
               </table>
             </div>
           </section>
-        ) : workspaceView === "library" ? (
+        ) : workspaceView === "monthly" ? <MonthlyWorkspace charts={charts} saveState={saveState} onOpen={id=>{const chart=charts.find(c=>c.id===id);if(chart)openChart(chart);}} onMarkCurrent={chart=>requestLifecycleTransition(chart,"current")} onRefresh={async()=>{const response=await fetch("/api/charts",{cache:"no-store"});if(!response.ok)throw Error("The library could not be refreshed.");const data=await response.json() as ChartLibraryResponse;hydratedChartRef.current=null;setCharts(data.charts);const updated=data.charts.find(c=>c.id===activeChartId);if(updated){setNodes(updated.nodes);setEdges(updated.edges);setSaveState("saved");window.requestAnimationFrame(()=>{hydratedChartRef.current=updated.id;});}}}/> : workspaceView === "consistency" ? <PortfolioReview charts={charts} onOpen={(id,nodeId,view)=>{const chart=charts.find(c=>c.id===id);if(!chart)return;if(saveState!=="saved"){setNotice("Wait for Saved before opening another review.");return;}openChart(chart,view??"review");if(nodeId){setSelectedId(nodeId);if(view==="review")window.requestAnimationFrame(()=>document.getElementById(`source-review-${nodeId}`)?.scrollIntoView({block:"center"}));}}}/> : workspaceView === "library" ? (
           <section className="library-panel" aria-labelledby="library-title">
             <div className="library-heading">
               <div>
@@ -5783,9 +5807,13 @@ function StudioWorkspace() {
               <p>Chart lifecycle is authoritative; names and descriptions do not determine whether a chart is Current.</p>
             </div>
 
+            <div className="library-view-controls" role="group" aria-label="Chart library view">
+              <button type="button" aria-pressed={libraryView==="flat"} disabled={!libraryViewReady} onClick={()=>void chooseLibraryView("flat")}>Flat list</button>
+              <button type="button" aria-pressed={libraryView==="tree"} disabled={!libraryViewReady} onClick={()=>void chooseLibraryView("tree")}>Organization tree</button>
+            </div>
             {libraryLoading ? (
               <div className="library-empty" role="status">Loading chart library…</div>
-            ) : visibleLibraryCharts.length ? (
+            ) : libraryView==="tree" ? <LibraryTree charts={treeCharts} query={searchQuery} onOpen={openChart} onPlace={(chart,parent)=>void updateChartMetadata(chart,{libraryParentId:parent})}/> : visibleLibraryCharts.length ? (
               <div className="chart-card-grid">
                 {visibleLibraryCharts.map((chart) => (
                   <article
@@ -5807,7 +5835,7 @@ function StudioWorkspace() {
                         >
                           <option value="draft">Draft</option>
                           <option value="in_review" disabled={chart.status !== "draft" && chart.status !== "in_review"}>In review</option>
-                          <option value="current" disabled={chart.status !== "in_review" && chart.status !== "current"}>Current</option>
+                          <option value="current" disabled={chart.status === "archived"}>Current</option>
                           <option value="archived">Archived</option>
                         </select>
                       </label>
@@ -6010,7 +6038,7 @@ function StudioWorkspace() {
               <div className="publication-warning" role="status">
                 <WarningDiamond size={20} aria-hidden="true" />
                 <p>
-                  <strong>{chartStatusLabels[activeChart.status]} chart.</strong> Export remains available, but every visual file and table will be marked {chartStatusLabels[activeChart.status]}. Only Current means approved and authoritative.
+                  <strong>{chartStatusLabels[activeChart.status]} chart.</strong> Export remains available, but every visual file and table will be marked {chartStatusLabels[activeChart.status]}. Current identifies the designated working version; source review notes can remain.
                 </p>
               </div>
             ) : activeChart?.lifecycle.lastCurrentAt ? (
@@ -6131,6 +6159,7 @@ function StudioWorkspace() {
           </section>
         ) : workspaceView === "history" ? (
           <section className="history-panel" aria-labelledby="history-title">
+            <HistoryTimeline charts={charts} initialQuery={searchQuery}/>
             <div className="history-heading">
               <div>
                 <span className="eyebrow">Immutable working checkpoints</span>
@@ -6156,7 +6185,7 @@ function StudioWorkspace() {
                 <h2>{activeChart?.name ?? "No active chart"}</h2>
                 <p>
                   {activeChart?.status === "current"
-                    ? "This Current chart already points to its approved immutable checkpoint. Editing it will begin a Draft."
+                    ? "This Current chart already points to its designated immutable checkpoint. Editing it will begin a Draft."
                     : activeChart?.status === "archived"
                       ? "Archived charts are read-only. Restore a saved version to begin a new Draft without deleting history."
                       : "Autosave protects the open working chart. A named version creates an immutable comparison and recovery point."}
@@ -6359,8 +6388,8 @@ function StudioWorkspace() {
                     OrgChart Studio must be open before you ask AI to read or propose a change.
                   </p>
                   <p className="ai-integration-card__privacy">
-                    Chart data stays in the storage folder you chose. Source extraction remains
-                    off unless you enable it for the running session.
+                    Chart data stays in the storage folder you chose. Source extraction is enabled
+                    by default; your access preferences are remembered.
                   </p>
                 </div>
                 <div className="ai-integration-card__actions">
@@ -6430,7 +6459,7 @@ function StudioWorkspace() {
 
             <div className="ai-control-layout">
               <fieldset className="ai-control-scope">
-                <legend>Chart access for this running app session</legend>
+                <legend>Chart access</legend>
                 <label>
                   <input
                     type="radio"
@@ -6477,15 +6506,15 @@ function StudioWorkspace() {
                 <label>
                   <input
                     type="checkbox"
-                    checked={mcpControl?.sourceAccessEnabled ?? false}
+                    checked={mcpControl?.sourceAccessEnabled ?? true}
                     onChange={(event) =>
                       void updateMcpControl({ sourceAccessEnabled: event.target.checked })
                     }
                   />
                   <span>
-                    <strong>Allow retained-source extraction for this session</strong>
+                    <strong>Allow retained-source extraction</strong>
                     <small>
-                      Off by default. When enabled and explicitly requested, MCP may return
+                      Enabled by default. Your preference is remembered. When explicitly requested, MCP may return
                       locally extracted text, spreadsheet cells, PowerPoint shape geometry,
                       and connector metadata to the AI conversation. Raw files are never returned.
                     </small>
@@ -7058,8 +7087,8 @@ function StudioWorkspace() {
                       </code>
                       <p>
                         {desktopStorage.backupIsCloudSynced
-                          ? "Encrypted or explicitly confirmed unencrypted .orgchart-backup packages may be saved here. Choose protection each time you run a backup."
-                          : "Encrypted or explicitly confirmed unencrypted .orgchart-backup packages may be saved here."}
+                          ? "Encrypted or unencrypted .orgchart-backup packages may be saved here. Choose protection each time you run a backup."
+                          : "Encrypted or unencrypted .orgchart-backup packages may be saved here."}
                       </p>
                       <button
                         type="button"
@@ -7189,11 +7218,10 @@ function StudioWorkspace() {
                           checked={backupProtection === "encrypted"}
                           onChange={() => {
                             setBackupProtection("encrypted");
-                            setUnencryptedBackupConfirmed(false);
                           }}
                         />
                         <span>
-                          <strong>Encrypted (recommended)</strong>
+                          <strong>Encrypted (optional)</strong>
                           <small>Requires a passphrase to read or restore the backup</small>
                         </span>
                       </label>
@@ -7204,11 +7232,10 @@ function StudioWorkspace() {
                           checked={backupProtection === "unencrypted"}
                           onChange={() => {
                             setBackupProtection("unencrypted");
-                            setUnencryptedBackupConfirmed(false);
                           }}
                         />
                         <span>
-                          <strong>Unencrypted</strong>
+                          <strong>Unencrypted (default)</strong>
                           <small>Readable JSON package with no passphrase</small>
                         </span>
                       </label>
@@ -7247,14 +7274,7 @@ function StudioWorkspace() {
                       <div>
                         <strong>No encryption will be applied</strong>
                         <p>Anyone with this file can read its chart data, source records, and retained source files.</p>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={unencryptedBackupConfirmed}
-                            onChange={(event) => setUnencryptedBackupConfirmed(event.target.checked)}
-                          />
-                          <span>I understand this backup will not be protected by a passphrase.</span>
-                        </label>
+
                       </div>
                     </div>
                   )}
@@ -7265,8 +7285,7 @@ function StudioWorkspace() {
                       backupBusy !== null ||
                       !charts.length ||
                       desktopBackupDestinationMissing ||
-                      (backupScope === "selected" && !selectedBackupCharts.length) ||
-                      (backupProtection === "unencrypted" && !unencryptedBackupConfirmed)
+                      (backupScope === "selected" && !selectedBackupCharts.length)
                     }
                     onClick={() => void createBackup()}
                   >
@@ -7298,7 +7317,7 @@ function StudioWorkspace() {
 
                 <div className="backup-action">
                   <div><span>02</span><h3>Restore without overwriting</h3></div>
-                  <p>Restore is merge-only. Every recovered chart receives a new ID and returns as a draft.</p>
+                  <p>Restore is merge-only. Recovered charts receive new IDs; lifecycle states and historical checkpoints are preserved.</p>
                   <label className="backup-file-picker">
                     <UploadSimple size={22} aria-hidden="true" />
                     <span>{backupFile?.name ?? "Choose backup file"}</span>
@@ -7490,6 +7509,7 @@ function StudioWorkspace() {
                     <option value="filled">Filled</option>
                     <option value="acting">Acting</option>
                     <option value="vacant">Vacant</option>
+                    <option value="not_specified">Not specified in source</option>
                   </select>
                 </label>
               </div>
@@ -7657,7 +7677,7 @@ function StudioWorkspace() {
             <header className="ai-review-panel__header">
               <div>
                 <span className="eyebrow">AI proposal · your decision required</span>
-                <h2 id="ai-review-title">Review before applying</h2>
+                <h2 id="ai-review-title">{pendingAiProposal.proposed.status === "archived" ? "Review archive from active library" : "Review before applying"}</h2>
                 <p>
                   <strong>Nothing has changed yet.</strong> The canvas is showing a temporary
                   preview; the saved chart remains unchanged until you apply this proposal.
@@ -7735,10 +7755,7 @@ function StudioWorkspace() {
                   the chart unchanged.
                 </p>
                 <small>
-                  This proposal is available until {new Intl.DateTimeFormat(undefined, {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  }).format(new Date(pendingAiProposal.expiresAt))}.
+                  Saved locally until you decide. If the chart changes first, prepare a fresh proposal.
                 </small>
               </div>
               {aiProposalError ? (
@@ -7775,7 +7792,7 @@ function StudioWorkspace() {
                   aria-busy={aiProposalBusy === "accept"}
                 >
                   <Check size={17} weight="bold" aria-hidden="true" />
-                  {aiProposalBusy === "accept" ? "Applying…" : "Apply change to chart"}
+                  {aiProposalBusy === "accept" ? "Applying…" : pendingAiProposal.proposed.status === "archived" ? "Archive from active library" : "Apply change to chart"}
                 </button>
               </div>
             </footer>
@@ -8063,8 +8080,9 @@ function StudioWorkspace() {
                       <li>A new immutable named checkpoint will be created automatically</li>
                     </ul>
                   </div>
+                  {lifecycleReadiness?.reviewItems?<label className="lifecycle-acknowledgment"><input type="checkbox" name="acknowledgeReview" required/>I am designating this as the current working chart with the unresolved source notes retained. This does not confirm those source facts.</label>:null}
                   <label className="editor-field">
-                    <span>Reviewed and marked Current by</span>
+                    <span>Designated Current by</span>
                     <input name="currentBy" required maxLength={120} autoFocus placeholder="Your name or accountable owner" />
                   </label>
                   <label className="editor-field">

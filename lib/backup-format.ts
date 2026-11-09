@@ -1,9 +1,11 @@
+import type { HistoryCheckpoint, MonthlyUpdate } from "./chart-history";
 import type { ChartDocument, ChartVersion } from "./chart-library";
 import type { AiActivityRecord } from "./ai-change-review";
 
 export const LIBRARY_BACKUP_FORMAT = "orgchart-studio-library-backup" as const;
-export const LIBRARY_BACKUP_VERSION = 4 as const;
-export const ENCRYPTED_BACKUP_FORMAT = "orgchart-studio-encrypted-backup" as const;
+export const LIBRARY_BACKUP_VERSION = 5 as const;
+export const ENCRYPTED_BACKUP_FORMAT =
+  "orgchart-studio-encrypted-backup" as const;
 export const ENCRYPTED_BACKUP_VERSION = 1 as const;
 
 export type LibraryBackupScope = "all" | "selected";
@@ -24,7 +26,7 @@ export interface BackupSourceFile {
 
 export interface LibraryBackup {
   format: typeof LIBRARY_BACKUP_FORMAT;
-  schemaVersion: 1 | 2 | 3 | typeof LIBRARY_BACKUP_VERSION;
+  schemaVersion: 1 | 2 | 3 | 4 | typeof LIBRARY_BACKUP_VERSION;
   scope?: LibraryBackupScope;
   exportedAt: string;
   chartCount: number;
@@ -35,13 +37,17 @@ export interface LibraryBackup {
   chartVersions?: ChartVersion[];
   aiActivities?: AiActivityRecord[];
   sourceFiles: BackupSourceFile[];
+  checkpoints?: HistoryCheckpoint[];
+  monthlyUpdates?: MonthlyUpdate[];
 }
 
 export function resolveBackupSelection(
   availableChartIds: string[],
   requestedChartIds: string[],
 ): BackupSelection {
-  const availableIds = [...new Set(availableChartIds.map((id) => id.trim()).filter(Boolean))];
+  const availableIds = [
+    ...new Set(availableChartIds.map((id) => id.trim()).filter(Boolean)),
+  ];
   const availableIdSet = new Set(availableIds);
   const requestedIds = [
     ...new Set(requestedChartIds.map((id) => id.trim()).filter(Boolean)),
@@ -82,19 +88,34 @@ export function isLibraryBackup(value: unknown): value is LibraryBackup {
     (candidate.schemaVersion === 1 ||
       candidate.schemaVersion === 2 ||
       candidate.schemaVersion === 3 ||
+      candidate.schemaVersion === 4 ||
       candidate.schemaVersion === LIBRARY_BACKUP_VERSION) &&
     typeof candidate.exportedAt === "string" &&
     (candidate.scope === undefined ||
       candidate.scope === "all" ||
       candidate.scope === "selected") &&
     Array.isArray(candidate.charts) &&
+    candidate.charts.every(
+      (c) =>
+        c &&
+        typeof c === "object" &&
+        typeof c.id === "string" &&
+        Array.isArray(c.nodes) &&
+        Array.isArray(c.edges) &&
+        Array.isArray(c.sources),
+    ) &&
     Array.isArray(candidate.sourceFiles) &&
     (candidate.schemaVersion === 1 || Array.isArray(candidate.chartVersions)) &&
-    (candidate.schemaVersion < 3 || Array.isArray(candidate.aiActivities))
+    (candidate.schemaVersion < 3 || Array.isArray(candidate.aiActivities)) &&
+    (candidate.schemaVersion < 5 ||
+      (Array.isArray(candidate.checkpoints) &&
+        Array.isArray(candidate.monthlyUpdates)))
   );
 }
 
-export function isEncryptedLibraryBackup(value: unknown): value is EncryptedLibraryBackup {
+export function isEncryptedLibraryBackup(
+  value: unknown,
+): value is EncryptedLibraryBackup {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<EncryptedLibraryBackup>;
   return (

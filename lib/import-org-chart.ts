@@ -477,7 +477,7 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
   const findings: ValidationFinding[] = [];
   const ids = new Set<string>();
   const allowedTypes = new Set<UnitType>(UNIT_TYPES);
-  const allowedStatuses = new Set<PositionStatus>(["filled", "acting", "vacant"]);
+  const allowedStatuses = new Set<PositionStatus>(["filled", "acting", "vacant", "not_specified"]);
 
   if (!rows.length) {
     findings.push({
@@ -809,7 +809,7 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
             message: `Unit ${node.id} has unsupported type ${node.data.unit.type}.`,
           });
         }
-        if (!["filled", "acting", "vacant"].includes(node.data.unit.positionStatus)) {
+        if (!["filled", "acting", "vacant", "not_specified"].includes(node.data.unit.positionStatus)) {
           findings.push({
             code: "INVALID_POSITION_STATUS",
             severity: "blocking",
@@ -925,7 +925,7 @@ ${JSON.stringify(Object.fromEntries(importColumns.map((column) => [column, ""]))
 - Use parentId to reference the id of the single primary parent.
 - Leave parentId empty for exactly one root unit.
 - type must be one of: ${UNIT_TYPES.join(", ")}.
-- positionStatus must be filled, acting, or vacant.
+- positionStatus must be filled, acting, vacant, or not_specified. Use not_specified when the source does not identify an assignment; use vacant only for an explicit vacancy.
 - publicationVisibility must be internal or public; use internal when the source does not establish approval for public display.
 - sourceLocator should identify the supporting slide, page, worksheet row, or other precise location when available.
 - sourceCertainty must be confirmed, inferred, or needs_review. Use needs_review rather than hiding an unresolved source issue.
@@ -933,7 +933,7 @@ ${JSON.stringify(Object.fromEntries(importColumns.map((column) => [column, ""]))
 - planningState must be current or planned. A planned unit must have a meaningful future effectiveDate.
 - relationshipType must be primary supervisory or secondary supervisory when parentId is supplied.
 - relationshipSourceLocator, relationshipSourceCertainty, and relationshipReviewNote describe the reporting line separately from the card. Never copy a card's confidence onto its reporting line unless the source independently supports both.
-- Keep assignmentLabel empty or use Position vacant when a person is not supplied.
+- Keep assignmentLabel empty when a person is not supplied and use not_specified status. Use Position vacant and vacant status only when the source explicitly identifies a vacancy.
 - When a visual card contains a person and role, split them into assignmentLabel and positionTitle and mark the position filled or acting as supported by the source. Do not store a visible person as a vacant organizational unit.
 - Treat stacked labels, shaded strips, legends, client portfolios, coverage areas, specialties, and service lists as descriptive content unless an explicit connector or source statement establishes that they are separate reporting units. Preserve descriptive content in source or reviewNote instead of inventing child units.
 - A row of staff cards connected to one shared reporting line normally represents siblings under the same parent. Do not chain adjacent staff cards or their descriptive lists together because of reading order or proximity.

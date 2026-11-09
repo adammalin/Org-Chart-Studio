@@ -59,6 +59,15 @@ function managedBlock({ projectRoot, executablePath, runtimePath, runAsNode }) {
     "replace_chart_draft",
     "stage_source_recheck",
     "save_chart_version",
+      "search_library",
+      "list_history",
+      "get_history_checkpoint",
+      "list_monthly_updates",
+      "begin_monthly_update",
+      "complete_monthly_update",
+      "check_chart_consistency",
+      "get_monthly_update_status",
+      "answer_saved_history",
   ];
   const command = executablePath ?? "/bin/zsh";
   const args = executablePath ? [mcpServer] : [launcher];

@@ -10,7 +10,7 @@ export interface LifecycleReadiness {
 }
 
 const allowedTransitions: Record<ChartStatus, ChartStatus[]> = {
-  draft: ["in_review", "archived"],
+  draft: ["in_review", "current", "archived"],
   in_review: ["draft", "current", "archived"],
   current: ["draft", "archived"],
   archived: ["draft"],
@@ -43,11 +43,6 @@ export function currentReadiness(
       `${structuralBlockers} blocking structure issue${structuralBlockers === 1 ? "" : "s"} must be resolved.`,
     );
   }
-  if (reviewItems) {
-    blockingReasons.push(
-      `${reviewItems} source review item${reviewItems === 1 ? "" : "s"} must be resolved.`,
-    );
-  }
   return {
     ready: blockingReasons.length === 0,
     blockingReasons,
@@ -64,9 +59,6 @@ export function lifecycleTransitionError(
     return `A ${chart.status.replace("_", " ")} chart cannot move directly to ${targetStatus.replace("_", " ")}.`;
   }
   if (targetStatus === "current") {
-    if (chart.status !== "in_review") {
-      return "Only a chart that is In review can be marked Current.";
-    }
     const readiness = currentReadiness(chart);
     if (!readiness.ready) return readiness.blockingReasons.join(" ");
   }

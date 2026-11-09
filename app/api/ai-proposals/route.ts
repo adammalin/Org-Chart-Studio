@@ -1,3 +1,4 @@
+import { decideProposals, DecisionError } from "../../../lib/proposal-decisions";
 import { ensureSchema, getBindings } from "../../../db";
 import {
   diffChartDocuments,
@@ -12,7 +13,9 @@ import {
   type ChartStatus,
   type SourceRecord,
 } from "../../../lib/chart-library";
+import { archiveProposalError, proposalTargetStatus } from "../../../lib/proposal-lifecycle";
 import { validateHierarchy } from "../../../lib/org-chart";
+import { listPendingProposalSummaries, getPendingProposal, savePendingProposal } from "../../../lib/pending-proposal-store";
 
 interface ChartRow {
   id: string;
@@ -55,38 +58,7 @@ interface ActivityRow {
   version_label: string | null;
 }
 
-interface ProposalStore {
-  proposals: Map<string, AiChartProposal>;
-}
-
-const PROPOSAL_TTL_MS = 30 * 60_000;
-const MAX_PENDING_PROPOSALS = 20;
 const chartStatuses: ChartStatus[] = ["draft", "in_review", "current", "archived"];
-const proposalGlobal = globalThis as typeof globalThis & {
-  __orgChartAiProposalStore?: ProposalStore;
-};
-
-function proposalStore(): ProposalStore {
-  if (!proposalGlobal.__orgChartAiProposalStore) {
-    proposalGlobal.__orgChartAiProposalStore = { proposals: new Map() };
-  }
-  return proposalGlobal.__orgChartAiProposalStore;
-}
-
-function cleanProposalStore() {
-  const store = proposalStore();
-  const now = Date.now();
-  for (const [id, proposal] of store.proposals) {
-    if (Date.parse(proposal.expiresAt) <= now || proposal.status !== "pending") {
-      store.proposals.delete(id);
-    }
-  }
-  while (store.proposals.size >= MAX_PENDING_PROPOSALS) {
-    const oldest = store.proposals.keys().next().value as string | undefined;
-    if (!oldest) break;
-    store.proposals.delete(oldest);
-  }
-}
 
 function sourceFromRow(row: SourceRow): SourceRecord {
   return {
@@ -107,6 +79,7 @@ function sourceFromRow(row: SourceRow): SourceRecord {
 function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
   const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges"> & {
     lifecycle?: Partial<ChartDocument["lifecycle"]>;
+    libraryParentId?: string | null;
   };
   const status = normalizeChartStatus(row.status);
   return {
@@ -124,6 +97,7 @@ function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
       row.version,
       row.status === "approved",
     ),
+    libraryParentId: payload.libraryParentId,
     nodes: payload.nodes,
     edges: payload.edges,
     sources,
@@ -185,28 +159,17 @@ function noStoreJson(value: unknown, init: ResponseInit = {}) {
 export async function GET(request: Request) {
   const { DB } = getBindings();
   await ensureSchema(DB);
-  cleanProposalStore();
   const url = new URL(request.url);
   const proposalId = url.searchParams.get("proposalId");
   if (proposalId) {
-    const proposal = proposalStore().proposals.get(proposalId);
+    const proposal = await getPendingProposal(DB, proposalId);
     if (!proposal) {
-      return noStoreJson({ error: "This AI proposal expired or is no longer available." }, { status: 404 });
+      return noStoreJson({ error: "This AI proposal is no longer pending. Select the current review from the queue." }, { status: 404 });
     }
     return noStoreJson({ proposal });
   }
   if (url.searchParams.get("status") === "pending") {
-    const proposals = [...proposalStore().proposals.values()]
-      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
-      .map((proposal) => ({
-        id: proposal.id,
-        chartId: proposal.chartId,
-        chartName: proposal.chartName,
-        changeSummary: proposal.changeSummary,
-        createdAt: proposal.createdAt,
-        expiresAt: proposal.expiresAt,
-        summary: proposal.summary,
-      }));
+    const proposals = await listPendingProposalSummaries(DB);
     return noStoreJson({ proposals });
   }
   const chartId = url.searchParams.get("chartId");
@@ -222,7 +185,6 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const { DB } = getBindings();
   await ensureSchema(DB);
-  cleanProposalStore();
   const body = (await request.json()) as {
     action?: "stage" | "accept" | "reject";
     chart?: ChartDocument;
@@ -235,6 +197,7 @@ export async function POST(request: Request) {
     const error = validateEditableChart(proposed);
     if (error) return noStoreJson({ error }, { status: 422 });
     const current = await loadCurrentChart(DB, proposed.id);
+    if(current)proposed.libraryParentId=current.libraryParentId;
     if (!current) return noStoreJson({ error: "Chart not found." }, { status: 404 });
     if (current.status === "archived") {
       return noStoreJson(
@@ -252,7 +215,10 @@ export async function POST(request: Request) {
         { status: 409 },
       );
     }
-    const { changes, summary } = diffChartDocuments(current, proposed);
+    const archiveError = archiveProposalError(current, proposed);
+    if (archiveError) return noStoreJson({ error: archiveError }, { status: 422 });
+    const reviewed = { ...proposed, status: proposalTargetStatus(current.status, proposed.status) };
+    const { changes, summary } = diffChartDocuments(current, reviewed);
     if (!changes.length) {
       return noStoreJson({ error: "The proposed chart is identical to the current saved chart." }, { status: 422 });
     }
@@ -265,11 +231,10 @@ export async function POST(request: Request) {
       status: "pending",
       changeSummary: body.changeSummary?.trim().slice(0, 500) || null,
       createdAt: createdAt.toISOString(),
-      expiresAt: new Date(createdAt.getTime() + PROPOSAL_TTL_MS).toISOString(),
+      expiresAt: null,
       current,
       proposed: {
-        ...proposed,
-        status: current.status,
+        ...reviewed,
         lifecycle: current.lifecycle,
         createdAt: current.createdAt,
         sources: current.sources,
@@ -278,114 +243,13 @@ export async function POST(request: Request) {
       changes,
       summary,
     };
-    proposalStore().proposals.set(proposal.id, proposal);
+    await savePendingProposal(DB, proposal);
     return noStoreJson({ proposal }, { status: 201 });
   }
 
   if ((body.action === "accept" || body.action === "reject") && body.proposalId) {
-    const store = proposalStore();
-    const proposal = store.proposals.get(body.proposalId);
-    if (!proposal) {
-      return noStoreJson({ error: "This AI proposal expired or is no longer available." }, { status: 404 });
-    }
-    const current = await loadCurrentChart(DB, proposal.chartId);
-    if (!current) return noStoreJson({ error: "Chart not found." }, { status: 404 });
-    if (current.version !== proposal.current.version || current.updatedAt !== proposal.current.updatedAt) {
-      store.proposals.delete(proposal.id);
-      return noStoreJson(
-        { error: "The chart changed after this AI proposal was created. Ask the AI to prepare a fresh proposal." },
-        { status: 409 },
-      );
-    }
-
-    const createdAt = new Date().toISOString();
-    const activityId = `ai-event-${crypto.randomUUID()}`;
-    if (body.action === "reject") {
-      await DB.prepare(
-        `INSERT INTO ai_activity_events
-          (id, chart_id, proposal_id, operation, status, summary, change_count,
-           changed_node_ids, changed_edge_ids, created_at)
-         VALUES (?, ?, ?, ?, 'rejected', ?, ?, ?, ?, ?)`,
-      )
-        .bind(
-          activityId,
-          proposal.chartId,
-          proposal.id,
-          proposal.operation,
-          proposal.summary.text,
-          proposal.summary.total,
-          JSON.stringify(proposal.summary.changedNodeIds),
-          JSON.stringify(proposal.summary.changedEdgeIds),
-          createdAt,
-        )
-        .run();
-      store.proposals.delete(proposal.id);
-      return noStoreJson({ rejected: proposal.id });
-    }
-
-    const proposed = proposal.proposed;
-    const updatedAt = new Date().toISOString();
-    const returnedToDraft = current.status === "current";
-    const appliedChart: ChartDocument = {
-      ...proposed,
-      status: returnedToDraft ? "draft" : current.status,
-      version: current.version,
-      createdAt: current.createdAt,
-      updatedAt,
-      lifecycle: {
-        ...current.lifecycle,
-        statusChangedAt: returnedToDraft ? updatedAt : current.lifecycle.statusChangedAt,
-      },
-      sources: current.sources,
-      nodes: storageSafeNodes(proposed.nodes),
-    };
-    const result = await DB.prepare(
-      `UPDATE charts
-       SET name = ?, description = ?, status = ?, updated_at = ?, payload = ?
-       WHERE id = ? AND version = ? AND updated_at = ?`,
-    )
-      .bind(
-        appliedChart.name,
-        appliedChart.description,
-        appliedChart.status,
-        updatedAt,
-        JSON.stringify({
-          nodes: appliedChart.nodes,
-          edges: appliedChart.edges,
-          lifecycle: appliedChart.lifecycle,
-        }),
-        proposal.chartId,
-        proposal.current.version,
-        proposal.current.updatedAt,
-      )
-      .run();
-    if ((result.meta.changes ?? 0) !== 1) {
-      store.proposals.delete(proposal.id);
-      return noStoreJson(
-        { error: "The chart changed before the proposal could be applied. Ask the AI to prepare a fresh proposal." },
-        { status: 409 },
-      );
-    }
-    await DB.prepare(
-      `INSERT INTO ai_activity_events
-        (id, chart_id, proposal_id, operation, status, summary, change_count,
-         changed_node_ids, changed_edge_ids, created_at)
-       VALUES (?, ?, ?, ?, 'accepted', ?, ?, ?, ?, ?)`,
-    )
-      .bind(
-        activityId,
-        proposal.chartId,
-        proposal.id,
-        proposal.operation,
-        proposal.summary.text,
-        proposal.summary.total,
-        JSON.stringify(proposal.summary.changedNodeIds),
-        JSON.stringify(proposal.summary.changedEdgeIds),
-        createdAt,
-      )
-      .run();
-    store.proposals.delete(proposal.id);
-    return noStoreJson({ chart: appliedChart, activityId, returnedToDraft });
+    try{const result=await decideProposals(DB,[body.proposalId],body.action);const chart=result.charts[0];return noStoreJson(body.action==="reject"?{rejected:body.proposalId}:{chart,activityId:result.activityIds[0],returnedToDraft:chart.status==="draft"&&!!chart.lifecycle.lastCurrentAt});}
+    catch(error){return noStoreJson({error:error instanceof Error?error.message:"The review decision failed."},{status:error instanceof DecisionError?error.status:500});}
   }
 
   return noStoreJson({ error: "Unsupported AI proposal action." }, { status: 400 });

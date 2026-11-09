@@ -12,6 +12,8 @@ const requiredPaths = [
   "dist/client",
   "electron/main.cjs",
   "electron/preload.cjs",
+  "electron/runtime-recovery.cjs",
+  "electron/monthly-smoke.cjs",
   "mcp/server.mjs",
   "scripts/configure-orgchart-mcp.mjs",
   "scripts/run-packaged-wrangler.cjs",

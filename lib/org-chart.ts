@@ -15,7 +15,7 @@ export const UNIT_TYPES = [
 
 export type UnitType = (typeof UNIT_TYPES)[number];
 
-export type PositionStatus = "filled" | "acting" | "vacant";
+export type PositionStatus = "filled" | "acting" | "vacant" | "not_specified";
 
 export type PlanningState = "current" | "planned";
 

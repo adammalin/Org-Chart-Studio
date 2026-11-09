@@ -1,3 +1,5 @@
+import { checkpointFromRow, ensureHistoryBaselines, historyRestoreError, type CheckpointRow } from "../../../lib/chart-history";
+import { batchFromRow } from "../history/route";
 import { ensureSchema, getBindings } from "../../../db";
 import {
   LIBRARY_BACKUP_FORMAT,
@@ -19,11 +21,11 @@ import {
 } from "../../../lib/chart-library";
 import { parseImportFile } from "../../../lib/import-org-chart";
 
-const MAX_BACKUP_BYTES = 25_000_000;
+const MAX_BACKUP_BYTES = 250_000_000;
 const MAX_CHARTS = 200;
 const MAX_TOTAL_NODES = 25_000;
 const MAX_SOURCE_FILES = 1_000;
-const MAX_VERSIONS = 5_000;
+const MAX_VERSIONS = 50_000;
 const MAX_AI_ACTIVITIES = 10_000;
 
 interface ChartRow {
@@ -121,6 +123,7 @@ function sourceFromRow(row: SourceRow): SourceRecord {
 function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
   const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges"> & {
     lifecycle?: Partial<ChartDocument["lifecycle"]>;
+    libraryParentId?: string | null;
   };
   const status = normalizeChartStatus(row.status);
   return {
@@ -138,6 +141,7 @@ function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
       row.version,
       row.status === "approved",
     ),
+    libraryParentId: payload.libraryParentId,
     nodes: payload.nodes,
     edges: payload.edges,
     sources,
@@ -195,6 +199,7 @@ function chartInsert(db: D1Database, chart: ChartDocument) {
         nodes: storageSafeNodes(chart.nodes),
         edges: chart.edges,
         lifecycle: chart.lifecycle,
+        libraryParentId: chart.libraryParentId,
       }),
     );
 }
@@ -278,11 +283,14 @@ function noStoreJson(value: unknown, init: ResponseInit = {}) {
 export async function GET(request: Request) {
   const { DB, SOURCE_FILES } = getBindings();
   await ensureSchema(DB);
-  const [chartResult, sourceResult, versionResult, activityResult] = await Promise.all([
+  await ensureHistoryBaselines(DB);
+  const [chartResult, sourceResult, versionResult, activityResult,checkpointResult,batchResult] = await Promise.all([
     DB.prepare("SELECT * FROM charts ORDER BY updated_at DESC").all<ChartRow>(),
     DB.prepare("SELECT * FROM source_records ORDER BY imported_at DESC").all<SourceRow>(),
     DB.prepare("SELECT * FROM chart_versions ORDER BY chart_id, version").all<VersionRow>(),
     DB.prepare("SELECT * FROM ai_activity_events ORDER BY chart_id, created_at").all<ActivityRow>(),
+    DB.prepare("SELECT * FROM chart_checkpoints ORDER BY sequence").all<CheckpointRow>(),
+    DB.prepare("SELECT * FROM monthly_updates ORDER BY started_at").all<Parameters<typeof batchFromRow>[0]>(),
   ]);
   const availableChartRows = chartResult.results.filter(
     (row) => !isRetiredExampleChartId(row.id),
@@ -331,7 +339,7 @@ export async function GET(request: Request) {
     sourceBytes += object.size;
     if (sourceBytes > MAX_BACKUP_BYTES) {
       return noStoreJson(
-        { error: "Stored source files exceed the 25 MB prototype backup limit." },
+        { error: "Stored source files exceed the 250 MB prototype backup limit." },
         { status: 413 },
       );
     }
@@ -374,6 +382,8 @@ export async function GET(request: Request) {
     chartVersions: versionRows.map(versionFromRow),
     aiActivities: activityRows.map(activityFromRow),
     sourceFiles,
+    checkpoints:checkpointResult.results.filter(r=>includedChartIds.has(r.chart_id)).map(checkpointFromRow).map(h=>({...h,chart:{...h.chart,sources:h.chart.sources.map(s=>({...s,storageKey:""}))}})),
+    monthlyUpdates:batchResult.results.map(batchFromRow).filter(b=>b.chartIds.some(id=>includedChartIds.has(id))).map(b=>({...b,chartIds:b.chartIds.filter(id=>includedChartIds.has(id))})),
   };
 
   return noStoreJson(backup, {
@@ -403,6 +413,13 @@ export async function POST(request: Request) {
   const backup = value;
   const chartVersions = backup.chartVersions ?? [];
   const aiActivities = backup.aiActivities ?? [];
+  const checkpoints=backup.checkpoints??[],monthlyUpdates=backup.monthlyUpdates??[];
+  const historyError=historyRestoreError(checkpoints,monthlyUpdates,new Set(backup.charts.map(c=>c.id)));
+  if(historyError)return noStoreJson({error:historyError},{status:422});
+  for(const h of checkpoints){
+    const findings=parseImportFile("history.json",JSON.stringify({nodes:h.chart.nodes,edges:h.chart.edges})).findings;
+    if(findings.some(f=>f.severity==="blocking"))return noStoreJson({error:`Historical checkpoint ${h.label} failed structural validation.`},{status:422});
+  }
   const restorableCharts = backup.charts.filter(
     (chart) => !isRetiredExampleChartId(chart.id),
   );
@@ -552,7 +569,7 @@ export async function POST(request: Request) {
     }
     decodedByteCount += bytes.byteLength;
     if (decodedByteCount > MAX_BACKUP_BYTES) {
-      return noStoreJson({ error: "Source files exceed the 25 MB restore limit." }, { status: 413 });
+      return noStoreJson({ error: "Source files exceed the 250 MB restore limit." }, { status: 413 });
     }
     const checksum = await sha256(bytes.slice().buffer);
     if (checksum !== sourceFile.checksum) {
@@ -577,10 +594,13 @@ export async function POST(request: Request) {
   const statements: D1PreparedStatement[] = [];
   const writtenStorageKeys: string[] = [];
   let restoredActivityCount = 0;
+  const chartIdMap=new Map(restorableCharts.map(c=>[c.id,`chart-${crypto.randomUUID()}`]));
+  const batchIdMap=new Map(monthlyUpdates.map(b=>[b.id,`monthly-${crypto.randomUUID()}`]));
+  const sourceIdMap=new Map<string,SourceRecord>();
 
   try {
     for (const original of restorableCharts) {
-      const chartId = `chart-${crypto.randomUUID()}`;
+      const chartId = chartIdMap.get(original.id)!;
       const restoredSources: SourceRecord[] = [];
       for (const originalSource of original.sources) {
         const sourceId = `source-${crypto.randomUUID()}`;
@@ -596,24 +616,27 @@ export async function POST(request: Request) {
           });
           writtenStorageKeys.push(storageKey);
         }
-        restoredSources.push({
+        const restoredSource:SourceRecord={
           ...originalSource,
           id: sourceId,
           chartId,
           storageKey,
           importedAt: now,
-        });
+        };
+        restoredSources.push(restoredSource);
+        sourceIdMap.set(originalSource.id,restoredSource);
       }
 
       const chart: ChartDocument = {
         ...original,
         id: chartId,
         name: `${original.name} — Restored`,
-        description: `Restored from encrypted backup exported ${backup.exportedAt}. ${original.description}`,
-        status: "draft",
+        description: `Restored from backup exported ${backup.exportedAt}. ${original.description}`,
+        status: normalizeChartStatus(original.status),
+        libraryParentId: original.libraryParentId ? chartIdMap.get(original.libraryParentId) ?? null : original.libraryParentId,
         createdAt: now,
         updatedAt: now,
-        lifecycle: normalizeChartLifecycle(original.lifecycle, "draft", now, original.version),
+        lifecycle: normalizeChartLifecycle(original.lifecycle, normalizeChartStatus(original.status), now, original.version),
         nodes: storageSafeNodes(original.nodes),
         sources: restoredSources,
       };
@@ -672,6 +695,17 @@ export async function POST(request: Request) {
       });
       restoredActivityCount += originalActivities.length;
     }
+    for(const b of monthlyUpdates){
+      const ids=b.chartIds.flatMap(id=>chartIdMap.has(id)?[chartIdMap.get(id)!]:[]);if(!ids.length)continue;
+      // An imported unfinished batch is historical evidence, not a second live batch.
+      statements.push(DB.prepare(`INSERT INTO monthly_updates(id,month,label,change_list,summary,effective_date,status,started_at,completed_at,chart_ids) VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(batchIdMap.get(b.id)!,b.month,b.label,b.changeList,b.summary+(b.status==="open"?" [Imported unfinished update; resume as a new batch.]":""),b.effectiveDate,b.status==="open"?"interrupted":b.status,b.startedAt,b.completedAt,JSON.stringify(ids)));
+    }
+    for(const h of checkpoints){
+      const id=chartIdMap.get(h.chartId);if(!id)continue;
+      const historical={...h.chart,id,libraryParentId:h.chart.libraryParentId?chartIdMap.get(h.chart.libraryParentId)??null:h.chart.libraryParentId,
+        sources:h.chart.sources.map(s=>{const mapped=sourceIdMap.get(s.id);return mapped?{...s,id:mapped.id,chartId:id,storageKey:mapped.storageKey}:{...s,chartId:id,storageKey:""};})};
+      statements.push(DB.prepare(`INSERT INTO chart_checkpoints(id,chart_id,chart_name,recorded_at,source_updated_at,kind,label,batch_id,effective_date,payload) VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(`checkpoint-${crypto.randomUUID()}`,id,h.chartName,h.recordedAt,h.sourceUpdatedAt,h.kind,h.label,h.batchId?batchIdMap.get(h.batchId)??null:null,h.effectiveDate,JSON.stringify(historical)));
+    }
     await DB.batch(statements);
   } catch (error) {
     await Promise.all(writtenStorageKeys.map((key) => SOURCE_FILES.delete(key)));
@@ -685,6 +719,8 @@ export async function POST(request: Request) {
       restoredSourceFileCount: writtenStorageKeys.length,
       restoredVersionCount: restorableVersions.length || restoredCharts.length,
       restoredAiActivityCount: restoredActivityCount,
+      restoredCheckpointCount:checkpoints.length,
+      restoredMonthlyUpdateCount:monthlyUpdates.length,
       mode: "merge",
     },
     { status: 201 },

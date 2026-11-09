@@ -26,7 +26,7 @@ export const chartStatusLabels: Record<ChartStatus, string> = {
 export const chartStatusDescriptions: Record<ChartStatus, string> = {
   draft: "Actively being built or edited; not yet approved.",
   in_review: "Submitted for a person to verify before it becomes Current.",
-  current: "Approved, authoritative, and currently in use.",
+  current: "Designated as the current working chart; source review notes remain visible.",
   archived: "Historical and read-only; no longer the working chart.",
 };
 
@@ -93,6 +93,7 @@ export interface ChartDocument {
   createdAt: string;
   updatedAt: string;
   lifecycle: ChartLifecycleMetadata;
+  libraryParentId?: string | null;
   nodes: OrgFlowNode[];
   edges: Edge[];
   sources: SourceRecord[];
