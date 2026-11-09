@@ -113,6 +113,7 @@ test("desktop quit control confirms before using the clean shutdown path", () =>
   assert.match(mainSource, /taskkill\.exe[\s\S]*"\/T"[\s\S]*"\/F"/);
   assert.match(
     mainSource,
-    /if \(smokeTest\)[\s\S]*process\.exit\(requestedExitCode\)/,
+    /if \(smokeTest\)[\s\S]*app\.exit\(requestedExitCode\)/,
   );
+  assert.doesNotMatch(mainSource, /process\.exit\(requestedExitCode\)/);
 });
