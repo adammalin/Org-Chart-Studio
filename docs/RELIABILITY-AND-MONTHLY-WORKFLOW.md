@@ -12,7 +12,7 @@ The bounded recovery journal contains timestamps, event categories, failure reas
 
 ## Consistency and source review
 
-**Consistency & priorities** compares active, in-effect chart appearances. It highlights different assignments, position titles and immediate reporting parents for candidate matching organizations. Generic team-lead labels, planned positions and ambiguous repeated identities are treated separately. Similar names are not proof of shared identity, and the app never chooses a winning source or automatically merges organizations.
+**Consistency & priorities** compares active, in-effect chart appearances. It highlights different assignments, position titles and immediate reporting parents for candidate matching organizations. Repeated position titles are compared within their parent organization. Generic team-lead labels, planned positions and ambiguous repeated identities are treated separately. Similar names are not proof of shared identity, and the app never chooses a winning source or automatically merges organizations.
 
 Review related occurrences beside their source locations and provenance notes. Source facts and reporting authority remain separate review decisions. The prioritized queue separates cross-chart disagreements, reporting questions, missing effective dates, source questions and uncertain tree placement. An absent effective date is not inferred from a source-file or save timestamp.
 

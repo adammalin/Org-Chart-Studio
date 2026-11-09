@@ -34,3 +34,25 @@ test("planned records and deliberately repeated team leads are not treated as cu
   for (const c of [a, b]) c.nodes[0].data.unit.name = "Group Team Leads";
   assert.equal(auditPortfolio([a, b]).length, 0);
 });
+
+test("reusable position titles compare within parent organizations, not across unrelated directorates", () => {
+  function withPosition(id:string, parent:string, person:string) {
+    const c=chart(id,"Synthetic director");
+    c.nodes[0].data.unit.name=parent;
+    const position=structuredClone(c.nodes[0]);
+    position.id=id+"-admin";position.data.unit.id=position.id;
+    position.data.unit.name="Administrative Services Manager";
+    position.data.unit.positionTitle="Administrative Services Manager";
+    position.data.unit.assignmentLabel=person;
+    c.nodes.push(position);c.edges.push({id:id+"-edge",source:c.nodes[0].id,target:position.id});
+    return c;
+  }
+  const a=withPosition("a","Synthetic Physics Directorate","Synthetic Alice");
+  const b=withPosition("b","Synthetic Chemistry Directorate","Synthetic Bob");
+  assert.equal(auditPortfolio([a,b]).length,0);
+  b.nodes[0].data.unit.name="Synthetic Physics Directorate";
+  const disagreements=auditPortfolio([a,b]);
+  assert.equal(disagreements.length,1);
+  assert.equal(disagreements[0].organization,"Administrative Services Manager");
+  assert.equal(disagreements[0].category,"assignment");
+});

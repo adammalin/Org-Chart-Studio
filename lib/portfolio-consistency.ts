@@ -60,8 +60,8 @@ export function relatedAppearances(
     for (const node of chart.nodes) {
       const u = node.data.unit;
       if (u.planningState === "planned") continue;
-      const key = organizationKey(u.name);
-      if (generic.has(key)) continue;
+      const nameKey = organizationKey(u.name);
+      if (generic.has(nameKey)) continue;
       const parent = chart.edges.find(
         (e) =>
           e.target === node.id &&
@@ -71,6 +71,12 @@ export function relatedAppearances(
       const p = parent
         ? chart.nodes.find((n) => n.id === parent.source)
         : undefined;
+      // A reusable position title identifies a position within its organization,
+      // not one laboratory-wide organization shared by unrelated parents.
+      const titleOnly = searchText(u.name) === searchText(u.positionTitle);
+      const key = titleOnly
+        ? `${nameKey}::position-in:${p ? organizationKey(p.data.unit.name) : "chart:" + chart.id}`
+        : nameKey;
       const record: RelatedAppearance = {
         chartId: chart.id,
         chartName: chart.name,
