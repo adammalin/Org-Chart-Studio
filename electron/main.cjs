@@ -44,7 +44,10 @@ if (smokeUserDataPath) {
   fs.mkdirSync(smokeUserDataPath, { recursive: true });
   app.setPath("userData", smokeUserDataPath);
   app.once("quit", () => {
-    fs.rmSync(smokeUserDataPath, { recursive: true, force: true });
+    // Chromium can still hold cache files during the Windows quit event.
+    // A disposable-profile cleanup error must not open a blocking error dialog.
+    try { fs.rmSync(smokeUserDataPath, { recursive: true, force: true }); }
+    catch { console.error("ORGCHART_ELECTRON_SMOKE_SHUTDOWN disposable-profile cleanup deferred"); }
   });
 }
 
@@ -1411,15 +1414,19 @@ async function beginQuit() {
   recovery?.stop();
   if (smokeTest) {
     setTimeout(
-      () => process.exit(requestedExitCode),
+      () => {
+        console.error("ORGCHART_ELECTRON_SMOKE_SHUTDOWN exit watchdog");
+        app.exit(requestedExitCode);
+      },
       SERVER_STOP_TIMEOUT_MS + 2_000,
     );
   }
   removeMcpRuntime();
+  if (smokeTest) console.log("ORGCHART_ELECTRON_SMOKE_SHUTDOWN stopping local service");
   await stopLocalServer();
   allowWindowClose = true;
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
-  if (smokeTest) process.exit(requestedExitCode);
+  if (smokeTest) console.log("ORGCHART_ELECTRON_SMOKE_SHUTDOWN exiting Electron");
   app.exit(requestedExitCode);
 }
 
