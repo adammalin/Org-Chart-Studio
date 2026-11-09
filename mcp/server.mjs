@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { registerInsightTools } from "./insight-tools.mjs";
 import { registerHistoryTools } from "./history-tools.mjs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -642,7 +644,14 @@ async function main() {
   await server.connect(transport);
 }
 
-if (import.meta.url === new URL(process.argv[1], "file:").href) {
+function isCommandLineEntryPoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(process.argv[1]);
+  } catch { return false; }
+}
+
+if (isCommandLineEntryPoint()) {
   main().catch((error) => {
     console.error(
       error instanceof Error ? error.message : "OrgChart Studio MCP could not start.",
