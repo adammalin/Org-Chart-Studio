@@ -1,4 +1,5 @@
 "use client";
+import { studioRequest } from "../runtime/request";
 import { useState } from "react";
 import type { ChartDocument } from "../lib/chart-library";
 import type {
@@ -35,7 +36,7 @@ export function HistoryQuestions({
     const now = new Date(),
       ref = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     try {
-      const r = await fetch("/api/history/answers", {
+      const r = await studioRequest("/api/history/answers", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({

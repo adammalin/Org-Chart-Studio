@@ -1,3 +1,4 @@
+import { isPortableDocument, type PortableDocument } from "./workspace-format";
 import {
   ENCRYPTED_BACKUP_FORMAT,
   ENCRYPTED_BACKUP_VERSION,
@@ -59,11 +60,11 @@ async function deriveKey(passphrase: string, salt: Uint8Array, iterations: numbe
   );
 }
 
-export async function encryptLibraryBackup(
-  backup: LibraryBackup,
+export async function encryptPortableDocument(
+  backup: PortableDocument,
   passphrase: string,
 ): Promise<EncryptedLibraryBackup> {
-  if (!isLibraryBackup(backup)) throw new Error("The library backup is not valid.");
+  if (!isPortableDocument(backup)) throw new Error("The library file is not valid.");
   if (passphrase.length < 12) {
     throw new Error("Use a backup passphrase containing at least 12 characters.");
   }
@@ -95,10 +96,10 @@ export async function encryptLibraryBackup(
   };
 }
 
-export async function decryptLibraryBackup(
+export async function decryptPortableDocument(
   value: unknown,
   passphrase: string,
-): Promise<LibraryBackup> {
+): Promise<PortableDocument> {
   if (!isEncryptedLibraryBackup(value)) {
     throw new Error("This is not an OrgChart Studio encrypted backup.");
   }
@@ -119,7 +120,7 @@ export async function decryptLibraryBackup(
       ciphertext.slice().buffer as ArrayBuffer,
     );
     const backup = JSON.parse(new TextDecoder().decode(plaintext)) as unknown;
-    if (!isLibraryBackup(backup)) throw new Error("The decrypted backup is not valid.");
+    if (!isPortableDocument(backup)) throw new Error("The decrypted library file is not valid.");
     return backup;
   } catch {
     throw new Error("The backup could not be decrypted. Check the passphrase and file integrity.");
@@ -143,4 +144,11 @@ export async function openLibraryBackup(
     backup: await decryptLibraryBackup(value, passphrase),
     protection: "encrypted",
   };
+}
+
+export const encryptLibraryBackup = (backup: LibraryBackup, passphrase: string) => encryptPortableDocument(backup, passphrase);
+export async function decryptLibraryBackup(value: unknown, passphrase: string): Promise<LibraryBackup> {
+  const backup = await decryptPortableDocument(value, passphrase);
+  if (!isLibraryBackup(backup)) throw new Error("This is a working library. Use Open library instead of Merge backup.");
+  return backup;
 }

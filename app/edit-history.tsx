@@ -1,4 +1,5 @@
 "use client";
+import { studioRequest } from "../runtime/request";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChartDocument } from "../lib/chart-library";
 import type { AiFieldChange } from "../lib/ai-change-review";
@@ -79,7 +80,7 @@ export function useEditHistory(
       return;
     }
     try {
-      const r = await fetch(
+      const r = await studioRequest(
           `/api/edit-history?chartId=${encodeURIComponent(id)}`,
           { cache: "no-store" },
         ),
@@ -138,7 +139,7 @@ export function useEditHistory(
       let failure = "",
         uncertain = true;
       try {
-        const r = await fetch("/api/edit-history", {
+        const r = await studioRequest("/api/edit-history", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
@@ -155,7 +156,7 @@ export function useEditHistory(
         // Read current state and the exact receipt after a lost response. Never
         // assume failure means the transaction was not committed.
         try {
-          const r = await fetch(
+          const r = await studioRequest(
               `/api/edit-history?chartId=${encodeURIComponent(id)}&includeChart=1&receiptId=${encodeURIComponent(body.requestId)}`,
               { cache: "no-store", signal: AbortSignal.timeout(15000) },
             ),
@@ -234,7 +235,7 @@ export function EditHistoryPanel({
     setLoading(true);
     setMessage("");
     try {
-      const r = await fetch(
+      const r = await studioRequest(
           `/api/edit-history?chartId=${encodeURIComponent(state.chartId)}&operationId=${encodeURIComponent(op.id)}`,
           { cache: "no-store" },
         ),
@@ -263,7 +264,7 @@ export function EditHistoryPanel({
     const g = ++generation.current;
     setLoading(true);
     try {
-      const r = await fetch(
+      const r = await studioRequest(
           `/api/edit-history?chartId=${encodeURIComponent(state.chartId)}&before=${cursor}`,
           { cache: "no-store" },
         ),
@@ -290,7 +291,7 @@ export function EditHistoryPanel({
     setLoading(true);
     setMessage("");
     try {
-      const r = await fetch(
+      const r = await studioRequest(
           `/api/edit-history?chartId=${encodeURIComponent(state.chartId)}&operationId=${encodeURIComponent(detail.id)}&previewRevert=1`,
           { cache: "no-store" },
         ),
@@ -301,7 +302,7 @@ export function EditHistoryPanel({
         throw Error(
           "History changed. Refresh and preview before staging a revert.",
         );
-      const response = await fetch("/api/ai-proposals", {
+      const response = await studioRequest("/api/ai-proposals", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({

@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
+const {startFileWorkspaceServer}=require("./file-workspaces.cjs");
 const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
@@ -273,7 +274,44 @@ function initializeStorageLocations() {
   return settings;
 }
 
+let fileWorkspaceServer, fileWorkspaceWindow;
+async function openFileWorkspace(){
+ if(fileWorkspaceWindow&&!fileWorkspaceWindow.isDestroyed()){fileWorkspaceWindow.show();fileWorkspaceWindow.focus();return true;}
+ if(!fileWorkspaceServer){
+  const configPath=path.join(app.getPath('userData'),'file-workspace-port.json');
+  let port=0;try{const saved=JSON.parse(fs.readFileSync(configPath,'utf8'));if(Number.isInteger(saved.port)&&saved.port>1024&&saved.port<65536)port=saved.port;}catch{}
+  fileWorkspaceServer=await startFileWorkspaceServer({publicDirectory:path.join(app.getAppPath(),'public'),port});
+  fs.writeFileSync(configPath,JSON.stringify({port:Number(new URL(fileWorkspaceServer.origin).port)}),{mode:0o600});
+ }
+ const partition='persist:orgchart-file-workspaces';
+ const fileSession=require('electron').session.fromPartition(partition);
+ require('./network-policy.cjs').installLocalOnlyNetworkPolicy(fileSession,'',fileWorkspaceServer.origin);
+ fileWorkspaceWindow=new BrowserWindow({show:!smokeTest,title:'OrgChart Studio — File workspace',width:1500,height:980,minWidth:1040,minHeight:720,
+   webPreferences:{partition,sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true,navigateOnDragDrop:false}});
+ fileWorkspaceWindow.removeMenu();
+ let closingFileDialog=false;
+ fileWorkspaceWindow.on('close',event=>{
+  if(quitting)return;
+  event.preventDefault();if(closingFileDialog)return;closingFileDialog=true;
+  void (async()=>{
+   const target=fileWorkspaceWindow;
+   const state=await target.webContents.executeJavaScript(`(()=>{const bar=document.querySelector('.library-file-bar');return {editor:bar?.dataset.editorState,dirty:bar?.dataset.unsavedFile==='true'};})()`);
+   if(['saving','error'].includes(state.editor)){
+    await dialog.showMessageBox(target,{type:'warning',message:'Finish saving the working state first.',buttons:['Keep file workspace open']});return;
+   }
+   if(state.dirty){const decision=await dialog.showMessageBox(target,{type:'warning',message:'The portable library file has unsaved changes.',detail:'Browser recovery remains on this computer. Keep this window open to save an independent library file.',buttons:['Keep open','Close with recovery only'],defaultId:0,cancelId:0});if(decision.response!==1)return;}
+   target.destroy();
+  })().catch(error=>console.error('File workspace close check failed.',error)).finally(()=>{closingFileDialog=false;});
+ });
+ fileWorkspaceWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+ fileWorkspaceWindow.webContents.on('will-navigate',(event,url)=>{if(new URL(url).origin!==fileWorkspaceServer.origin)event.preventDefault();});
+ await fileWorkspaceWindow.loadURL(fileWorkspaceServer.origin);return true;
+}
 function registerStorageHandlers() {
+  ipcMain.handle('app:open-file-workspace',async event=>{
+    if(!mainWindow||event.sender!==mainWindow.webContents||event.senderFrame!==mainWindow.webContents.mainFrame||new URL(event.senderFrame.url).origin!==new URL(serverUrl).origin)throw Error('Invalid file workspace launcher.');
+    return openFileWorkspace();
+  });
   if(smokeTest)ipcMain.handle("app:test-interrupt-service",()=>{if(serverProcess?.pid){if(process.platform==="win32")spawnSync("taskkill.exe",["/pid",String(serverProcess.pid),"/T","/F"],{windowsHide:true,stdio:"ignore",timeout:SERVER_STOP_TIMEOUT_MS});else process.kill(-serverProcess.pid,"SIGTERM");}return true;});
   ipcMain.handle("app:chart-fonts", (event) => {
     if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame || !serverUrl || new URL(event.senderFrame.url).origin !== new URL(serverUrl).origin) throw Error("Font request is not from the Studio window.");
@@ -1366,6 +1404,21 @@ function createMainWindow(url) {
         runtimeDescriptor.token === desktopToken &&
         (process.platform === "win32" ||
           (fs.statSync(runtimeFile).mode & 0o077) === 0);
+      const originalChartIds=await mainWindow.webContents.executeJavaScript("fetch('/api/charts').then(r=>r.json()).then(d=>d.charts.map(c=>c.id).sort().join(','))");
+      capabilities.nativeDesktopWorkingFileExport=await mainWindow.webContents.executeJavaScript("fetch('/api/workspace').then(r=>r.json()).then(file=>file.format==='orgchart-studio-workspace'&&file.library.charts.length>0&&file.pendingProposals.length>0&&!!file.continuity)");
+      await mainWindow.webContents.executeJavaScript('window.orgChartDesktop.openFileWorkspace()');
+      console.log('ORGCHART_FILE_WORKSPACE_SMOKE beginning isolated file journey');
+      const fileJourney=await fileWorkspaceWindow.webContents.executeJavaScript(require('./file-workspace-smoke.cjs').fileWorkspaceJourneyScript);
+      fs.writeFileSync(path.join(app.getPath('userData'),'Synthetic-Native-Library.orgchart-workspace'),fileJourney.fileText,{mode:0o600});
+      const reloaded=new Promise(resolve=>fileWorkspaceWindow.webContents.once('did-finish-load',resolve));
+      fileWorkspaceWindow.webContents.reload();await reloaded;
+      capabilities.nativePortableFileReload=await fileWorkspaceWindow.webContents.executeJavaScript(`(async()=>{const until=Date.now()+30000;while(Date.now()<until){if(document.querySelector('.chart-switcher select')?.value===${JSON.stringify(fileJourney.chartId)})return true;await new Promise(r=>setTimeout(r,80));}return false;})()`);
+      capabilities.nativePortableFileOpen=!!fileJourney.workspaceId;
+      const finalChartIds=await mainWindow.webContents.executeJavaScript("fetch('/api/charts').then(r=>r.json()).then(d=>d.charts.map(c=>c.id).sort().join(','))");
+      capabilities.nativeFileWorkspaceIsolation=originalChartIds===finalChartIds;
+      capabilities.nativeFileWorkspaceNetworkIsolation=await fileWorkspaceWindow.webContents.executeJavaScript(`fetch(${JSON.stringify(serverUrl)}).then(()=>false,()=>true)`);
+      if(process.env.ORGCHART_SMOKE_OUTPUT_DIR)fs.writeFileSync(path.join(process.env.ORGCHART_SMOKE_OUTPUT_DIR,'Portable-File-Workspace.png'),(await fileWorkspaceWindow.webContents.capturePage()).toPNG());
+      fileWorkspaceWindow.destroy();
       const passed = Object.values(capabilities).every(Boolean);
       console.log(`ORGCHART_ELECTRON_SMOKE ${JSON.stringify({ passed, ...capabilities })}`);
       if (!passed) requestedExitCode = 1;
@@ -1420,6 +1473,14 @@ async function requestUserQuit() {
       return false;
     }
 
+    let fileWarning='';
+    if(fileWorkspaceWindow&&!fileWorkspaceWindow.isDestroyed()){
+      const fileState=await fileWorkspaceWindow.webContents.executeJavaScript(`(()=>{const bar=document.querySelector('.library-file-bar');return {editor:bar?.dataset.editorState,dirty:bar?.dataset.unsavedFile==='true'};})()`);
+      if(['saving','error'].includes(fileState.editor)){
+        await dialog.showMessageBox(mainWindow,{type:'warning',message:'Finish saving the portable workspace first.',detail:'Return to the file workspace and wait for its working state to be saved, or resolve the save issue.',buttons:['Return to file workspace']});fileWorkspaceWindow.show();fileWorkspaceWindow.focus();return false;
+      }
+      if(fileState.dirty)fileWarning='The portable library file has unsaved changes. Its browser recovery copy remains on this computer, but the independent library file may be older. Cancel and save it first if needed. ';
+    }
     const hasSaveIssue = rendererSaveState === "error";
     const result = await dialog.showMessageBox(mainWindow, {
       type: hasSaveIssue ? "error" : "warning",
@@ -1427,9 +1488,9 @@ async function requestUserQuit() {
       message: hasSaveIssue
         ? "The latest change may not be saved."
         : `Quit ${APP_NAME}?`,
-      detail: hasSaveIssue
+      detail: fileWarning + (hasSaveIssue
         ? "The top bar shows Save issue. Keep the app open to retry or resolve the problem. Quitting now may require redoing the latest unsaved change; previously saved charts remain on this computer."
-        : "The app window, its local MCP connection, and its private local server will close. Changes already showing Saved, pending review proposals, and existing backups will remain on this computer.",
+        : "The app window, its local MCP connection, and its private local server will close. Changes already showing Saved, pending review proposals, and existing backups will remain on this computer."),
       buttons: hasSaveIssue ? ["Keep app open", "Quit without latest change"] : ["Cancel", "Quit"],
       defaultId: 0,
       cancelId: 0,
@@ -1446,6 +1507,8 @@ async function requestUserQuit() {
 async function beginQuit() {
   if (quitting) return;
   quitting = true;
+  if(fileWorkspaceWindow&&!fileWorkspaceWindow.isDestroyed())fileWorkspaceWindow.destroy();
+  fileWorkspaceServer?.server.close();
   recovery?.stop();
   if (smokeTest) {
     setTimeout(

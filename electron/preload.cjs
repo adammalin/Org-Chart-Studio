@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("orgChartDesktop", {
   isDesktop: true,
+  openFileWorkspace:()=>ipcRenderer.invoke("app:open-file-workspace"),
   getChartFonts: () => ipcRenderer.invoke("app:chart-fonts"),
   ...(process.argv.includes("--orgchart-smoke")?{testInterruptService:()=>ipcRenderer.invoke("app:test-interrupt-service")}:{}),
   platform: process.platform,

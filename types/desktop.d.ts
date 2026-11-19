@@ -36,6 +36,7 @@ interface DesktopMcpConfigurationStatus {
 interface Window {
   orgChartDesktop?: {
     isDesktop: true;
+    openFileWorkspace():Promise<boolean>;
     getChartFonts():Promise<import("../lib/chart-appearance").ChartFonts|null>;
     platform: string;
     versions: Readonly<{ chrome: string; electron: string }>;

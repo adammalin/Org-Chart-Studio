@@ -75,8 +75,8 @@ def footer(pdf, page_number):
     pdf.rect(0, 0, PAGE_W, 52, stroke=0, fill=1)
     pdf.setFillColor(WHITE)
     pdf.setFont("Helvetica", 7.2)
-    pdf.drawString(40, 30, "ORNL OrgChart Studio | Desktop quick start | November 17, 2026")
-    pdf.drawRightString(572, 30, f"PAGE {page_number} OF 3")
+    pdf.drawString(40, 30, "ORNL OrgChart Studio | Web and desktop quick start | November 19, 2026")
+    pdf.drawRightString(572, 30, f"PAGE {page_number} OF 4")
 
 
 def code_box(pdf, title, lines, x, y, width, height, accent, actual_text=None):
@@ -301,6 +301,15 @@ def build_pdf(output):
         color=NAVY,
     )
     footer(pdf, 3)
+    pdf.showPage()
+    page_header(pdf, "Browser release candidate | no Studio account", "Choose web or desktop.", "One chart editor, with different file and connection capabilities.", 4)
+    label(pdf, "Ask the companion plugin", 40, 600)
+    wrapped(pdf, '"Open OrgChart Studio. Ask whether I want the web or desktop app, then help me open and save the right library." The plugin uses a verified release URL. This browser candidate has not been published yet; do not guess a production address.', 40, 579, 532, size=10, leading=14)
+    step_card(pdf, "1", "OPEN THE FULL LIBRARY", "Use Open library for continued editing. A complete .orgchart-workspace file retains chart identities, sources, pending reviews and history. Merge backup creates copies.", 40, 397, 532, 104)
+    step_card(pdf, "2", "SAVE OUTSIDE THE BROWSER", "Recovery is automatic in this browser. Save library writes a user-selected file and verifies its bytes where supported. Otherwise download and confirm the file. Encryption is optional.", 40, 274, 532, 104, SOFT_NAVY, NAVY)
+    step_card(pdf, "3", "USE A SYNCED FOLDER", "Choose a local OneDrive or Dropbox folder. Studio verifies file writes, not cloud upload completion. Save at the end of each session and monthly update. Do not edit the same library in two places at once.", 40, 151, 532, 104, PALE, DARK)
+    wrapped(pdf, "Desktop: Download full working library to continue in the browser. Open a portable file workspace to edit a web library separately from the desktop database. Desktop stdio MCP stays attached to the original database; browser tools target the open file workspace.", 40, 126, 532, font="Helvetica-Bold", size=8.6, leading=11.3)
+    footer(pdf, 4)
     pdf.save()
 
 

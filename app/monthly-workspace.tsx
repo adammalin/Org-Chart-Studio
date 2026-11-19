@@ -1,4 +1,5 @@
 "use client";
+import { studioRequest } from "../runtime/request";
 import {remainingReviewSelection} from "../lib/monthly-progress";
 import { useCallback, useEffect, useState } from "react";
 import type { ChartDocument } from "../lib/chart-library";
@@ -54,7 +55,7 @@ export function MonthlyWorkspace({
     ),
     [progress, setProgress] = useState("");
   const load = useCallback(async () => {
-    const r = await fetch(
+    const r = await studioRequest(
         "/api/monthly-workspace?batchId=" + encodeURIComponent(batchId),
         { cache: "no-store" },
       ),
@@ -83,7 +84,7 @@ export function MonthlyWorkspace({
   const open = batches.find((b) => b.status === "open"),
     active = report?.batch.status === "open";
   async function post(path: string, body: unknown) {
-    const r = await fetch(path, {
+    const r = await studioRequest(path, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
@@ -117,7 +118,7 @@ export function MonthlyWorkspace({
   async function review(id: string) {
     setBusy(true);
     try {
-      const r = await fetch(
+      const r = await studioRequest(
           "/api/ai-proposals?proposalId=" + encodeURIComponent(id),
         ),
         d = (await r.json()) as { error?: string; proposal: AiChartProposal };

@@ -1,4 +1,5 @@
 "use client";
+import { studioRequest } from "../runtime/request";
 import { SupplementHistoryDetails } from "./support-panels";
 import { HistoryQuestions } from "./history-questions";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -43,7 +44,7 @@ export function HistoryTimeline({
           ? new Date(through + "T23:59:59.999").toISOString()
           : "",
       });
-      const r = await fetch("/api/history?" + q, { cache: "no-store" }),
+      const r = await studioRequest("/api/history?" + q, { cache: "no-store" }),
         d = (await r.json()) as {
           error?: string;
           checkpoints: CheckpointSummary[];
@@ -70,7 +71,7 @@ export function HistoryTimeline({
     }
     setBusy(true);
     try {
-      const r = await fetch(
+      const r = await studioRequest(
           "/api/history?checkpointId=" + encodeURIComponent(id),
         ),
         d = (await r.json()) as {
@@ -94,7 +95,7 @@ export function HistoryTimeline({
     setMessage("");
     const f = new FormData(form);
     try {
-      const r = await fetch("/api/history", {
+      const r = await studioRequest("/api/history", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({

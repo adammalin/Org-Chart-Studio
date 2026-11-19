@@ -1,4 +1,5 @@
 "use client";
+import { studioRequest } from "../runtime/request";
 import { OfficialCardDrawing } from "./official-card";
 import {officialSupport,officialScale,officialAssignment,type ChartAppearance} from "../lib/chart-appearance";
 import { useState, useEffect, useRef } from "react";
@@ -154,7 +155,7 @@ export function SupportPanelsEditor({
     setBusy(true);
     setError("");
     try {
-      const response = await fetch("/api/charts", {
+      const response = await studioRequest("/api/charts", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -567,7 +568,7 @@ export function SourceChecks({
     setBusy(true);
     const form = new FormData(event.currentTarget);
     try {
-      const response = await fetch("/api/charts", {
+      const response = await studioRequest("/api/charts", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

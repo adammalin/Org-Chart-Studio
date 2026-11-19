@@ -165,7 +165,7 @@ test("Windows command-line installer matches the macOS safety and setup flow", (
   assert.match(electronStartSource, /process\.env\.ORGCHART_ELECTRON_SMOKE === "1"/);
   assert.match(electronStartSource, /taskkill\.exe/);
   assert.match(electronStartSource, /ORGCHART_ELECTRON_SMOKE/);
-  assert.equal(packageJson.scripts.build, "node scripts/run-vinext.mjs build");
+  assert.equal(packageJson.scripts.build, "node scripts/run-vinext.mjs build && npm run web:build");
   assert.equal(packageJson.scripts.dev, "node scripts/run-vinext.mjs dev");
   assert.equal(packageJson.scripts.start, "node scripts/run-vinext.mjs start");
   assert.equal(packageJson.scripts["desktop:smoke"], "node scripts/start-electron.mjs --smoke");
@@ -230,7 +230,10 @@ test("desktop guide covers both command-line installs, updates, storage, and opt
   );
   const guide = await PDFDocument.load(readFileSync(guidePath));
 
-  assert.equal(guide.getPageCount(), 3);
+  assert.equal(guide.getPageCount(), 4);
+  assert.match(generatorSource, /Choose web or desktop/);
+  assert.match(generatorSource, /Open library/);
+  assert.match(generatorSource, /Download full working library/);
   assert.match(generatorSource, /No signed installer required/);
   assert.match(generatorSource, /Mac - one command in Terminal/);
   assert.match(generatorSource, /Windows - one command in Terminal, Command Prompt, or PowerShell/);

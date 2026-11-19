@@ -111,6 +111,7 @@ export function blockedDataPath(filePath) {
     blockedDirectory ||
     blockedSourceEvidence ||
     baseName.endsWith(".orgchart-backup") ||
+    baseName.endsWith(".orgchart-workspace") ||
     baseName.endsWith(".sqlite") ||
     baseName.endsWith(".sqlite3") ||
     baseName.endsWith(".sqlite-shm") ||

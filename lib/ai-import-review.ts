@@ -10,7 +10,7 @@ export interface AiImportProposal {
   operation: "stage_normalized_import";
   status: "pending";
   createdAt: string;
-  expiresAt: string;
+  expiresAt: string | null;
   format: "csv" | "json";
   intakeId: string | null;
   intakeName: string | null;

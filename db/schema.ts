@@ -1,5 +1,6 @@
 import { editHistorySchema } from "../lib/edit-history-schema";
 export const schemaStatements = [
+  `CREATE TABLE IF NOT EXISTS ai_import_proposals (id TEXT PRIMARY KEY,created_at TEXT NOT NULL,payload TEXT NOT NULL,contents TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS mutation_guards (id TEXT PRIMARY KEY, ok INTEGER NOT NULL CHECK(ok=1))`,
   `CREATE TABLE IF NOT EXISTS monthly_updates (id TEXT PRIMARY KEY, month TEXT NOT NULL, label TEXT NOT NULL, change_list TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', effective_date TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL, completed_at TEXT, chart_ids TEXT NOT NULL)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS monthly_one_open_idx ON monthly_updates(status) WHERE status='open'`,

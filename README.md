@@ -21,13 +21,30 @@ This repository implements a coherent local Phase 1 human-test slice:
 - an accessible table and downloadable accessible CSV generated from the same chart data;
 - one shared scene model for internal/public SVG, configurable-resolution PNG, vector PDF, and editable PowerPoint output, including proportional typography and strokes that match editor zoom;
 - natural-bounds, 16:9, 11 × 17 landscape, and 11 × 17 portrait output profiles with version and generation metadata;
-- a local-only Electron desktop app with public command-line installation, update, start, and repair scripts for macOS and Windows, checksum and exact-revision records, cross-platform runtime smoke checks, a three-page setup guide, and an optional app-managed local STDIO MCP companion with pause, chart-scope, source-permission, and session-receipt controls for ChatGPT Desktop and Codex.
+- a local-only Electron desktop app with public command-line installation, update, start, and repair scripts for macOS and Windows, checksum and exact-revision records, cross-platform runtime smoke checks, a four-page setup guide, and an optional app-managed local STDIO MCP companion with pause, chart-scope, source-permission, and session-receipt controls for ChatGPT Desktop and Codex.
 
 The user chart library starts empty and never inserts example charts. Synthetic fixtures remain test-only and are not shown or saved as user data. The prototype does not connect to personnel systems, authentication, a live AI endpoint, or a publication destination.
 
 Fit-to-slide PowerPoint scales card geometry, typography, letter spacing, status markers, and connector strokes together. This preserves the editor's zoomed appearance instead of forcing minimum font sizes that collide inside small cards. Card names use the editor's compact single-line treatment. A very wide hierarchy can still be small on one 16:9 slide, so the export workspace warns when the selected profile crosses that threshold. Saved connector pins are translated into each export's page coordinate system, so SVG, PNG, PDF, and PowerPoint retain the same manual orthogonal route.
 
-## Run locally
+## Browser-first candidate (0.4.0)
+
+The static editor and desktop app share the chart editor, commands, validation, source reviews, monthly checkpoints and edit history. The browser release is staged locally; no production web URL has been published yet.
+
+```bash
+npm ci
+npm run web:build
+npm run web:verify
+npm run web:preview
+```
+
+Open the preview address printed by Vite. The generated `public/` folder runs on ordinary static hosting, including a GitHub Pages repository subpath. It contains application assets only and starts with an empty library. `public/` is generated and ignored in Git. The manual Pages workflow builds an artifact by default; deploying is an explicit main-only option.
+
+Use **Open library** to continue a complete `.orgchart-workspace` file. Browser recovery saves locally after each command; **Save library** writes and verifies a chosen local file where supported. Other browsers use an explicit download and confirmation. Files are readable by default, with optional encryption. A selected file can live in a locally synced OneDrive/Dropbox folder; Studio does not verify the sync provider's upload. [Browser guide and limits](docs/BROWSER-WORKSPACES.md).
+
+The companion plugin candidate asks web versus desktop. The web editor registers 32 browser tools when the host supports WebMCP; desktop retains its 30 local stdio tools. Missing browser tools do not prevent manual chart editing. The desktop **Download full working library** action includes pending work; **Open a portable file workspace** opens that file separately from its conventional database. [Implementation and qualification status](docs/BROWSER-FIRST-IMPLEMENTATION-PLAN.md).
+
+## Run the desktop-backed development server
 
 Requires Node.js 22.13 or later.
 
@@ -177,3 +194,7 @@ See [reliability and monthly workflow](docs/RELIABILITY-AND-MONTHLY-WORKFLOW.md)
 ## Support panels and source arrangements (0.3.0)
 
 Matrix-support/advisory/shared-service panels retain roles, people and provenance beside the hierarchy. Capture the official slide’s card sizes, positions, panel geometry and connector paths to retain that arrangement in the editor, history and exports. Structured source comparisons separately track AI work and human review, and schema-v6 backups preserve the complete record. See [the source-layout guide](docs/SUPPORT-PANELS-AND-SOURCE-LAYOUT.md).
+
+## Browser-first implementation status
+
+The [browser-first approach and implementation plan](docs/BROWSER-FIRST-IMPLEMENTATION-PLAN.md) records the proposed shared web/desktop architecture, portable library saving and recovery, browser-agent tools, capability-based UI, dual-mode plugin changes, phased delivery and acceptance checks. The static editor and plugin changes are implemented as a local 0.4.0 candidate. Production deployment and plugin publication remain pending qualification.

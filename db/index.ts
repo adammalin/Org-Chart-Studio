@@ -1,7 +1,9 @@
-import { env } from "cloudflare:workers";
+import { env } from "./platform";
 import { schemaStatements } from "./schema";
 
 const schemaInitializations = new WeakMap<object, Promise<void>>();
+let workspaceBindings: AppBindings | undefined;
+export function installWorkspaceBindings(bindings: AppBindings) { workspaceBindings = bindings; }
 
 export interface AppBindings {
   DB: D1Database;
@@ -9,6 +11,7 @@ export interface AppBindings {
 }
 
 export function getBindings(): AppBindings {
+  if (workspaceBindings) return workspaceBindings;
   const bindings = env as unknown as Partial<AppBindings>;
   if (!bindings.DB || !bindings.SOURCE_FILES) {
     throw new Error("Chart persistence bindings are unavailable.");

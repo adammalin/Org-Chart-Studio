@@ -74,3 +74,9 @@ next-env.d.ts
 *.xlsx
 !docs/ORNL-OrgChart-Studio-macOS-Quick-Start.pdf
 !docs/ORNL-OrgChart-Studio-Desktop-Quick-Start.pdf
+
+# Generated static website (deployed as an Actions artifact)
+/public/
+
+# Portable working libraries contain user data.
+*.orgchart-workspace

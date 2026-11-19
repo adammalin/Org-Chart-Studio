@@ -1,4 +1,6 @@
 "use client";
+import { RuntimeLibraryControls, useStudioEnvironment } from "../runtime/ui";
+import { studioRequest, downloadStudioFile } from "../runtime/request";
 import { OfficialCardDrawing } from "./official-card";
 import { officialCard, officialScale, officialAssignment, type ChartAppearance } from "../lib/chart-appearance";
 import { loadChartFonts } from "../lib/chart-fonts";
@@ -811,6 +813,7 @@ function OrgRelationshipEdge({
 const edgeTypes = { orgRelationship: OrgRelationshipEdge };
 
 function StudioWorkspace() {
+  const environment = useStudioEnvironment();
   const [nodes, setNodes, onNodesChange] = useNodesState<OrgFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [charts, setCharts] = useState<ChartDocument[]>([]);
@@ -843,13 +846,13 @@ function StudioWorkspace() {
   const chooseChartAppearance = async (appearance:ChartAppearance) => {
     setChartAppearance(appearance);
     try {
-      const response=await fetch("/api/preferences",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({chartAppearance:appearance})});
+      const response=await studioRequest("/api/preferences",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({chartAppearance:appearance})});
       if(!response.ok)throw Error();
     } catch { setNotice("Appearance changed for this session; its preference could not be saved."); }
   };
   useEffect(() => {
     let active = true;
-    void fetch("/api/preferences", { cache: "no-store" })
+    void studioRequest("/api/preferences", { cache: "no-store" })
       .then(async (response) => {
         if (!response.ok)
           throw new Error("Library view preference could not be loaded.");
@@ -867,7 +870,7 @@ function StudioWorkspace() {
   const chooseLibraryView = async (view: "flat" | "tree") => {
     setLibraryView(view);
     try {
-      const response = await fetch("/api/preferences", {
+      const response = await studioRequest("/api/preferences", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ libraryView: view }),
@@ -900,6 +903,7 @@ function StudioWorkspace() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importEvidenceFiles, setImportEvidenceFiles] = useState<File[]>([]);
   const [importIntakes, setImportIntakes] = useState<ImportIntake[]>([]);
+  const [pendingImportSummaries,setPendingImportSummaries]=useState<{id:string;chartName:string;createdAt:string}[]>([]);
   const [importIntakeId, setImportIntakeId] = useState("");
   const [intakeName, setIntakeName] = useState("");
   const [intakeFiles, setIntakeFiles] = useState<File[]>([]);
@@ -1313,21 +1317,23 @@ function StudioWorkspace() {
   }, []);
 
   const loadImportIntakes = useCallback(async () => {
-    const response = await fetch("/api/import-intakes", { cache: "no-store" });
+    const response = await studioRequest("/api/import-intakes", { cache: "no-store" });
     if (!response.ok) throw new Error("Source intakes could not be loaded.");
     const data = (await response.json()) as ImportIntakesResponse;
     setImportIntakes(data.intakes);
+    const pending=await studioRequest('/api/ai-import-proposals',{cache:'no-store'});
+    if(pending.ok)setPendingImportSummaries(((await pending.json()) as {proposals:{id:string;chartName:string;createdAt:string}[]}).proposals??[]);
   }, []);
 
   const loadMcpControl = useCallback(async () => {
-    const response = await fetch("/api/mcp-control", { cache: "no-store" });
+    const response = await studioRequest("/api/mcp-control", { cache: "no-store" });
     if (!response.ok) throw new Error("Local AI controls could not be loaded.");
     const data = (await response.json()) as McpControlResponse;
     setMcpControl(data.control);
   }, []);
 
   const loadPendingAiProposals = useCallback(async () => {
-    const response = await fetch("/api/ai-proposals?status=pending", {
+    const response = await studioRequest("/api/ai-proposals?status=pending", {
       cache: "no-store",
     });
     if (!response.ok)
@@ -1349,7 +1355,7 @@ function StudioWorkspace() {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
       try {
-        const response = await fetch("/api/ai-proposals?status=pending", {
+        const response = await studioRequest("/api/ai-proposals?status=pending", {
           cache: "no-store",
         });
         if (response.ok && !cancelled) {
@@ -1498,7 +1504,7 @@ function StudioWorkspace() {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
       try {
-        const response = await fetch("/api/mcp-control", { cache: "no-store" });
+        const response = await studioRequest("/api/mcp-control", { cache: "no-store" });
         if (response.ok && !cancelled) {
           const data = (await response.json()) as McpControlResponse;
           setMcpControl(data.control);
@@ -1521,7 +1527,7 @@ function StudioWorkspace() {
     const poll = async () => {
       let nextDelay = 900;
       try {
-        const response = await fetch("/api/ai-activity", { cache: "no-store" });
+        const response = await studioRequest("/api/ai-activity", { cache: "no-store" });
         if (response.ok) {
           const data = (await response.json()) as McpActivityResponse;
           if (!cancelled) setMcpActivity(data.activity);
@@ -1725,7 +1731,7 @@ function StudioWorkspace() {
       setDismissedMcpRevision(mcpActivity.revision);
       if (!activityId) return;
       try {
-        await fetch("/api/ai-activity", {
+        await studioRequest("/api/ai-activity", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ action: "dismiss", activityId }),
@@ -1782,7 +1788,7 @@ function StudioWorkspace() {
       if (!proposalId || aiProposalBusy) return;
       setAiProposalBusy("load");
       try {
-        const response = await fetch(
+        const response = await studioRequest(
           `/api/ai-proposals?proposalId=${encodeURIComponent(proposalId)}`,
           { cache: "no-store" },
         );
@@ -1872,7 +1878,7 @@ function StudioWorkspace() {
       try {
         if (activity.operation === "stage_normalized_import") {
           setAiImportBusy("load");
-          const response = await fetch(
+          const response = await studioRequest(
             `/api/ai-import-proposals?proposalId=${encodeURIComponent(activity.proposalId)}`,
             { cache: "no-store" },
           );
@@ -1891,7 +1897,7 @@ function StudioWorkspace() {
           return true;
         }
         setAiProposalBusy("load");
-        const response = await fetch(
+        const response = await studioRequest(
           `/api/ai-proposals?proposalId=${encodeURIComponent(activity.proposalId)}`,
           { cache: "no-store" },
         );
@@ -1936,7 +1942,7 @@ function StudioWorkspace() {
     saveGenerationRef.current += 1;
     hydratedChartRef.current = null;
     try {
-      const response = await fetch("/api/charts", { cache: "no-store" });
+      const response = await studioRequest("/api/charts", { cache: "no-store" });
       if (!response.ok)
         throw new Error("The updated chart library could not be loaded.");
       const data = (await response.json()) as ChartLibraryResponse;
@@ -1993,7 +1999,7 @@ function StudioWorkspace() {
           if (!loaded) throw new Error("The review screen is not ready yet.");
           setDismissedMcpRevision(revision);
         } else {
-          const response = await fetch("/api/charts", { cache: "no-store" });
+          const response = await studioRequest("/api/charts", { cache: "no-store" });
           if (!response.ok)
             throw new Error("The updated chart library could not be loaded.");
           const data = (await response.json()) as ChartLibraryResponse;
@@ -2057,7 +2063,7 @@ function StudioWorkspace() {
   ]);
 
   const loadAiActivities = useCallback(async (chartId: string) => {
-    const response = await fetch(
+    const response = await studioRequest(
       `/api/ai-proposals?chartId=${encodeURIComponent(chartId)}`,
       { cache: "no-store" },
     );
@@ -2079,7 +2085,7 @@ function StudioWorkspace() {
         15_000,
       );
       try {
-        const response = await fetch("/api/ai-proposals", {
+        const response = await studioRequest("/api/ai-proposals", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ action, proposalId: proposal.id }),
@@ -2093,7 +2099,7 @@ function StudioWorkspace() {
         };
         if (!response.ok) {
           if (response.status === 404 || response.status === 409) {
-            const libraryResponse = await fetch("/api/charts", {
+            const libraryResponse = await studioRequest("/api/charts", {
               cache: "no-store",
             });
             if (libraryResponse.ok) {
@@ -2192,7 +2198,7 @@ function StudioWorkspace() {
         15_000,
       );
       try {
-        const response = await fetch("/api/ai-import-proposals", {
+        const response = await studioRequest("/api/ai-import-proposals", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ action, proposalId: proposal.id }),
@@ -2214,7 +2220,7 @@ function StudioWorkspace() {
         }
         if (!data.chart)
           throw new Error("The new chart was not returned by local storage.");
-        const libraryResponse = await fetch("/api/charts", {
+        const libraryResponse = await studioRequest("/api/charts", {
           cache: "no-store",
         });
         const library = libraryResponse.ok
@@ -2254,7 +2260,7 @@ function StudioWorkspace() {
     let cancelled = false;
     const loadLibrary = async () => {
       try {
-        const response = await fetch("/api/charts");
+        const response = await studioRequest("/api/charts");
         if (!response.ok) throw new Error("Chart library could not be loaded.");
         const data = (await response.json()) as ChartLibraryResponse;
         if (cancelled) return;
@@ -2326,7 +2332,7 @@ function StudioWorkspace() {
       };
       try {
         const sendSave = (chart: ChartDocument) =>
-          fetch("/api/charts", {
+          studioRequest("/api/charts", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ action: "save", chart, label: editLabelRef.current }),
@@ -3072,11 +3078,11 @@ function StudioWorkspace() {
     setHistoryBusy("load");
     try {
       const [response, activityResponse] = await Promise.all([
-        fetch(
+        studioRequest(
           `/api/charts?resource=versions&chartId=${encodeURIComponent(chartId)}`,
           { cache: "no-store" },
         ),
-        fetch(`/api/ai-proposals?chartId=${encodeURIComponent(chartId)}`, {
+        studioRequest(`/api/ai-proposals?chartId=${encodeURIComponent(chartId)}`, {
           cache: "no-store",
         }),
       ]);
@@ -3130,7 +3136,7 @@ function StudioWorkspace() {
     saveGenerationRef.current += 1;
     setHistoryBusy("save");
     try {
-      const response = await fetch("/api/charts", {
+      const response = await studioRequest("/api/charts", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -3188,7 +3194,7 @@ function StudioWorkspace() {
     saveGenerationRef.current += 1;
     setHistoryBusy("restore");
     try {
-      const response = await fetch("/api/charts", {
+      const response = await studioRequest("/api/charts", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -3757,7 +3763,7 @@ function StudioWorkspace() {
   };
 
   const createChart = async (name: string) => {
-    const response = await fetch("/api/charts", {
+    const response = await studioRequest("/api/charts", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "create", name }),
@@ -3777,7 +3783,7 @@ function StudioWorkspace() {
   };
 
   const duplicateChart = async (chart: ChartDocument) => {
-    const response = await fetch("/api/charts", {
+    const response = await studioRequest("/api/charts", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "duplicate", chartId: chart.id }),
@@ -3835,7 +3841,7 @@ function StudioWorkspace() {
         status: returnedToDraft ? ("draft" as const) : chart.status,
       };
       const sendSave = (candidate: ChartDocument) =>
-        fetch("/api/charts", {
+        studioRequest("/api/charts", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ action: "save", chart: candidate }),
@@ -3906,7 +3912,7 @@ function StudioWorkspace() {
     setLifecycleBusy(true);
     setLifecycleError("");
     try {
-      const response = await fetch("/api/charts", {
+      const response = await studioRequest("/api/charts", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -4022,7 +4028,7 @@ function StudioWorkspace() {
         }
         saveGenerationRef.current += 1;
       }
-      const response = await fetch("/api/charts", {
+      const response = await studioRequest("/api/charts", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "delete", chartId: chart.id }),
@@ -4088,7 +4094,7 @@ function StudioWorkspace() {
       const formData = new FormData();
       formData.set("name", intakeName.trim());
       intakeFiles.forEach((file) => formData.append("evidence", file));
-      const response = await fetch("/api/import-intakes", {
+      const response = await studioRequest("/api/import-intakes", {
         method: "POST",
         body: formData,
       });
@@ -4128,7 +4134,7 @@ function StudioWorkspace() {
       return;
     setIntakeBusy(true);
     try {
-      const response = await fetch("/api/import-intakes", {
+      const response = await studioRequest("/api/import-intakes", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "discard", intakeId: intake.id }),
@@ -4174,7 +4180,7 @@ function StudioWorkspace() {
     };
     setMcpControlBusy(true);
     try {
-      const response = await fetch("/api/mcp-control", {
+      const response = await studioRequest("/api/mcp-control", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "configure", ...current, ...patch }),
@@ -4250,7 +4256,7 @@ function StudioWorkspace() {
         comparisonTarget,
         comparisonSource,
       );
-      const response = await fetch("/api/ai-proposals", {
+      const response = await studioRequest("/api/ai-proposals", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "stage", chart: proposed }),
@@ -4298,7 +4304,7 @@ function StudioWorkspace() {
     setImportPreview(null);
     setImportReviewed(false);
     try {
-      const response = await fetch("/api/charts", {
+      const response = await studioRequest("/api/charts", {
         method: "POST",
         body: importFormData(true),
       });
@@ -4337,7 +4343,7 @@ function StudioWorkspace() {
     }
     setImportBusy(true);
     try {
-      const response = await fetch("/api/charts", {
+      const response = await studioRequest("/api/charts", {
         method: "POST",
         body: importFormData(false),
       });
@@ -4568,7 +4574,7 @@ function StudioWorkspace() {
           backupQuery.append("chartId", chart.id);
       }
       const queryString = backupQuery.toString();
-      const response = await fetch(
+      const response = await studioRequest(
         `/api/backups${queryString ? `?${queryString}` : ""}`,
         {
           headers: { accept: "application/json" },
@@ -4649,7 +4655,7 @@ function StudioWorkspace() {
     try {
       const envelope = JSON.parse(await backupFile.text()) as unknown;
       const opened = await openLibraryBackup(envelope, restorePassphrase);
-      const response = await fetch("/api/backups", {
+      const response = await studioRequest("/api/backups", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(opened.backup),
@@ -4665,7 +4671,7 @@ function StudioWorkspace() {
       if (!response.ok)
         throw new Error(result.error ?? "The backup could not be restored.");
 
-      const libraryResponse = await fetch("/api/charts", { cache: "no-store" });
+      const libraryResponse = await studioRequest("/api/charts", { cache: "no-store" });
       const library = (await libraryResponse.json()) as ChartLibraryResponse;
       setCharts(library.charts);
       const firstRestoredId = result.restoredCharts?.[0]?.id;
@@ -4950,7 +4956,7 @@ function StudioWorkspace() {
             )}
           </span>
           <span className="mcp-activity-hud__copy">
-            <small>Local MCP</small>
+            <small>{environment.kind === "browser" ? "Browser AI" : "Local MCP"}</small>
             <strong>{mcpActivityTitle}</strong>
             <span>
               {mcpActivity.label ?? "Updating chart"}
@@ -4990,7 +4996,7 @@ function StudioWorkspace() {
           </span>
           <span>
             <strong>OrgChart Studio</strong>
-            <small>ORNL working prototype</small>
+            <small>{environment.kind === "browser" ? "Browser file workspace" : "ORNL working prototype"}</small>
           </span>
         </div>
 
@@ -5224,7 +5230,7 @@ function StudioWorkspace() {
       >
         <div className="sidebar__section">
           <p className="sidebar__label">Workspace</p>
-          <button
+          <button aria-label="Chart library"
             type="button"
             className={workspaceView === "library" ? "is-active" : ""}
             onClick={() => setWorkspaceView("library")}
@@ -5235,7 +5241,7 @@ function StudioWorkspace() {
               {charts.length}
             </span>
           </button>
-          <button
+          <button aria-label="Chart editor"
             type="button"
             className={workspaceView === "canvas" ? "is-active" : ""}
             onClick={() => setWorkspaceView("canvas")}
@@ -5244,7 +5250,7 @@ function StudioWorkspace() {
             <SquaresFour size={19} aria-hidden="true" />
             <span>Chart editor</span>
           </button>
-          <button
+          <button aria-label="Accessible table"
             type="button"
             className={workspaceView === "table" ? "is-active" : ""}
             onClick={() => setWorkspaceView("table")}
@@ -5253,7 +5259,7 @@ function StudioWorkspace() {
             <Table size={19} aria-hidden="true" />
             <span>Accessible table</span>
           </button>
-          <button
+          <button aria-label="Review queue"
             type="button"
             className={workspaceView === "review" ? "is-active" : ""}
             onClick={() => setWorkspaceView("review")}
@@ -5276,7 +5282,7 @@ function StudioWorkspace() {
             )}
           </button>
           <SourceCheckProgress charts={charts} />
-          <button
+          <button aria-label="Monthly updates"
             type="button"
             className={workspaceView === "monthly" ? "is-active" : ""}
             onClick={() => setWorkspaceView("monthly")}
@@ -5284,7 +5290,7 @@ function StudioWorkspace() {
             <ClockCounterClockwise size={19} aria-hidden="true" />
             <span>Monthly updates</span>
           </button>
-          <button
+          <button aria-label="Consistency & priorities"
             type="button"
             className={workspaceView === "consistency" ? "is-active" : ""}
             onClick={() => setWorkspaceView("consistency")}
@@ -5295,7 +5301,7 @@ function StudioWorkspace() {
               {portfolioIssues.length}
             </span>
           </button>
-          <button
+          <button aria-label="Sources & imports"
             type="button"
             className={workspaceView === "sources" ? "is-active" : ""}
             onClick={() => setWorkspaceView("sources")}
@@ -5303,7 +5309,7 @@ function StudioWorkspace() {
             <FileArrowUp size={19} aria-hidden="true" />
             <span>Sources & imports</span>
           </button>
-          <button
+          <button aria-label="Backup & restore"
             type="button"
             className={workspaceView === "backups" ? "is-active" : ""}
             onClick={() => setWorkspaceView("backups")}
@@ -5311,7 +5317,7 @@ function StudioWorkspace() {
             <FileLock size={19} aria-hidden="true" />
             <span>Backup & restore</span>
           </button>
-          <button
+          <button aria-label="Publish & export"
             type="button"
             className={workspaceView === "exports" ? "is-active" : ""}
             onClick={() => setWorkspaceView("exports")}
@@ -5324,21 +5330,21 @@ function StudioWorkspace() {
 
         <div className="sidebar__section">
           <p className="sidebar__label">Change governance</p>
-          <button
+          <button aria-label={environment.kind === "browser" ? "Browser AI control" : "Local AI control"}
             type="button"
             className={workspaceView === "ai" ? "is-active" : ""}
             onClick={() => setWorkspaceView("ai")}
             data-tour-target="ai-control"
           >
             <Robot size={19} aria-hidden="true" />
-            <span>Local AI control</span>
+            <span>{environment.kind === "browser" ? "Browser AI control" : "Local AI control"}</span>
             <span
               className={`nav-count ${mcpControl?.paused ? "nav-count--warning" : "nav-count--neutral"}`}
             >
               {mcpControl?.paused ? "Paused" : "On"}
             </span>
           </button>
-          <button
+          <button aria-label="History / Timeline"
             type="button"
             className={workspaceView === "history" ? "is-active" : ""}
             onClick={showVersionHistory}
@@ -5350,7 +5356,7 @@ function StudioWorkspace() {
               {versions.length || activeChart?.version || 0}
             </span>
           </button>
-          <button
+          <button aria-label="Tips & tour"
             type="button"
             className="tour-nav-button"
             onClick={startOnboardingTour}
@@ -5377,6 +5383,8 @@ function StudioWorkspace() {
       </aside>
 
       <main className="workspace">
+        <RuntimeLibraryControls editorSaveState={saveState}/>
+        {environment.kind === "desktop" && storageMode === "desktop" && window.orgChartDesktop?.openFileWorkspace ? <section className="desktop-file-handoff"><button onClick={()=>void window.orgChartDesktop!.openFileWorkspace().catch(error=>setNotice(error.message))}>Open a portable file workspace</button><button disabled={saveState === "saving" || saveState === "error"} onClick={()=>void downloadStudioFile("/api/workspace","OrgChart-Library.orgchart-workspace").then(()=>setNotice("Complete unencrypted working library downloaded, including pending reviews and history. Open it in the web app or the separate file workspace.")).catch(error=>setNotice(error.message))}>Download full working library</button><span>Open web library files separately. Your desktop database stays in this window.</span></section> : null}
         {nextPendingAiProposal && !pendingAiProposal ? (
           <section
             className="pending-review-banner"
@@ -7016,7 +7024,7 @@ function StudioWorkspace() {
               requestLifecycleTransition(chart, "current")
             }
             onRefresh={async () => {
-              const response = await fetch("/api/charts", {
+              const response = await studioRequest("/api/charts", {
                 cache: "no-store",
               });
               if (!response.ok)
@@ -7972,8 +7980,8 @@ function StudioWorkspace() {
           >
             <div className="ai-control-heading">
               <div>
-                <span className="eyebrow">Local MCP governance</span>
-                <h1 id="ai-control-title">Local AI control center</h1>
+                <span className="eyebrow">{environment.kind === "browser" ? "Browser agent access" : "Local MCP governance"}</span>
+                <h1 id="ai-control-title">{environment.kind === "browser" ? "Browser AI control center" : "Local AI control center"}</h1>
                 <p>
                   Pause tool access, limit complete chart reads and writes to
                   selected charts, and review the bounded local access receipt.
@@ -7994,8 +8002,8 @@ function StudioWorkspace() {
               >
                 <Robot size={17} aria-hidden="true" />
                 {mcpControl?.paused
-                  ? "Resume local AI access"
-                  : "Pause local AI access"}
+                  ? (environment.kind === "browser" ? "Resume browser AI access" : "Resume local AI access")
+                  : (environment.kind === "browser" ? "Pause browser AI access" : "Pause local AI access")}
               </button>
             </div>
 
@@ -8199,7 +8207,7 @@ function StudioWorkspace() {
                       className="button button--secondary"
                       disabled={!mcpControl?.events.length}
                       onClick={async () => {
-                        const response = await fetch("/api/mcp-control", {
+                        const response = await studioRequest("/api/mcp-control", {
                           method: "POST",
                           headers: { "content-type": "application/json" },
                           body: JSON.stringify({ action: "clear_events" }),
@@ -8269,6 +8277,8 @@ function StudioWorkspace() {
           >
             {workspaceView === "sources" ? (
               <>
+                {pendingImportSummaries.length>0&&<section className="backup-card" aria-label="Pending chart imports"><h2>Pending chart imports</h2><p>Saved for review, including after restarting or opening a working library.</p>{pendingImportSummaries.map(p=><div key={p.id}><strong>{p.chartName}</strong><button className="button button--secondary" onClick={()=>void (async()=>{try{const response=await studioRequest('/api/ai-import-proposals?proposalId='+encodeURIComponent(p.id));const result=await response.json() as AiImportProposalResponse;if(!response.ok||!result.proposal)throw Error(result.error??'Import review unavailable.');setPendingAiImportProposal(result.proposal);}catch(error){setNotice((error as Error).message);}})()}>Review import</button></div>)}</section>}
+
                 <div className="sources-heading">
                   <div>
                     <span className="eyebrow">Source-controlled intake</span>
@@ -9000,6 +9010,7 @@ function StudioWorkspace() {
                   </div>
 
                   <div
+                    hidden={environment.kind === "browser"}
                     className="storage-locations"
                     aria-labelledby="storage-locations-title"
                   >
@@ -9505,6 +9516,7 @@ function StudioWorkspace() {
                                 <a
                                   className="source-download"
                                   href={`/api/charts?resource=source&sourceId=${encodeURIComponent(source.id)}`}
+                                  onClick={environment.kind === 'browser' ? event=>{event.preventDefault();void downloadStudioFile(event.currentTarget.getAttribute('href')!,source.fileName).catch(error=>setNotice(error.message));}:undefined}
                                   download={source.fileName}
                                 >
                                   <DownloadSimple
