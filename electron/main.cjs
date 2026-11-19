@@ -1372,6 +1372,8 @@ function createMainWindow(url) {
       if(process.env.ORGCHART_SMOKE_OUTPUT_DIR){fs.mkdirSync(process.env.ORGCHART_SMOKE_OUTPUT_DIR,{recursive:true});fs.writeFileSync(path.join(process.env.ORGCHART_SMOKE_OUTPUT_DIR,"Support-Panels-Desktop.png"),(await mainWindow.webContents.capturePage()).toPNG());}
       Object.assign(capabilities,await mainWindow.webContents.executeJavaScript(require("./appearance-smoke.cjs").appearanceJourneyScript));
       if(process.env.ORGCHART_SMOKE_OUTPUT_DIR)fs.writeFileSync(path.join(process.env.ORGCHART_SMOKE_OUTPUT_DIR,"Official-Appearance-Desktop.png"),(await mainWindow.webContents.capturePage()).toPNG());
+      Object.assign(capabilities,await mainWindow.webContents.executeJavaScript(require("./visual-regression-smoke.cjs").visualJourneyScript));
+      if(process.env.ORGCHART_SMOKE_OUTPUT_DIR)fs.writeFileSync(path.join(process.env.ORGCHART_SMOKE_OUTPUT_DIR,"Visual-Wrapping-Desktop.png"),(await mainWindow.webContents.capturePage()).toPNG());
       const originalSize = mainWindow.getContentSize();
       await mainWindow.webContents.executeJavaScript(`(() => {
         const later = document.querySelector('[data-ai-proposal-action="later"]') || [...document.querySelectorAll('.ai-review-panel button')].find(b => b.textContent.includes('Review later'));

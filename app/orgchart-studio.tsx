@@ -5476,6 +5476,7 @@ function StudioWorkspace() {
 
         {workspaceView === "canvas" ? (
           <section
+            key="canvas"
             className="canvas-panel"
             aria-label="Interactive organizational chart"
           >
@@ -7066,7 +7067,7 @@ function StudioWorkspace() {
             }}
           />
         ) : workspaceView === "library" ? (
-          <section className="library-panel" aria-labelledby="library-title">
+          <section key="library" className="library-panel" aria-labelledby="library-title">
             <div className="library-heading">
               <div>
                 <span className="eyebrow">Governed chart portfolio</span>

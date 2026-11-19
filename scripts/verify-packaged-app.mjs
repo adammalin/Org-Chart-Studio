@@ -14,6 +14,7 @@ const requiredPaths = [
   "electron/preload.cjs",
   "electron/file-workspaces.cjs",
   "electron/file-workspace-smoke.cjs",
+  "electron/visual-regression-smoke.cjs",
   "public/index.html",
   "public/assets",
   "electron/chart-fonts.cjs",
