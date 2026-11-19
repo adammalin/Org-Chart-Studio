@@ -2,7 +2,7 @@
 module.exports.editHistoryJourneyScript = `
 (async()=>{
  const assert=(v,m)=>{if(!v)throw Error(m);};
- const wait=async(fn,label,timeout=30000)=>{const end=Date.now()+timeout;while(Date.now()<end){const v=await fn();if(v)return v;await new Promise(r=>setTimeout(r,100));}throw Error('Timed out: '+label);};
+ const wait=async(fn,label,timeout=30000)=>{const end=Date.now()+timeout;while(Date.now()<end){const v=await fn();if(v)return v;await new Promise(r=>setTimeout(r,100));}let saved;try{const d=await read(chart.id);saved={undo:d.undo?.label,redo:d.redo?.label,operations:d.operations?.slice(0,4).map(o=>({label:o.label,state:o.state}))};}catch{}throw Error('Timed out: '+label+' '+JSON.stringify({saved,saveStatus:document.querySelector('.save-status')?.textContent,history:document.querySelector('.edit-history-panel')?.textContent?.slice(0,1800),buttons:[...document.querySelectorAll('.edit-history-actions button')].map(b=>({text:b.textContent,disabled:b.disabled}))}));};
  const post=async(url,body)=>{const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d;};
  const read=async id=>(await fetch('/api/edit-history?chartId='+encodeURIComponent(id)+'&includeChart=1',{cache:'no-store'}).then(r=>r.json()));
  const activity=async(id,chartId)=>{await post('/api/ai-activity',{action:'begin',activityId:id,operation:'undo_chart_edit',label:'Synthetic edit history refresh',chartId});await post('/api/ai-activity',{action:'complete',activityId:id,operation:'undo_chart_edit',label:'Synthetic edit history refresh',succeeded:true,completionKind:'saved',chartId});};
@@ -13,11 +13,17 @@ module.exports.editHistoryJourneyScript = `
  await activity('synthetic-history-refresh',chart.id);
  const choose=async id=>{const select=await wait(()=>{const s=document.querySelector('.chart-switcher select');return s&&[...s.options].some(o=>o.value===id)&&!s.disabled?s:null;},'history chart selector');select.value=id;select.dispatchEvent(new Event('change',{bubbles:true}));await wait(()=>document.querySelector('.chart-switcher select')?.value===id,'selected history chart');};
  const history=async()=>{const b=await wait(()=>[...document.querySelectorAll('.sidebar button')].find(b=>b.textContent.includes('History / Timeline')),'history navigation');b.click();await wait(()=>document.querySelector('.edit-history-panel'),'durable history panel');};
+ // A minimized/background Windows renderer may defer animation frames. Saved
+ // recovery must hydrate the selected chart without waiting for a visual frame.
+ const originalAnimationFrame=window.requestAnimationFrame.bind(window),deferredFrames=[];
+ window.requestAnimationFrame=callback=>{deferredFrames.push(callback);return deferredFrames.length;};
+ try {
  await choose(chart.id);await history();
  const undo=await wait(()=>{const b=document.querySelector('.edit-history-actions button');return b&&!b.disabled&&b.textContent.includes('Synthetic durable agent change')?b:null;},'saved agent undo button');undo.click();
  await wait(async()=>{const d=await read(chart.id);return d.chart.nodes[0].data.unit.assignmentLabel==='Synthetic Original Holder';},'UI undo saved');
  const redo=await wait(()=>{const b=document.querySelectorAll('.edit-history-actions button')[1];return b&&!b.disabled?b:null;},'redo button');redo.click();
  await wait(async()=>{const d=await read(chart.id);return d.chart.nodes[0].data.unit.assignmentLabel==='Synthetic Agent Holder';},'UI redo saved');
+ } finally {window.requestAnimationFrame=originalAnimationFrame;for(const frame of deferredFrames)originalAnimationFrame(frame);}
  await choose(other.id);await choose(chart.id);await history();await wait(()=>{const b=document.querySelector('.edit-history-actions button');return b&&!b.disabled&&b.textContent.includes('Synthetic durable agent change');},'undo after chart switching');
  const previousAttempt=(await window.orgChartDesktop.getServiceState()).attempt;await window.orgChartDesktop.testInterruptService();await wait(async()=>{const s=await window.orgChartDesktop.getServiceState();return s.phase==='ready'&&s.attempt>previousAttempt;},'history service recovery',90000);
  const saved=await read(chart.id);assert(saved.undo.actor==='agent'&&saved.events.some(e=>e.action==='undo')&&saved.events.some(e=>e.action==='redo'),'Durable mixed user/agent receipts after service restart');

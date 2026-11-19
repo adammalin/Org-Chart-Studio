@@ -92,6 +92,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1016,6 +1017,10 @@ function StudioWorkspace() {
     panel: { top: 0, left: 0 },
   });
   const hydratedChartRef = useRef<string | null>(null);
+  const selectedChartIdRef = useRef(activeChartId);
+  useLayoutEffect(() => {
+    selectedChartIdRef.current = activeChartId;
+  }, [activeChartId]);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveGenerationRef = useRef(0);
   const saveInFlightRef = useRef(false);
@@ -3012,9 +3017,12 @@ function StudioWorkspace() {
     // over an MCP recovery or over support-panel/history metadata.
     chartsRef.current = chartsRef.current.map(c => c.id === chart.id ? chart : c);
     setCharts(chartsRef.current);
-    if (hydratedChartRef.current !== chart.id) return;
+    // A background renderer can defer the animation frame that fits a newly
+    // opened chart. Selection, rather than that visual frame, owns recovery.
+    if (selectedChartIdRef.current !== chart.id) return;
     if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
     saveGenerationRef.current += 1;
+    hydratedChartRef.current = chart.id;
     setNodes(chart.nodes); setEdges(chart.edges);
     setSelectedId(""); setSelectedEdgeId("");
     setSaveState("saved");
