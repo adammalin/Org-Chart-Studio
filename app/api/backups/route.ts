@@ -1,3 +1,13 @@
+import {editBackupError,remapEditState} from "../../../lib/edit-history-backup";
+import type {EditOperation,EditEvent} from "../../../lib/edit-history";
+import { normalizeSupplements } from "../../../lib/chart-supplements";
+import {
+  checkpointFromRow,
+  ensureHistoryBaselines,
+  historyRestoreError,
+  type CheckpointRow,
+} from "../../../lib/chart-history";
+import { batchFromRow } from "../history/route";
 import { ensureSchema, getBindings } from "../../../db";
 import {
   LIBRARY_BACKUP_FORMAT,
@@ -19,11 +29,11 @@ import {
 } from "../../../lib/chart-library";
 import { parseImportFile } from "../../../lib/import-org-chart";
 
-const MAX_BACKUP_BYTES = 25_000_000;
+const MAX_BACKUP_BYTES = 250_000_000;
 const MAX_CHARTS = 200;
 const MAX_TOTAL_NODES = 25_000;
 const MAX_SOURCE_FILES = 1_000;
-const MAX_VERSIONS = 5_000;
+const MAX_VERSIONS = 50_000;
 const MAX_AI_ACTIVITIES = 10_000;
 
 interface ChartRow {
@@ -81,7 +91,9 @@ function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunkSize = 0x8000;
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+    binary += String.fromCharCode(
+      ...bytes.subarray(offset, offset + chunkSize),
+    );
   }
   return btoa(binary);
 }
@@ -119,8 +131,12 @@ function sourceFromRow(row: SourceRow): SourceRecord {
 }
 
 function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
-  const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges"> & {
+  const payload = JSON.parse(row.payload) as Pick<
+    ChartDocument,
+    "nodes" | "edges"
+  > & {
     lifecycle?: Partial<ChartDocument["lifecycle"]>;
+    libraryParentId?: string | null;
   };
   const status = normalizeChartStatus(row.status);
   return {
@@ -138,6 +154,8 @@ function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
       row.version,
       row.status === "approved",
     ),
+    ...normalizeSupplements({ ...payload, nodes: payload.nodes }),
+    libraryParentId: payload.libraryParentId,
     nodes: payload.nodes,
     edges: payload.edges,
     sources,
@@ -145,7 +163,10 @@ function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
 }
 
 function versionFromRow(row: VersionRow): ChartVersion {
-  const payload = JSON.parse(row.payload) as Pick<ChartVersion, "nodes" | "edges">;
+  const payload = JSON.parse(row.payload) as Pick<
+    ChartVersion,
+    "nodes" | "edges"
+  >;
   return {
     id: row.id,
     chartId: row.chart_id,
@@ -155,6 +176,7 @@ function versionFromRow(row: VersionRow): ChartVersion {
     restoredFromVersion: row.restored_from_version,
     nodes: payload.nodes,
     edges: payload.edges,
+    ...normalizeSupplements(payload),
   };
 }
 
@@ -195,6 +217,8 @@ function chartInsert(db: D1Database, chart: ChartDocument) {
         nodes: storageSafeNodes(chart.nodes),
         edges: chart.edges,
         lifecycle: chart.lifecycle,
+        libraryParentId: chart.libraryParentId,
+        ...normalizeSupplements(chart),
       }),
     );
 }
@@ -238,6 +262,7 @@ function versionInsert(db: D1Database, version: ChartVersion) {
       JSON.stringify({
         nodes: storageSafeNodes(version.nodes),
         edges: version.edges,
+        ...normalizeSupplements(version),
       }),
       version.restoredFromVersion,
     );
@@ -278,11 +303,33 @@ function noStoreJson(value: unknown, init: ResponseInit = {}) {
 export async function GET(request: Request) {
   const { DB, SOURCE_FILES } = getBindings();
   await ensureSchema(DB);
-  const [chartResult, sourceResult, versionResult, activityResult] = await Promise.all([
+  await ensureHistoryBaselines(DB);
+  const [
+    chartResult,
+    sourceResult,
+    versionResult,
+    activityResult,
+    checkpointResult,
+    batchResult, editOperations, editEvents,
+  ] = await Promise.all([
     DB.prepare("SELECT * FROM charts ORDER BY updated_at DESC").all<ChartRow>(),
-    DB.prepare("SELECT * FROM source_records ORDER BY imported_at DESC").all<SourceRow>(),
-    DB.prepare("SELECT * FROM chart_versions ORDER BY chart_id, version").all<VersionRow>(),
-    DB.prepare("SELECT * FROM ai_activity_events ORDER BY chart_id, created_at").all<ActivityRow>(),
+    DB.prepare(
+      "SELECT * FROM source_records ORDER BY imported_at DESC",
+    ).all<SourceRow>(),
+    DB.prepare(
+      "SELECT * FROM chart_versions ORDER BY chart_id, version",
+    ).all<VersionRow>(),
+    DB.prepare(
+      "SELECT * FROM ai_activity_events ORDER BY chart_id, created_at",
+    ).all<ActivityRow>(),
+    DB.prepare(
+      "SELECT * FROM chart_checkpoints ORDER BY sequence",
+    ).all<CheckpointRow>(),
+    DB.prepare("SELECT * FROM monthly_updates ORDER BY started_at").all<
+      Parameters<typeof batchFromRow>[0]
+    >(),
+    DB.prepare("SELECT * FROM chart_edit_operations ORDER BY sequence").all<EditOperation>(),
+    DB.prepare("SELECT * FROM chart_edit_events ORDER BY sequence").all<EditEvent>(),
   ]);
   const availableChartRows = chartResult.results.filter(
     (row) => !isRetiredExampleChartId(row.id),
@@ -290,7 +337,9 @@ export async function GET(request: Request) {
   const requestedChartIds = new URL(request.url).searchParams.getAll("chartId");
   if (requestedChartIds.length > MAX_CHARTS) {
     return noStoreJson(
-      { error: `A backup can include no more than ${MAX_CHARTS} selected charts.` },
+      {
+        error: `A backup can include no more than ${MAX_CHARTS} selected charts.`,
+      },
       { status: 413 },
     );
   }
@@ -300,7 +349,10 @@ export async function GET(request: Request) {
   );
   if (selection.missingChartIds.length) {
     return noStoreJson(
-      { error: "One or more selected charts are no longer available. Refresh and try again." },
+      {
+        error:
+          "One or more selected charts are no longer available. Refresh and try again.",
+      },
       { status: 404 },
     );
   }
@@ -311,11 +363,19 @@ export async function GET(request: Request) {
     );
   }
   const selectedChartIds = new Set(selection.chartIds);
-  const chartRows = availableChartRows.filter((row) => selectedChartIds.has(row.id));
+  const chartRows = availableChartRows.filter((row) =>
+    selectedChartIds.has(row.id),
+  );
   const includedChartIds = new Set(chartRows.map((row) => row.id));
-  const sourceRows = sourceResult.results.filter((row) => includedChartIds.has(row.chart_id));
-  const versionRows = versionResult.results.filter((row) => includedChartIds.has(row.chart_id));
-  const activityRows = activityResult.results.filter((row) => includedChartIds.has(row.chart_id));
+  const sourceRows = sourceResult.results.filter((row) =>
+    includedChartIds.has(row.chart_id),
+  );
+  const versionRows = versionResult.results.filter((row) =>
+    includedChartIds.has(row.chart_id),
+  );
+  const activityRows = activityResult.results.filter((row) =>
+    includedChartIds.has(row.chart_id),
+  );
   const sourceFiles: BackupSourceFile[] = [];
   let sourceBytes = 0;
 
@@ -324,14 +384,19 @@ export async function GET(request: Request) {
     const object = await SOURCE_FILES.get(sourceRow.storage_key);
     if (!object) {
       return noStoreJson(
-        { error: `Stored source file ${sourceRow.file_name} is missing; backup was not created.` },
+        {
+          error: `Stored source file ${sourceRow.file_name} is missing; backup was not created.`,
+        },
         { status: 409 },
       );
     }
     sourceBytes += object.size;
     if (sourceBytes > MAX_BACKUP_BYTES) {
       return noStoreJson(
-        { error: "Stored source files exceed the 25 MB prototype backup limit." },
+        {
+          error:
+            "Stored source files exceed the 250 MB prototype backup limit.",
+        },
         { status: 413 },
       );
     }
@@ -339,7 +404,9 @@ export async function GET(request: Request) {
     const checksum = await sha256(bytes);
     if (checksum !== sourceRow.checksum) {
       return noStoreJson(
-        { error: `Stored source file ${sourceRow.file_name} failed its checksum check.` },
+        {
+          error: `Stored source file ${sourceRow.file_name} failed its checksum check.`,
+        },
         { status: 409 },
       );
     }
@@ -374,11 +441,30 @@ export async function GET(request: Request) {
     chartVersions: versionRows.map(versionFromRow),
     aiActivities: activityRows.map(activityFromRow),
     sourceFiles,
+    checkpoints: checkpointResult.results
+      .filter((r) => includedChartIds.has(r.chart_id))
+      .map(checkpointFromRow)
+      .map((h) => ({
+        ...h,
+        chart: {
+          ...h.chart,
+          sources: h.chart.sources.map((s) => ({ ...s, storageKey: "" })),
+        },
+      })),
+    editHistory: {operations:editOperations.results.filter(o=>includedChartIds.has(o.chart_id)),events:editEvents.results.filter(e=>includedChartIds.has(e.chart_id))},
+    monthlyUpdates: batchResult.results
+      .map(batchFromRow)
+      .filter((b) => b.chartIds.some((id) => includedChartIds.has(id)))
+      .map((b) => ({
+        ...b,
+        chartIds: b.chartIds.filter((id) => includedChartIds.has(id)),
+      })),
   };
 
   return noStoreJson(backup, {
     headers: {
-      "content-disposition": 'attachment; filename="orgchart-studio-library-backup.json"',
+      "content-disposition":
+        'attachment; filename="orgchart-studio-library-backup.json"',
       "x-content-type-options": "nosniff",
     },
   });
@@ -387,22 +473,70 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   if (contentLength > MAX_BACKUP_BYTES * 1.5) {
-    return noStoreJson({ error: "The decrypted backup exceeds the restore limit." }, { status: 413 });
+    return noStoreJson(
+      { error: "The decrypted backup exceeds the restore limit." },
+      { status: 413 },
+    );
   }
 
   let value: unknown;
   try {
     value = await request.json();
   } catch {
-    return noStoreJson({ error: "The decrypted backup is not valid JSON." }, { status: 400 });
+    return noStoreJson(
+      { error: "The decrypted backup is not valid JSON." },
+      { status: 400 },
+    );
   }
   if (!isLibraryBackup(value)) {
-    return noStoreJson({ error: "This is not a supported OrgChart Studio backup." }, { status: 422 });
+    return noStoreJson(
+      { error: "This is not a supported OrgChart Studio backup." },
+      { status: 422 },
+    );
   }
 
   const backup = value;
+  try {
+    for (const doc of [
+      ...value.charts,
+      ...(value.chartVersions ?? []),
+      ...(value.checkpoints ?? []).map((h) => h.chart),
+    ])
+      normalizeSupplements(doc);
+  } catch (error) {
+    return noStoreJson(
+      {
+        error: error instanceof Error ? error.message : "Invalid support data.",
+      },
+      { status: 422 },
+    );
+  }
+  const editError=editBackupError(backup.editHistory,new Set(backup.charts.map(c=>c.id)));
+  if(editError)return noStoreJson({error:editError},{status:422});
   const chartVersions = backup.chartVersions ?? [];
   const aiActivities = backup.aiActivities ?? [];
+  const checkpoints = backup.checkpoints ?? [],
+    monthlyUpdates = backup.monthlyUpdates ?? [];
+  const historyError = historyRestoreError(
+    checkpoints,
+    monthlyUpdates,
+    new Set(backup.charts.map((c) => c.id)),
+  );
+  if (historyError)
+    return noStoreJson({ error: historyError }, { status: 422 });
+  for (const h of checkpoints) {
+    const findings = parseImportFile(
+      "history.json",
+      JSON.stringify(h.chart),
+    ).findings;
+    if (findings.some((f) => f.severity === "blocking"))
+      return noStoreJson(
+        {
+          error: `Historical checkpoint ${h.label} failed structural validation.`,
+        },
+        { status: 422 },
+      );
+  }
   const restorableCharts = backup.charts.filter(
     (chart) => !isRetiredExampleChartId(chart.id),
   );
@@ -416,7 +550,10 @@ export async function POST(request: Request) {
   const restorableVersions = chartVersions.filter((version) =>
     restorableChartIds.has(version.chartId),
   );
-  const totalNodes = backup.charts.reduce((count, chart) => count + chart.nodes.length, 0);
+  const totalNodes = backup.charts.reduce(
+    (count, chart) => count + chart.nodes.length,
+    0,
+  );
   if (
     !backup.charts.length ||
     backup.chartCount !== backup.charts.length ||
@@ -426,26 +563,42 @@ export async function POST(request: Request) {
     backup.sourceFiles.length > MAX_SOURCE_FILES ||
     chartVersions.length > MAX_VERSIONS ||
     aiActivities.length > MAX_AI_ACTIVITIES ||
-    (backup.versionCount !== undefined && backup.versionCount !== chartVersions.length) ||
-    (backup.aiActivityCount !== undefined && backup.aiActivityCount !== aiActivities.length)
+    (backup.versionCount !== undefined &&
+      backup.versionCount !== chartVersions.length) ||
+    (backup.aiActivityCount !== undefined &&
+      backup.aiActivityCount !== aiActivities.length)
   ) {
     return noStoreJson(
-      { error: "The backup exceeds the supported chart, unit, or source-file limits." },
+      {
+        error:
+          "The backup exceeds the supported chart, unit, or source-file limits.",
+      },
       { status: 413 },
     );
   }
 
   for (const chart of backup.charts) {
-    if (!chart.id || !chart.name || !Array.isArray(chart.nodes) || !Array.isArray(chart.edges)) {
-      return noStoreJson({ error: "A chart record in the backup is malformed." }, { status: 422 });
+    if (
+      !chart.id ||
+      !chart.name ||
+      !Array.isArray(chart.nodes) ||
+      !Array.isArray(chart.edges)
+    ) {
+      return noStoreJson(
+        { error: "A chart record in the backup is malformed." },
+        { status: 422 },
+      );
     }
     const findings = parseImportFile(
       "backup-chart.json",
-      JSON.stringify({ nodes: chart.nodes, edges: chart.edges }),
+      JSON.stringify(chart),
     ).findings;
     if (findings.some((finding) => finding.severity === "blocking")) {
       return noStoreJson(
-        { error: `Chart ${chart.name} failed structural validation.`, findings },
+        {
+          error: `Chart ${chart.name} failed structural validation.`,
+          findings,
+        },
         { status: 422 },
       );
     }
@@ -466,7 +619,10 @@ export async function POST(request: Request) {
       versionKeys.has(versionKey)
     ) {
       return noStoreJson(
-        { error: "A chart version record in the backup is malformed or duplicated." },
+        {
+          error:
+            "A chart version record in the backup is malformed or duplicated.",
+        },
         { status: 422 },
       );
     }
@@ -477,7 +633,10 @@ export async function POST(request: Request) {
     ).findings;
     if (findings.some((finding) => finding.severity === "blocking")) {
       return noStoreJson(
-        { error: `Saved version ${version.version} failed structural validation.`, findings },
+        {
+          error: `Saved version ${version.version} failed structural validation.`,
+          findings,
+        },
         { status: 422 },
       );
     }
@@ -500,21 +659,31 @@ export async function POST(request: Request) {
       activityIds.has(activity.id)
     ) {
       return noStoreJson(
-        { error: "An AI activity record in the backup is malformed or duplicated." },
+        {
+          error:
+            "An AI activity record in the backup is malformed or duplicated.",
+        },
         { status: 422 },
       );
     }
     activityIds.add(activity.id);
   }
 
-  const sourceFilesById = new Map(backup.sourceFiles.map((file) => [file.sourceId, file]));
+  const sourceFilesById = new Map(
+    backup.sourceFiles.map((file) => [file.sourceId, file]),
+  );
   const sourceRecords = backup.charts.flatMap((chart) => chart.sources);
-  const sourceRecordsById = new Map(sourceRecords.map((source) => [source.id, source]));
+  const sourceRecordsById = new Map(
+    sourceRecords.map((source) => [source.id, source]),
+  );
   if (
     sourceFilesById.size !== backup.sourceFiles.length ||
     sourceRecordsById.size !== sourceRecords.length
   ) {
-    return noStoreJson({ error: "The backup contains duplicate source identifiers." }, { status: 422 });
+    return noStoreJson(
+      { error: "The backup contains duplicate source identifiers." },
+      { status: 422 },
+    );
   }
   for (const sourceRecord of sourceRecords) {
     if (
@@ -540,7 +709,9 @@ export async function POST(request: Request) {
       sourceRecord.checksum !== sourceFile.checksum
     ) {
       return noStoreJson(
-        { error: `Source file ${sourceFile.fileName || "record"} does not match its provenance record.` },
+        {
+          error: `Source file ${sourceFile.fileName || "record"} does not match its provenance record.`,
+        },
         { status: 422 },
       );
     }
@@ -548,22 +719,32 @@ export async function POST(request: Request) {
     try {
       bytes = base64ToBytes(sourceFile.dataBase64);
     } catch {
-      return noStoreJson({ error: `Source file ${sourceFile.fileName} is not valid base64.` }, { status: 422 });
+      return noStoreJson(
+        { error: `Source file ${sourceFile.fileName} is not valid base64.` },
+        { status: 422 },
+      );
     }
     decodedByteCount += bytes.byteLength;
     if (decodedByteCount > MAX_BACKUP_BYTES) {
-      return noStoreJson({ error: "Source files exceed the 25 MB restore limit." }, { status: 413 });
+      return noStoreJson(
+        { error: "Source files exceed the 250 MB restore limit." },
+        { status: 413 },
+      );
     }
     const checksum = await sha256(bytes.slice().buffer);
     if (checksum !== sourceFile.checksum) {
       return noStoreJson(
-        { error: `Source file ${sourceFile.fileName} failed its checksum check.` },
+        {
+          error: `Source file ${sourceFile.fileName} failed its checksum check.`,
+        },
         { status: 422 },
       );
     }
     if (bytes.byteLength !== sourceRecord.fileSize) {
       return noStoreJson(
-        { error: `Source file ${sourceFile.fileName} does not match its recorded size.` },
+        {
+          error: `Source file ${sourceFile.fileName} does not match its recorded size.`,
+        },
         { status: 422 },
       );
     }
@@ -577,10 +758,17 @@ export async function POST(request: Request) {
   const statements: D1PreparedStatement[] = [];
   const writtenStorageKeys: string[] = [];
   let restoredActivityCount = 0;
+  const chartIdMap = new Map(
+    restorableCharts.map((c) => [c.id, `chart-${crypto.randomUUID()}`]),
+  );
+  const batchIdMap = new Map(
+    monthlyUpdates.map((b) => [b.id, `monthly-${crypto.randomUUID()}`]),
+  );
+  const sourceIdMap = new Map<string, SourceRecord>();
 
   try {
     for (const original of restorableCharts) {
-      const chartId = `chart-${crypto.randomUUID()}`;
+      const chartId = chartIdMap.get(original.id)!;
       const restoredSources: SourceRecord[] = [];
       for (const originalSource of original.sources) {
         const sourceId = `source-${crypto.randomUUID()}`;
@@ -588,38 +776,57 @@ export async function POST(request: Request) {
         const bytes = decodedFiles.get(originalSource.id);
         let storageKey = "";
         if (sourceFile && bytes) {
-          const safeFileName = sourceFile.fileName.replace(/[^a-zA-Z0-9._-]/g, "-");
+          const safeFileName = sourceFile.fileName.replace(
+            /[^a-zA-Z0-9._-]/g,
+            "-",
+          );
           storageKey = `chart-sources/${chartId}/${sourceId}-${safeFileName}`;
           await SOURCE_FILES.put(storageKey, bytes, {
             httpMetadata: { contentType: sourceFile.contentType },
-            customMetadata: { chartId, sourceId, checksum: sourceFile.checksum },
+            customMetadata: {
+              chartId,
+              sourceId,
+              checksum: sourceFile.checksum,
+            },
           });
           writtenStorageKeys.push(storageKey);
         }
-        restoredSources.push({
+        const restoredSource: SourceRecord = {
           ...originalSource,
           id: sourceId,
           chartId,
           storageKey,
           importedAt: now,
-        });
+        };
+        restoredSources.push(restoredSource);
+        sourceIdMap.set(originalSource.id, restoredSource);
       }
 
       const chart: ChartDocument = {
         ...original,
         id: chartId,
         name: `${original.name} — Restored`,
-        description: `Restored from encrypted backup exported ${backup.exportedAt}. ${original.description}`,
-        status: "draft",
+        description: `Restored from backup exported ${backup.exportedAt}. ${original.description}`,
+        status: normalizeChartStatus(original.status),
+        libraryParentId: original.libraryParentId
+          ? (chartIdMap.get(original.libraryParentId) ?? null)
+          : original.libraryParentId,
         createdAt: now,
         updatedAt: now,
-        lifecycle: normalizeChartLifecycle(original.lifecycle, "draft", now, original.version),
+        lifecycle: normalizeChartLifecycle(
+          original.lifecycle,
+          normalizeChartStatus(original.status),
+          now,
+          original.version,
+        ),
         nodes: storageSafeNodes(original.nodes),
         sources: restoredSources,
       };
       restoredCharts.push(chart);
       statements.push(chartInsert(DB, chart));
-      restoredSources.forEach((source) => statements.push(sourceInsert(DB, source)));
+      restoredSources.forEach((source) =>
+        statements.push(sourceInsert(DB, source)),
+      );
       const originalVersions = restorableVersions.filter(
         (version) => version.chartId === original.id,
       );
@@ -648,6 +855,7 @@ export async function POST(request: Request) {
             restoredFromVersion: null,
             nodes: storageSafeNodes(chart.nodes),
             edges: chart.edges,
+            ...normalizeSupplements(chart),
           }),
         );
       }
@@ -656,7 +864,7 @@ export async function POST(request: Request) {
       );
       originalActivities.forEach((activity) => {
         const linkedVersionId = activity.versionId
-          ? restoredVersionIds.get(activity.versionId) ?? null
+          ? (restoredVersionIds.get(activity.versionId) ?? null)
           : null;
         statements.push(
           activityInsert(DB, {
@@ -672,9 +880,88 @@ export async function POST(request: Request) {
       });
       restoredActivityCount += originalActivities.length;
     }
+    for (const b of monthlyUpdates) {
+      const ids = b.chartIds.flatMap((id) =>
+        chartIdMap.has(id) ? [chartIdMap.get(id)!] : [],
+      );
+      if (!ids.length) continue;
+      // An imported unfinished batch is historical evidence, not a second live batch.
+      statements.push(
+        DB.prepare(
+          `INSERT INTO monthly_updates(id,month,label,change_list,summary,effective_date,status,started_at,completed_at,chart_ids) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        ).bind(
+          batchIdMap.get(b.id)!,
+          b.month,
+          b.label,
+          b.changeList,
+          b.summary +
+            (b.status === "open"
+              ? " [Imported unfinished update; resume as a new batch.]"
+              : ""),
+          b.effectiveDate,
+          b.status === "open" ? "interrupted" : b.status,
+          b.startedAt,
+          b.completedAt,
+          JSON.stringify(ids),
+        ),
+      );
+    }
+    for (const h of checkpoints) {
+      const id = chartIdMap.get(h.chartId);
+      if (!id) continue;
+      const historical = {
+        ...h.chart,
+        id,
+        libraryParentId: h.chart.libraryParentId
+          ? (chartIdMap.get(h.chart.libraryParentId) ?? null)
+          : h.chart.libraryParentId,
+        sources: h.chart.sources.map((s) => {
+          const mapped = sourceIdMap.get(s.id);
+          return mapped
+            ? {
+                ...s,
+                id: mapped.id,
+                chartId: id,
+                storageKey: mapped.storageKey,
+              }
+            : { ...s, chartId: id, storageKey: "" };
+        }),
+      };
+      statements.push(
+        DB.prepare(
+          `INSERT INTO chart_checkpoints(id,chart_id,chart_name,recorded_at,source_updated_at,kind,label,batch_id,effective_date,payload) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        ).bind(
+          `checkpoint-${crypto.randomUUID()}`,
+          id,
+          h.chartName,
+          h.recordedAt,
+          h.sourceUpdatedAt,
+          h.kind,
+          h.label,
+          h.batchId ? (batchIdMap.get(h.batchId) ?? null) : null,
+          h.effectiveDate,
+          JSON.stringify(historical),
+        ),
+      );
+    }
+    const importedEdits=backup.editHistory;
+    if(importedEdits){
+      const operationIds=new Map(importedEdits.operations.map(o=>[o.id,`edit-${crypto.randomUUID()}`]));
+      const names=new Map(restorableCharts.map(c=>{const r=restoredCharts.find(r=>r.id===chartIdMap.get(c.id))!;return [c.id,{name:r.name,description:r.description}] as const;}));
+      for(const o of importedEdits.operations){
+        if(!chartIdMap.has(o.chart_id))continue;
+        const original=restorableCharts.find(c=>c.id===o.chart_id)!;
+        statements.push(DB.prepare("INSERT INTO chart_edit_operations(id,chart_id,actor,label,group_id,recorded_at,before_state,after_state,reversible,state) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(operationIds.get(o.id)!,chartIdMap.get(o.chart_id)!,o.actor,o.label,o.group_id?`restored-${o.group_id}`:null,o.recorded_at,remapEditState(o.before_state,chartIdMap,names,original),remapEditState(o.after_state,chartIdMap,names,original),o.reversible,o.state));
+      }
+      for(const e of importedEdits.events){if(!chartIdMap.has(e.chart_id))continue;
+        statements.push(DB.prepare("INSERT INTO chart_edit_events(id,chart_id,operation_id,action,actor,recorded_at) VALUES(?,?,?,?,?,?)").bind(`restored-event-${crypto.randomUUID()}`,chartIdMap.get(e.chart_id)!,operationIds.get(e.operation_id)!,e.action,e.actor,e.recorded_at));
+      }
+    }
     await DB.batch(statements);
   } catch (error) {
-    await Promise.all(writtenStorageKeys.map((key) => SOURCE_FILES.delete(key)));
+    await Promise.all(
+      writtenStorageKeys.map((key) => SOURCE_FILES.delete(key)),
+    );
     throw error;
   }
 
@@ -685,6 +972,9 @@ export async function POST(request: Request) {
       restoredSourceFileCount: writtenStorageKeys.length,
       restoredVersionCount: restorableVersions.length || restoredCharts.length,
       restoredAiActivityCount: restoredActivityCount,
+      restoredCheckpointCount: checkpoints.length,
+      restoredMonthlyUpdateCount: monthlyUpdates.length,
+      restoredEditOperationCount: backup.editHistory?.operations.filter(o=>chartIdMap.has(o.chart_id)).length??0,
       mode: "merge",
     },
     { status: 201 },

@@ -1,3 +1,4 @@
+import { readJsonObject, jsonField } from "../../../lib/json-request";
 import type {
   McpAccessEvent,
   McpChartScope,
@@ -11,13 +12,17 @@ const controlGlobal = globalThis as typeof globalThis & {
   __orgChartMcpControlStore?: McpControlStore;
 };
 
-function controlStore(): McpControlStore {
+async function controlStore(): Promise<McpControlStore> {
   if (!controlGlobal.__orgChartMcpControlStore) {
+    const {getBindings,ensureSchema}=await import("../../../db");
+    const {DB}=getBindings();await ensureSchema(DB);
+    const saved=await DB.prepare("SELECT payload FROM app_settings WHERE key='mcp-control'").first<{payload:string}>();
+    const preferences=saved?JSON.parse(saved.payload) as Partial<McpControlState>:{};
     controlGlobal.__orgChartMcpControlStore = {
-      paused: false,
-      chartScope: "all",
-      allowedChartIds: [],
-      sourceAccessEnabled: false,
+      paused: preferences.paused===true,
+      chartScope: preferences.chartScope==="selected"?"selected":"all",
+      allowedChartIds: Array.isArray(preferences.allowedChartIds)?preferences.allowedChartIds:[],
+      sourceAccessEnabled: preferences.sourceAccessEnabled!==false,
       revision: 0,
       events: [],
     };
@@ -39,13 +44,25 @@ function response(store: McpControlStore, status = 200) {
 }
 
 export async function GET() {
-  return response(controlStore());
+  return response(await controlStore());
 }
 
 export async function POST(request: Request) {
-  const body = (await request.json()) as Record<string, unknown>;
+  const requestBody = await readJsonObject(request, {
+    action: jsonField.text,
+    chartScope: jsonField.text,
+    toolName: jsonField.text,
+    chartId: jsonField.text,
+    mode: jsonField.text,
+    paused: jsonField.boolean,
+    sourceAccessEnabled: jsonField.boolean,
+    sourceAccess: jsonField.boolean,
+    allowedChartIds: jsonField.strings,
+  });
+  if (!requestBody.ok) return requestBody.response;
+  const body = requestBody.body as Record<string, unknown>;
   const action = safeText(body.action, 24);
-  const store = controlStore();
+  const store = await controlStore();
 
   if (action === "configure") {
     const chartScope: McpChartScope = body.chartScope === "selected" ? "selected" : "all";
@@ -58,6 +75,9 @@ export async function POST(request: Request) {
           ),
         ].slice(0, 200)
       : [];
+    const preferences={paused:body.paused===true,chartScope,allowedChartIds,sourceAccessEnabled:body.sourceAccessEnabled===true};
+    const {getBindings}=await import("../../../db");
+    await getBindings().DB.prepare("INSERT INTO app_settings(key,payload) VALUES('mcp-control',?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload").bind(JSON.stringify(preferences)).run();
     store.paused = body.paused === true;
     store.chartScope = chartScope;
     store.allowedChartIds = allowedChartIds;
@@ -100,7 +120,7 @@ export async function POST(request: Request) {
       message: store.paused
         ? "Blocked while local AI access is paused."
         : !sourceAllowed
-          ? "Blocked because retained-source extraction is off for this app session."
+          ? "Blocked because retained-source extraction is off in Local AI control."
         : chartAllowed
           ? `${mode === "write" ? "Write" : "Read"} access allowed.`
           : "Blocked by the selected-chart access scope.",

@@ -1,3 +1,4 @@
+import { readJsonObject, jsonField } from "../../../lib/json-request";
 import { ensureSchema, getBindings } from "../../../db";
 import {
   extractSourceFile,
@@ -45,7 +46,12 @@ async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
 export async function POST(request: Request) {
   const { DB, SOURCE_FILES } = getBindings();
   await ensureSchema(DB);
-  const body = (await request.json()) as {
+  const requestBody = await readJsonObject(request, {
+    scope: jsonField.text,
+    id: jsonField.text,
+  });
+  if (!requestBody.ok) return requestBody.response;
+  const body = requestBody.body as {
     scope?: "intake" | "chart";
     id?: string;
   };

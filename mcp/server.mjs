@@ -1,3 +1,9 @@
+import { registerEditHistoryTools } from "./edit-history-tools.mjs";
+import { registerSupplementTools } from "./supplement-tools.mjs";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+import { registerInsightTools } from "./insight-tools.mjs";
+import { registerHistoryTools } from "./history-tools.mjs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -23,6 +29,12 @@ function chartSummary(chart) {
     unitCount: Array.isArray(chart.nodes) ? chart.nodes.length : 0,
     relationshipCount: Array.isArray(chart.edges) ? chart.edges.length : 0,
     sourceCount: Array.isArray(chart.sources) ? chart.sources.length : 0,
+    supportPanelCount: chart.supportPanels?.length ?? 0,
+    supportAssignmentCount: (chart.supportPanels ?? []).reduce(
+      (n, p) => n + p.entries.length,
+      0,
+    ),
+    sourceCheckCount: chart.sourceChecks?.length ?? 0,
   };
 }
 
@@ -74,7 +86,8 @@ async function runWithWriteActivity(client, details, operation) {
         operation: details.operation,
         label: details.label,
         chartId: result?.chart?.id ?? proposal?.chartId ?? details.chartId,
-        chartName: result?.chart?.name ?? proposal?.chartName ?? details.chartName,
+        chartName:
+          result?.chart?.name ?? proposal?.chartName ?? details.chartName,
         succeeded: true,
         completionKind: proposal ? "review_ready" : "saved",
         proposalId: proposal?.id,
@@ -149,7 +162,11 @@ function registerTools(server, client) {
     },
     async ({ chartId }) => {
       try {
-        await client.authorizeTool({ toolName: "get_chart", chartId, mode: "read" });
+        await client.authorizeTool({
+          toolName: "get_chart",
+          chartId,
+          mode: "read",
+        });
         const { charts } = await client.listCharts();
         const chart = charts.find((candidate) => candidate.id === chartId);
         if (!chart) throw new Error("The requested chart was not found.");
@@ -178,7 +195,11 @@ function registerTools(server, client) {
     },
     async ({ chartId }) => {
       try {
-        await client.authorizeTool({ toolName: "validate_chart", chartId, mode: "read" });
+        await client.authorizeTool({
+          toolName: "validate_chart",
+          chartId,
+          mode: "read",
+        });
         const result = await client.validateChart(chartId);
         return success(
           result,
@@ -207,7 +228,11 @@ function registerTools(server, client) {
     },
     async ({ chartId }) => {
       try {
-        await client.authorizeTool({ toolName: "list_chart_versions", chartId, mode: "read" });
+        await client.authorizeTool({
+          toolName: "list_chart_versions",
+          chartId,
+          mode: "read",
+        });
         const { versions } = await client.listVersions(chartId);
         const summaries = versions.map((version) => ({
           id: version.id,
@@ -246,8 +271,14 @@ function registerTools(server, client) {
     },
     async (input) => {
       try {
-        await client.authorizeTool({ toolName: "validate_normalized_import", mode: "read" });
-        const result = await client.importNormalized({ ...input, validateOnly: true });
+        await client.authorizeTool({
+          toolName: "validate_normalized_import",
+          mode: "read",
+        });
+        const result = await client.importNormalized({
+          ...input,
+          validateOnly: true,
+        });
         return success(
           result,
           `Validated ${result.preview.rowCount} normalized rows without creating a chart.`,
@@ -273,7 +304,10 @@ function registerTools(server, client) {
     },
     async () => {
       try {
-        await client.authorizeTool({ toolName: "list_import_intakes", mode: "read" });
+        await client.authorizeTool({
+          toolName: "list_import_intakes",
+          mode: "read",
+        });
         const { intakes } = await client.listImportIntakes();
         const pending = intakes
           .filter((intake) => intake.status === "pending")
@@ -303,7 +337,7 @@ function registerTools(server, client) {
     {
       title: "Extract one retained source intake",
       description:
-        "Read a pending local source intake through OrgChart Studio's bounded extractor. This requires the user to enable retained-source extraction in Local AI control for the current app session. Only extracted text, spreadsheet cells, PowerPoint shape geometry, connector metadata, checksums, and warnings enter the AI conversation; raw file bytes are never returned. Use the intake ID when staging its normalized import, and preserve precise extracted locators in card and reporting-line provenance.",
+        "Read a pending local source intake through OrgChart Studio's bounded extractor. This requires retained-source extraction to be enabled in Local AI control for the current app session. Only extracted text, spreadsheet cells, PowerPoint shape geometry, connector metadata, checksums, and warnings enter the AI conversation; raw file bytes are never returned. Use the intake ID when staging its normalized import, and preserve precise extracted locators in card and reporting-line provenance.",
       inputSchema: { intakeId: z.string().min(1).max(200) },
       annotations: {
         readOnlyHint: true,
@@ -518,7 +552,10 @@ function registerTools(server, client) {
         "Stage source-backed corrections to an existing chart after extract_chart_sources. This requires retained-source extraction to be enabled. It first writes a private, selected-chart rollback backup beside the desktop connection file, then stages a human-review proposal. It cannot add or remove cards, rewire relationships, change layout or pins, or silently confirm edits: every changed card or line must include a source locator, actionable review note, and sourceCertainty needs_review. The saved chart remains unchanged until a person applies the proposal.",
       inputSchema: {
         chart: z.record(z.string(), z.unknown()),
-        reviewedSourceChecksums: z.array(z.string().min(16).max(128)).min(1).max(100),
+        reviewedSourceChecksums: z
+          .array(z.string().min(16).max(128))
+          .min(1)
+          .max(100),
         changeSummary: z.string().min(3).max(500),
       },
       annotations: {
@@ -540,7 +577,9 @@ function registerTools(server, client) {
           },
           async () => {
             const { charts } = await client.listCharts();
-            const current = charts.find((candidate) => candidate.id === chart.id);
+            const current = charts.find(
+              (candidate) => candidate.id === chart.id,
+            );
             if (!current) throw new Error("The requested chart was not found.");
             const validation = validateSourceRecheckProposal({
               current,
@@ -554,7 +593,10 @@ function registerTools(server, client) {
               chartId: current.id,
             });
             try {
-              const staged = await client.stageChartProposal(chart, changeSummary);
+              const staged = await client.stageChartProposal(
+                chart,
+                changeSummary,
+              );
               return { ...staged, backup, sourceReview: validation };
             } catch (error) {
               throw new Error(
@@ -625,10 +667,14 @@ export function createOrgChartMcpServer(options = {}) {
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
       instructions:
-        "OrgChart Studio data is local and user-controlled. Respect the app's MCP pause, selected-chart scope, and retained-source extraction toggle. Call list_charts before get_chart or any existing-chart write. Only read a complete chart or extracted retained source when the user identifies it and understands that returned content enters the AI conversation. Raw retained files are never returned. For new legacy charts, list pending source intakes when relevant, extract only after the user enables it, validate normalized data, and prefer stage_normalized_import so a person reviews it in the app before creation. When a source card names a person and role, map them to assignmentLabel and positionTitle rather than a vacant unit. Treat adjacent shaded strips, portfolios, coverage areas, specialties, and service lists as descriptive content unless an explicit connector or source statement establishes a separate reporting unit. A shared line across staff cards indicates siblings, not a chain. Keep card and reporting-line provenance separate. For an existing source audit, call extract_chart_sources, preserve the returned checksums, and use stage_source_recheck; it creates a private rollback package and permits only review-queued semantic corrections while preserving layout and reporting endpoints. Before any other existing-chart write, read the current chart and preserve its id, version, updatedAt, layout, pins, and sources. Never invent reporting relationships or source facts. Do not delete charts, restore backups, download raw source files, or change storage settings; this server exposes no such tools.",
+        "OrgChart Studio data is local and user-controlled. Respect the app's MCP pause, selected-chart scope, and retained-source extraction toggle. Call list_charts before get_chart or any existing-chart write. Only read a complete chart or extracted retained source when the user identifies it and understands that returned content enters the AI conversation. Raw retained files are never returned. For new legacy charts, list pending source intakes when relevant, extract only while that control is enabled, validate normalized data, and prefer stage_normalized_import so a person reviews it in the app before creation. When a source card names a person and role, map them to assignmentLabel and positionTitle rather than a vacant unit. Treat adjacent shaded strips, portfolios, coverage areas, specialties, and service lists as descriptive content unless an explicit connector or source statement establishes a separate reporting unit. A shared line across staff cards indicates siblings, not a chain. Keep card and reporting-line provenance separate. For an existing source audit, call extract_chart_sources, preserve the returned checksums, and use stage_source_recheck; it creates a private rollback package and permits only review-queued semantic corrections while preserving layout and reporting endpoints. For monthly changes, use begin_monthly_update to preserve all previous states and capture the change list, then stage reviewed changes and complete_monthly_update after review. Applied changes automatically preserve before/after checkpoints and durable per-chart edit history. For an explicitly requested undo or redo, call list_edit_history and preview_edit_operation, then use the exact operation ID, history revision and saved chart guard with undo_chart_edit or redo_chart_edit. Reuse the same requestId after an uncertain response. To reverse an earlier operation while preserving later changes, stage_history_revert prepares a normal review proposal and blocks conflicts; it does not Apply or mark Current. Before any other existing-chart write, read the current chart and preserve its id, version, updatedAt, layout, pins, and sources. Never invent reporting relationships or source facts. Do not delete charts, restore backups, download raw source files, or change storage settings; this server exposes no such tools.",
     },
   );
   registerTools(server, client);
+  registerHistoryTools(server, client);
+  registerEditHistoryTools(server, client);
+  registerInsightTools(server, client);
+  registerSupplementTools(server, client, runWithWriteActivity);
   return server;
 }
 
@@ -638,10 +684,24 @@ async function main() {
   await server.connect(transport);
 }
 
-if (import.meta.url === new URL(process.argv[1], "file:").href) {
+function isCommandLineEntryPoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      fs.realpathSync(fileURLToPath(import.meta.url)) ===
+      fs.realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isCommandLineEntryPoint()) {
   main().catch((error) => {
     console.error(
-      error instanceof Error ? error.message : "OrgChart Studio MCP could not start.",
+      error instanceof Error
+        ? error.message
+        : "OrgChart Studio MCP could not start.",
     );
     process.exitCode = 1;
   });

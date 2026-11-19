@@ -121,7 +121,7 @@ jobs:
             -RedirectStandardOutput $stdoutLog `
             -RedirectStandardError $stderrLog `
             -PassThru
-          if (-not $process.WaitForExit(120000)) {
+          if (-not $process.WaitForExit(240000)) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             if (Test-Path $stdoutLog) { Get-Content $stdoutLog }
             if (Test-Path $stderrLog) { Get-Content $stderrLog }

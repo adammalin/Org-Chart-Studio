@@ -2,16 +2,19 @@
 """Create the selectable-text OrgChart Studio macOS quick-start guide."""
 
 from pathlib import Path
+import textwrap
 
 from reportlab.lib.colors import HexColor, white
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
+from reportlab.pdfbase.pdfdoc import PDFString
 
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "docs" / "ORNL-OrgChart-Studio-macOS-Quick-Start.pdf"
 PAGE_W, PAGE_H = letter
+MAC_COMMAND = (ROOT / "scripts" / "install-macos-command.txt").read_text().strip()
 
 ORNL_GREEN = HexColor("#00662C")
 HALE_NAVY = HexColor("#00454D")
@@ -73,6 +76,7 @@ def draw_code_block(
     width: float,
     height: float,
     font_size: float = 6.7,
+    actual_text: str | None = None,
 ) -> None:
     pdf.setFillColor(HALE_NAVY)
     pdf.rect(x, top - height, width, height, stroke=0, fill=1)
@@ -81,9 +85,14 @@ def draw_code_block(
     pdf.setFont("Courier", font_size)
     pdf.setFillColor(WHITE)
     baseline = top - 19
+    if actual_text:
+        encoded = PDFString(actual_text).format(pdf._doc).decode("latin1")
+        pdf._code.append(f"/Span << /ActualText {encoded} >> BDC")
     for line in lines:
         pdf.drawString(x + 15, baseline, line)
         baseline -= 13.5
+    if actual_text:
+        pdf._code.append("EMC")
 
 
 def draw_header_flow(pdf: canvas.Canvas) -> None:
@@ -199,7 +208,7 @@ def build_pdf(output: Path) -> None:
     pdf.setFillColor(ENERGY)
     pdf.rect(0, PAGE_H - 172, PAGE_W, 6, stroke=0, fill=1)
 
-    draw_label(pdf, "ORNL workflow | macOS quick start | updated August 6, 2026", 40, 756, WHITE)
+    draw_label(pdf, "ORNL workflow | macOS quick start | updated November 17, 2026", 40, 756, WHITE)
     pdf.setFillColor(WHITE)
     pdf.setFont("Helvetica-Bold", 28)
     pdf.drawString(40, 716, "Install once.")
@@ -211,10 +220,9 @@ def build_pdf(output: Path) -> None:
     draw_label(pdf, "01  First install or update", 40, 594)
     y = draw_wrapped_text(
         pdf,
-        "Copy both commands below. No GitHub account or authentication is required. Setup explains "
-        "the optional local ChatGPT Desktop / Codex MCP companion. At its prompt, type y and press "
-        "Return to install it; pressing Return alone skips it. MCP works only while OrgChart Studio "
-        "is open. Restart that desktop client once after installation.",
+        "Paste the whole command into Terminal and press Return. No GitHub sign-in is needed. "
+        "Setup can connect Codex or ChatGPT Desktop: type y at the MCP prompt, or press Return "
+        "to skip. Studio must be open for MCP; restart the AI client once after registering.",
         40,
         575,
         532,
@@ -222,15 +230,8 @@ def build_pdf(output: Path) -> None:
         10,
         leading=13.5,
     )
-    install_lines = [
-        "/usr/bin/curl --fail --location --show-error \\",
-        '  --output "$HOME/Downloads/orgchart-studio-install.zsh" \\',
-        '  "https://raw.githubusercontent.com/adammalin/Org-Chart-Studio/refs/heads/main/scripts/bootstrap-mac-source-test.zsh"',
-        "",
-        '/bin/zsh "$HOME/Downloads/orgchart-studio-install.zsh" \\',
-        '  "$HOME/OrgChart-Studio-source-test"',
-    ]
-    draw_code_block(pdf, install_lines, 40, y - 5, 532, 108)
+    install_lines = textwrap.wrap(MAC_COMMAND, width=117, break_long_words=False, break_on_hyphens=False)
+    draw_code_block(pdf, install_lines, 40, y - 5, 532, 108, font_size=7.4, actual_text=MAC_COMMAND)
     pdf.setFillColor(SOFT_GREEN)
     pdf.rect(40, y - 157, 532, 39, stroke=0, fill=1)
     pdf.setFillColor(ORNL_GREEN)
@@ -244,7 +245,7 @@ def build_pdf(output: Path) -> None:
     pdf.drawString(
         51,
         y - 147,
-        "TO UPDATE LATER: quit OrgChart Studio, then run these same two commands again.",
+        "PUBLIC MAIN INSTALL: inspect the version before replacing a newer local copy.",
     )
 
     draw_label(pdf, "02  Start OrgChart Studio after install", 40, 366)
@@ -367,7 +368,7 @@ def build_pdf(output: Path) -> None:
     pdf.drawString(40, 714, "Use AI with")
     pdf.drawString(40, 682, "OrgChart Studio.")
     pdf.setFont("Helvetica", 11.2)
-    pdf.drawString(40, 653, "AI stages edits and imports. You decide. The app remains the source of truth.")
+    pdf.drawString(40, 653, "AI stages changes. You decide what becomes saved data.")
     draw_ai_header_flow(pdf)
 
     draw_label(pdf, "01  Before the first AI edit or import", 40, 594)
@@ -375,7 +376,7 @@ def build_pdf(output: Path) -> None:
         ("1", "INSTALL", "At the MCP prompt, type y and press Return."),
         ("2", "RESTART", "Restart ChatGPT Desktop or Codex once."),
         ("3", "OPEN APP", "OrgChart Studio must be running first."),
-        ("4", "SCOPE", "Allow charts. Retained-source reading stays off."),
+        ("4", "SCOPE", "Choose allowed charts and source access."),
     ]
     for index, (number, title, note) in enumerate(setup_cards):
         draw_numbered_card(
@@ -478,7 +479,7 @@ def build_pdf(output: Path) -> None:
     pdf.drawString(40, 35, "If it says unavailable, open OrgChart Studio. Local MCP works in the desktop app/Codex, not ChatGPT web.")
     pdf.setFillColor(ENERGY)
     pdf.setFont("Helvetica-Bold", 7.2)
-    pdf.drawString(40, 19, "Source extraction is off by default. Returned chart fields and extracted content enter the AI conversation.")
+    pdf.drawString(40, 19, "Source extraction is on by default; switch it off in Local AI control when needed. Returned chart fields and extracted content enter the AI conversation.")
 
     pdf.showPage()
     pdf.save()

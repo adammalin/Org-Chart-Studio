@@ -1,4 +1,4 @@
-import { strFromU8, unzipSync, unzlibSync } from "fflate";
+import { strFromU8, unzipSync, Unzlib } from "fflate";
 import { extractFirstWorksheetMatrix } from "./import-org-chart-file";
 
 const MAX_OFFICE_UNCOMPRESSED_BYTES = 40_000_000;
@@ -262,6 +262,7 @@ function pdfTextOperators(value: string): string[] {
 function extractPdf(bytes: Uint8Array) {
   const binary = bytesToBinary(bytes);
   const candidates = [binary];
+  let expandedBytes = 0;
   for (const stream of binary.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
     const dictionary = binary.slice(Math.max(0, (stream.index ?? 0) - 600), stream.index ?? 0);
     if (!/\/FlateDecode\b/.test(dictionary)) {
@@ -269,8 +270,21 @@ function extractPdf(bytes: Uint8Array) {
       continue;
     }
     try {
-      candidates.push(bytesToBinary(unzlibSync(binaryToBytes(stream[1]))));
-    } catch {
+      const chunks: string[] = [];
+      const inflater = new Unzlib((chunk) => {
+        expandedBytes += chunk.byteLength;
+        if (expandedBytes > MAX_OFFICE_UNCOMPRESSED_BYTES)
+          throw new Error("The expanded PDF exceeds the 40 MB extraction limit.");
+        chunks.push(bytesToBinary(chunk));
+      });
+      const compressed = binaryToBytes(stream[1]);
+      // Bound each inflate step as well as the total; do not allocate a whole
+      // decompressed document before checking the extraction limit.
+      for (let offset = 0; offset < compressed.length; offset += 1024)
+        inflater.push(compressed.subarray(offset, offset + 1024), offset + 1024 >= compressed.length);
+      candidates.push(chunks.join(""));
+    } catch (error) {
+      if (expandedBytes > MAX_OFFICE_UNCOMPRESSED_BYTES) throw error;
       // A malformed or unsupported compressed stream is skipped without exposing raw bytes.
     }
   }

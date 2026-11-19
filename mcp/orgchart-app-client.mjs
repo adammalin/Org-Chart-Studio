@@ -121,6 +121,7 @@ export class OrgChartAppClient {
       response = await fetch(url, {
         ...init,
         headers,
+        redirect: "error",
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch {

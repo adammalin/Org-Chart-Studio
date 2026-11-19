@@ -1,3 +1,8 @@
+import type {
+  SupportPanel,
+  SourceCheck,
+  SourceLayout,
+} from "./chart-supplements";
 import type { Edge } from "@xyflow/react";
 import {
   descendantIds,
@@ -26,7 +31,8 @@ export const chartStatusLabels: Record<ChartStatus, string> = {
 export const chartStatusDescriptions: Record<ChartStatus, string> = {
   draft: "Actively being built or edited; not yet approved.",
   in_review: "Submitted for a person to verify before it becomes Current.",
-  current: "Approved, authoritative, and currently in use.",
+  current:
+    "Designated as the current working chart; source review notes remain visible.",
   archived: "Historical and read-only; no longer the working chart.",
 };
 
@@ -93,9 +99,13 @@ export interface ChartDocument {
   createdAt: string;
   updatedAt: string;
   lifecycle: ChartLifecycleMetadata;
+  libraryParentId?: string | null;
   nodes: OrgFlowNode[];
   edges: Edge[];
   sources: SourceRecord[];
+  supportPanels?: SupportPanel[];
+  sourceChecks?: SourceCheck[];
+  sourceLayout?: SourceLayout;
 }
 
 export interface ChartLibraryResponse {
@@ -109,6 +119,9 @@ export interface ChartVersion {
   label: string;
   createdAt: string;
   restoredFromVersion: number | null;
+  supportPanels?: SupportPanel[];
+  sourceChecks?: SourceCheck[];
+  sourceLayout?: SourceLayout;
   nodes: OrgFlowNode[];
   edges: Edge[];
 }
@@ -122,6 +135,11 @@ export function storageSafeNodes(nodes: OrgFlowNode[]): OrgFlowNode[] {
     id: flowNode.id,
     type: "orgUnit",
     position: { ...flowNode.position },
+    ...(flowNode.style?.width || flowNode.style?.height
+      ? {
+          style: { width: flowNode.style.width, height: flowNode.style.height },
+        }
+      : {}),
     data: {
       unit: flowNode.data.unit,
       pinned: Boolean(flowNode.data.pinned),
@@ -143,16 +161,20 @@ function branchDocument(
       .map((flowNode) => ({
         ...flowNode,
         position: {
-          x: flowNode.position.x - Math.min(
-            ...initialNodes
-              .filter((candidate) => branchIds.has(candidate.id))
-              .map((candidate) => candidate.position.x),
-          ),
-          y: flowNode.position.y - Math.min(
-            ...initialNodes
-              .filter((candidate) => branchIds.has(candidate.id))
-              .map((candidate) => candidate.position.y),
-          ),
+          x:
+            flowNode.position.x -
+            Math.min(
+              ...initialNodes
+                .filter((candidate) => branchIds.has(candidate.id))
+                .map((candidate) => candidate.position.x),
+            ),
+          y:
+            flowNode.position.y -
+            Math.min(
+              ...initialNodes
+                .filter((candidate) => branchIds.has(candidate.id))
+                .map((candidate) => candidate.position.y),
+            ),
         },
       })),
   );
@@ -180,7 +202,8 @@ export function seedChartDocuments(): ChartDocument[] {
   const primary: ChartDocument = {
     id: "chart-synthetic-laboratory",
     name: "Synthetic Laboratory Overview",
-    description: "Complete synthetic hierarchy used for technical prototype testing.",
+    description:
+      "Complete synthetic hierarchy used for technical prototype testing.",
     status: "draft",
     version: 1,
     createdAt: date,
@@ -224,14 +247,18 @@ export function seedChartDocuments(): ChartDocument[] {
   ];
 }
 
-export function createBlankChart(name: string, id = crypto.randomUUID()): ChartDocument {
+export function createBlankChart(
+  name: string,
+  id = crypto.randomUUID(),
+): ChartDocument {
   const now = new Date().toISOString();
   const rootId = `unit-${crypto.randomUUID()}`;
 
   return {
     id,
     name,
-    description: "New draft chart. Complete the organization details before review.",
+    description:
+      "New draft chart. Complete the organization details before review.",
     status: "draft",
     version: 1,
     createdAt: now,

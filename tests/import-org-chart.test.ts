@@ -8,6 +8,47 @@ import {
   rowsToChart,
 } from "../lib/import-org-chart";
 
+function canonicalWithContextLine(relationshipType: string) {
+  const unit = (id: string) => ({
+    id, type: "orgUnit", position: { x: 0, y: 0 },
+    data: { unit: {
+      id, name: id, shortName: id, type: "group", positionTitle: "Leader",
+      assignmentLabel: "Synthetic Person", positionStatus: "filled",
+      effectiveDate: "Not specified", source: "Synthetic source",
+      sourceCertainty: "needs_review", publicationVisibility: "internal",
+    } },
+  });
+  return {
+    nodes: [unit("root"), unit("left"), unit("right")],
+    edges: [
+      { id: "root-left", source: "root", target: "left", data: { relationshipType: "primary supervisory" } },
+      { id: "root-right", source: "root", target: "right", data: { relationshipType: "primary supervisory" } },
+      { id: "context", source: "left", target: "right", style: { strokeDasharray: "6 4" },
+        data: { relationshipType, sourceCertainty: "needs_review", reviewNote: "Authority is not asserted." } },
+    ],
+  };
+}
+
+test("canonical restore preserves a dashed source connection without inventing a second primary parent", () => {
+  const chart = canonicalWithContextLine("source connection — authority unspecified");
+  const preview = parseImportFile("backup-chart.json", JSON.stringify(chart));
+  assert.deepEqual(preview.findings.filter(f => f.severity === "blocking"), []);
+  assert.deepEqual(preview.edges.find(e => e.id === "context"), chart.edges[2]);
+});
+
+test("canonical restore counts secondary supervisory lines separately from primary parents", () => {
+  const chart = canonicalWithContextLine("secondary supervisory");
+  const preview = parseImportFile("history.json", JSON.stringify(chart));
+  assert.deepEqual(preview.findings.filter(f => f.severity === "blocking"), []);
+});
+
+test("canonical restore still blocks multiple primary parents and unsupported relationship labels", () => {
+  const primary = parseImportFile("history.json", JSON.stringify(canonicalWithContextLine("primary supervisory")));
+  assert.ok(primary.findings.some(f => f.code === "MULTIPLE_PRIMARY_PARENTS"));
+  const unknown = parseImportFile("history.json", JSON.stringify(canonicalWithContextLine("unsupported authority")));
+  assert.ok(unknown.findings.some(f => f.code === "INVALID_RELATIONSHIP_TYPE"));
+});
+
 test("AI normalization brief separates filled staff cards from portfolio labels", () => {
   const brief = aiIntakeBrief();
 

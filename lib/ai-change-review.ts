@@ -1,9 +1,10 @@
 import type { Edge } from "@xyflow/react";
-import type { ChartDocument } from "./chart-library";
+import type { ChartDocument, ChartStatus } from "./chart-library";
 import type { OrgFlowNode, OrganizationalUnit } from "./org-chart";
 
 export type AiChangeKind = "added" | "changed" | "removed";
-export type AiChangeCategory = "chart" | "unit" | "relationship" | "layout";
+export type AiChangeCategory =
+  "chart" | "unit" | "relationship" | "layout" | "support";
 export type AiProposalStatus = "pending" | "accepted" | "rejected";
 
 export interface AiFieldChange {
@@ -40,7 +41,7 @@ export interface AiChartProposal {
   status: AiProposalStatus;
   changeSummary: string | null;
   createdAt: string;
-  expiresAt: string;
+  expiresAt: string | null;
   current: ChartDocument;
   proposed: ChartDocument;
   changes: AiFieldChange[];
@@ -53,8 +54,9 @@ export interface AiPendingProposalSummary {
   chartName: string;
   changeSummary: string | null;
   createdAt: string;
-  expiresAt: string;
+  expiresAt: string | null;
   summary: AiChangeSummary;
+  proposedStatus?: ChartStatus;
 }
 
 export interface AiActivityRecord {
@@ -116,7 +118,8 @@ const relationshipFields = [
 function displayValue(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
   return JSON.stringify(value);
 }
 
@@ -165,14 +168,52 @@ export function diffChartDocuments(
   const chartFields: Array<[keyof ChartDocument, string]> = [
     ["name", "Chart name"],
     ["description", "Chart description"],
+    ["libraryParentId", "Library parent organization"],
     ["status", "Chart lifecycle"],
   ];
   for (const [field, label] of chartFields) {
     if (current[field] !== proposed[field]) {
       changes.push(
-        change("changed", "chart", current.id, current.name, String(field), label, current[field], proposed[field]),
+        change(
+          "changed",
+          "chart",
+          current.id,
+          current.name,
+          String(field),
+          label,
+          current[field],
+          proposed[field],
+        ),
       );
     }
+  }
+
+  for (const field of [
+    "supportPanels",
+    "sourceChecks",
+    "sourceLayout",
+  ] as const) {
+    if (!jsonEqual(current[field] ?? [], proposed[field] ?? []))
+      changes.push(
+        change(
+          "changed",
+          field === "supportPanels"
+            ? "support"
+            : field === "sourceLayout"
+              ? "layout"
+              : "chart",
+          current.id,
+          current.name,
+          field,
+          field === "supportPanels"
+            ? "Support panels and assignments"
+            : field === "sourceLayout"
+              ? "Official slide arrangement"
+              : "Recorded source checks",
+          current[field] ?? [],
+          proposed[field] ?? [],
+        ),
+      );
   }
 
   const currentNodes = new Map(current.nodes.map((node) => [node.id, node]));
@@ -181,7 +222,16 @@ export function diffChartDocuments(
     const previous = currentNodes.get(node.id);
     if (!previous) {
       changes.push(
-        change("added", "unit", node.id, nodeLabel(node), "unit", "Organizational unit", null, nodeLabel(node)),
+        change(
+          "added",
+          "unit",
+          node.id,
+          nodeLabel(node),
+          "unit",
+          "Organizational unit",
+          null,
+          nodeLabel(node),
+        ),
       );
       continue;
     }
@@ -201,12 +251,37 @@ export function diffChartDocuments(
         );
       }
     }
+    if (!jsonEqual(previous.style, node.style))
+      changes.push(
+        change(
+          "changed",
+          "layout",
+          node.id,
+          nodeLabel(node),
+          "size",
+          "Card dimensions",
+          previous.style ?? null,
+          node.style ?? null,
+        ),
+      );
     if (Boolean(previous.data.pinned) !== Boolean(node.data.pinned)) {
       changes.push(
-        change("changed", "layout", node.id, nodeLabel(node), "pinned", "Card placement", previous.data.pinned ? "Pinned" : "Automatic", node.data.pinned ? "Pinned" : "Automatic"),
+        change(
+          "changed",
+          "layout",
+          node.id,
+          nodeLabel(node),
+          "pinned",
+          "Card placement",
+          previous.data.pinned ? "Pinned" : "Automatic",
+          node.data.pinned ? "Pinned" : "Automatic",
+        ),
       );
     }
-    if (previous.position.x !== node.position.x || previous.position.y !== node.position.y) {
+    if (
+      previous.position.x !== node.position.x ||
+      previous.position.y !== node.position.y
+    ) {
       changes.push(
         change(
           "changed",
@@ -224,7 +299,16 @@ export function diffChartDocuments(
   for (const node of current.nodes) {
     if (!proposedNodes.has(node.id)) {
       changes.push(
-        change("removed", "unit", node.id, nodeLabel(node), "unit", "Organizational unit", nodeLabel(node), null),
+        change(
+          "removed",
+          "unit",
+          node.id,
+          nodeLabel(node),
+          "unit",
+          "Organizational unit",
+          nodeLabel(node),
+          null,
+        ),
       );
     }
   }
@@ -236,7 +320,16 @@ export function diffChartDocuments(
     const label = edgeLabel(edge, proposedNodes);
     if (!previous) {
       changes.push(
-        change("added", "relationship", edge.id, label, "relationship", "Reporting relationship", null, label),
+        change(
+          "added",
+          "relationship",
+          edge.id,
+          label,
+          "relationship",
+          "Reporting relationship",
+          null,
+          label,
+        ),
       );
       continue;
     }
@@ -270,9 +363,31 @@ export function diffChartDocuments(
         );
       }
     }
+    if (!jsonEqual(previous.data?.sourceRoute, edge.data?.sourceRoute))
+      changes.push(
+        change(
+          "changed",
+          "layout",
+          edge.id,
+          label,
+          "sourceRoute",
+          "Captured source connector",
+          previous.data?.sourceRoute,
+          edge.data?.sourceRoute,
+        ),
+      );
     if (!jsonEqual(previous.data?.manualRoute, edge.data?.manualRoute)) {
       changes.push(
-        change("changed", "layout", edge.id, label, "manualRoute", "Pinned connector route", previous.data?.manualRoute ? "Pinned" : "Automatic", edge.data?.manualRoute ? "Pinned" : "Automatic"),
+        change(
+          "changed",
+          "layout",
+          edge.id,
+          label,
+          "manualRoute",
+          "Pinned connector route",
+          previous.data?.manualRoute ? "Pinned" : "Automatic",
+          edge.data?.manualRoute ? "Pinned" : "Automatic",
+        ),
       );
     }
   }
@@ -280,7 +395,16 @@ export function diffChartDocuments(
     if (!proposedEdges.has(edge.id)) {
       const label = edgeLabel(edge, currentNodes);
       changes.push(
-        change("removed", "relationship", edge.id, label, "relationship", "Reporting relationship", label, null),
+        change(
+          "removed",
+          "relationship",
+          edge.id,
+          label,
+          "relationship",
+          "Reporting relationship",
+          label,
+          null,
+        ),
       );
     }
   }
@@ -296,14 +420,22 @@ export function diffChartDocuments(
   const changedNodeIds = Array.from(
     new Set(
       changes
-        .filter((item) => (item.category === "unit" || item.category === "layout") && proposedNodes.has(item.entityId))
+        .filter(
+          (item) =>
+            (item.category === "unit" || item.category === "layout") &&
+            proposedNodes.has(item.entityId),
+        )
         .map((item) => item.entityId),
     ),
   );
   const changedEdgeIds = Array.from(
     new Set(
       changes
-        .filter((item) => (item.category === "relationship" || item.category === "layout") && proposedEdges.has(item.entityId))
+        .filter(
+          (item) =>
+            (item.category === "relationship" || item.category === "layout") &&
+            proposedEdges.has(item.entityId),
+        )
         .map((item) => item.entityId),
     ),
   );
@@ -312,12 +444,20 @@ export function diffChartDocuments(
   const changed = changes.length - added - removed;
   const affectedUnits = new Set(
     changes
-      .filter((item) => item.category === "unit" || (item.category === "layout" && proposedNodes.has(item.entityId)))
+      .filter(
+        (item) =>
+          item.category === "unit" ||
+          (item.category === "layout" && proposedNodes.has(item.entityId)),
+      )
       .map((item) => item.entityId),
   ).size;
   const affectedRelationships = new Set(
     changes
-      .filter((item) => item.category === "relationship" || (item.category === "layout" && proposedEdges.has(item.entityId)))
+      .filter(
+        (item) =>
+          item.category === "relationship" ||
+          (item.category === "layout" && proposedEdges.has(item.entityId)),
+      )
       .map((item) => item.entityId),
   ).size;
   const summary: AiChangeSummary = {

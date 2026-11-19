@@ -1,3 +1,4 @@
+import { readJsonObject, jsonField } from "../../../lib/json-request";
 import { ensureSchema, getBindings } from "../../../db";
 import type {
   ImportIntake,
@@ -188,7 +189,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const body = (await request.json()) as { action?: "discard"; intakeId?: string };
+  const requestBody = await readJsonObject(request, {
+    action: jsonField.text,
+    intakeId: jsonField.text,
+  });
+  if (!requestBody.ok) return requestBody.response;
+  const body = requestBody.body as { action?: "discard"; intakeId?: string };
   if (body.action !== "discard" || !body.intakeId) {
     return noStoreJson({ error: "Unsupported intake action." }, { status: 400 });
   }
