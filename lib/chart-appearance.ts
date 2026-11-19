@@ -4,9 +4,9 @@ export type ChartAppearance = 'official' | 'annotated';
 export const OFFICIAL_FONT_FAMILY = 'Century Gothic';
 export const OFFICIAL_FONT_CSS = '"OrgChart Century Gothic", "Century Gothic", "Aptos", Arial, sans-serif';
 export const OFFICIAL_COLORS = {ink:'000000',border:'595959',white:'FFFFFF',division:'D2E4BB',team:'FAEEDA',support:'D9D9D9'} as const;
-export interface OfficialTextLine {text:string; x:number; y:number; size:number; bold:boolean;entityId?:string;}
-export interface OfficialCard {fill:string;border:string;borderWidth:number;lines:OfficialTextLine[];}
-export interface ChartFonts {family:string;regular:string;bold:string;}
+export interface OfficialTextLine {text:string; x:number; y:number; size:number; bold:boolean;italic?:boolean;anchor?:"start"|"middle"|"end";color?:string;rotation?:number;textWidth?:number;entityId?:string;}
+export interface OfficialCard {fill:string;border:string;borderWidth:number;noFill?:boolean;noBorder?:boolean;lines:OfficialTextLine[];}
+export interface ChartFonts {family:string;regular:string;bold:string;italic?:string;boldItalic?:string;}
 export function officialTextWidth(text:string,size:number,bold=false) {
   const table:Record<string,number>=bold?metrics.bold:metrics.regular;
   return Array.from(text).reduce((n,c)=>n+(table[c]??table[c.normalize('NFD')[0]]??.6)*size,0);

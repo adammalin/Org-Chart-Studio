@@ -627,7 +627,7 @@ button:disabled {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   background: var(--ornl-polar);
   container-name: chart-editor;
   container-type: inline-size;
@@ -1082,10 +1082,14 @@ button:disabled {
 
 .flow-surface {
   position: relative;
-  flex: 1;
+  flex: 1 0 320px;
   width: 100%;
-  min-height: 0;
+  min-height: 320px;
   background: var(--surface-muted);
+}
+
+@media (max-height: 900px) {
+  .flow-surface .react-flow__minimap { display: none; }
 }
 
 .flow-surface.is-ai-preview::after {
@@ -6854,7 +6858,7 @@ button:disabled {
 .source-layout-toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "title action" "source source" "hint hint";
+  grid-template-areas: "title action" "source source" "status status" "hint hint";
   gap: 6px 16px;
   min-width: 0;
   max-width: 100%;
@@ -6872,10 +6876,11 @@ button:disabled {
 .source-layout-toolbar > span { grid-area: source; font-size: 12px; line-height: 1.4; }
 .source-layout-toolbar button { grid-area: action; white-space: normal; }
 .source-layout-toolbar small { grid-area: hint; font-size: 12px; }
+.source-layout-toolbar .source-formatting-status { grid-area: status; }
 @container chart-editor (max-width: 480px) {
   .source-layout-toolbar {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "title" "action" "source" "hint";
+    grid-template-areas: "title" "action" "source" "status" "hint";
   }
 }
 

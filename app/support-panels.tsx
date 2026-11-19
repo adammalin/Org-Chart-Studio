@@ -1,5 +1,6 @@
 "use client";
 import { studioRequest } from "../runtime/request";
+import {sourceCardPresentation,panelPresentationKey} from "../lib/source-presentation";
 import { OfficialCardDrawing } from "./official-card";
 import {officialSupport,officialScale,officialAssignment,type ChartAppearance} from "../lib/chart-appearance";
 import { useState, useEffect, useRef } from "react";
@@ -27,10 +28,12 @@ export function SupportPanelsCanvas({
   chart,
   compact = false,
   appearance = "official",
+  sourceWiresActive = false,
 }: {
   chart: ChartDocument;
   compact?: boolean;
   appearance?:ChartAppearance;
+  sourceWiresActive?:boolean;
 }) {
   return (
     <>
@@ -42,7 +45,7 @@ export function SupportPanelsCanvas({
         if (compact) g.y += index * (g.height + 32);
         return (
           <div key={p.id}>
-            {!compact && p.connector ? (
+            {!compact && !sourceWiresActive && p.connector ? (
               <svg
                 style={{
                   position: "absolute",
@@ -80,7 +83,7 @@ export function SupportPanelsCanvas({
               }}
               aria-label={`${p.title}, support assignments. ${p.entries.map(e=>`${e.role}: ${officialAssignment({assignmentLabel:e.person,positionStatus:e.positionStatus})}`).join("; ")}`}
             >
-              {appearance === "official" ? <OfficialCardDrawing card={officialSupport(p.title,p.entries,g.width,g.height,officialScale(compact?undefined:chart.sourceLayout?.width,g.width))} width={g.width} height={g.height}/> : <>
+              {appearance === "official" ? <OfficialCardDrawing card={(!compact && sourceCardPresentation(chart.sourceLayout?.presentation?.panels[p.id],panelPresentationKey(p),g.width,g.height)) || officialSupport(p.title,p.entries,g.width,g.height,officialScale(compact?undefined:chart.sourceLayout?.width,g.width))} width={g.width} height={g.height}/> : <>
               <header>
                 <h3>{p.title}</h3>
                 <span>

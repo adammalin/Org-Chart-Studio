@@ -4,6 +4,7 @@ import {
   PDFDocument,
   StandardFonts,
   rgb,
+  pushGraphicsState, popGraphicsState, concatTransformationMatrix,
   type PDFFont,
   type PDFPage,
 } from "pdf-lib";
@@ -361,20 +362,23 @@ export async function buildChartPdf(
   const decode=(base64:string)=>Uint8Array.from(atob(base64),c=>c.charCodeAt(0));
   const regular = await document.embedFont(fonts?decode(fonts.regular):StandardFonts.Helvetica,{subset:!!fonts});
   const bold = await document.embedFont(fonts?decode(fonts.bold):StandardFonts.HelveticaBold,{subset:!!fonts});
+  const italic=await document.embedFont(fonts?.italic?decode(fonts.italic):StandardFonts.HelveticaOblique,{subset:!!fonts?.italic});
+  const boldItalic=await document.embedFont(fonts?.boldItalic?decode(fonts.boldItalic):StandardFonts.HelveticaBoldOblique,{subset:!!fonts?.boldItalic});
   const page = document.addPage([pageWidth, pageHeight]);
   const mapY = (top: number) => pageHeight - offsetY - top * scale;
   if(scene.appearance === "official") {
     page.drawRectangle({x:0,y:0,width:pageWidth,height:pageHeight,color:rgb(1,1,1)});
     const drawCard=(card:OfficialCard,x:number,y:number,width:number,height:number)=>{
-      page.drawRectangle({x:offsetX+x*scale,y:mapY(y+height),width:width*scale,height:height*scale,color:color(card.fill),borderColor:color(card.border),borderWidth:card.borderWidth*scale});
-      for(const line of card.lines){const font=line.bold?bold:regular;const size=line.size*scale;
-        page.drawText(pdfText(line.text,font),{x:offsetX+(x+line.x)*scale-font.widthOfTextAtSize(line.text,size)/2,y:mapY(y+line.y),size,font,color:rgb(0,0,0)});
+      page.drawRectangle({x:offsetX+x*scale,y:mapY(y+height),width:width*scale,height:height*scale,color:card.noFill?undefined:color(card.fill),borderColor:card.noBorder?undefined:color(card.border),borderWidth:card.noBorder?0:card.borderWidth*scale});
+      for(const line of card.lines){const font=line.italic?(line.bold?boldItalic:italic):(line.bold?bold:regular),size=line.size*scale,text=pdfText(line.text,font),natural=font.widthOfTextAtSize(text,size),desired=line.textWidth!==undefined?line.textWidth*scale:natural,anchor=line.anchor==='start'?0:line.anchor==='end'?1:.5,xp=offsetX+(x+line.x)*scale-desired*anchor,yp=mapY(y+line.y),angle=-(line.rotation??0)*Math.PI/180,sx=natural>0?desired/natural:1;
+        page.pushOperators(pushGraphicsState(),concatTransformationMatrix(Math.cos(angle)*sx,Math.sin(angle)*sx,-Math.sin(angle),Math.cos(angle),xp,yp));
+        page.drawText(text,{x:0,y:0,size,font,color:color(line.color??'000000')});page.pushOperators(popGraphicsState());
       }
     };
     const drawLine=(points:{x:number;y:number}[],dashed=false)=>{for(let i=1;i<points.length;i++)page.drawLine({start:{x:offsetX+points[i-1].x*scale,y:mapY(points[i-1].y)},end:{x:offsetX+points[i].x*scale,y:mapY(points[i].y)},color:color('595959'),thickness:(scene.connectorWidth??1.5)*scale,...(dashed?{dashArray:[(scene.connectorWidth??1.5)*3*scale,(scene.connectorWidth??1.5)*2*scale]}:{})});};
-    for(const edge of scene.edges)drawLine(edge.points);
+    if(scene.sourcePresentation){for(const stroke of scene.sourcePresentation.strokes){for(let i=1;i<stroke.points.length;i++)page.drawLine({start:{x:offsetX+stroke.points[i-1].x*scale,y:mapY(stroke.points[i-1].y)},end:{x:offsetX+stroke.points[i].x*scale,y:mapY(stroke.points[i].y)},color:color(stroke.color),thickness:stroke.width*scale,...(stroke.dash?{dashArray:stroke.dash.map(v=>v*scale)}:{})});}for(const a of scene.sourcePresentation.annotations)drawCard(a.card,a.bounds.x,a.bounds.y,a.bounds.width,a.bounds.height);}else for(const edge of scene.edges)drawLine(edge.points);
     for(const n of scene.nodes)drawCard(n.official!,n.x,n.y,n.width,n.height);
-    for(const p of scene.supportPanels??[]){if(p.connector)drawLine(p.connector.points,p.connector.style==='dashed');drawCard(p.official!,p.x,p.y,p.width,p.height);}
+    for(const p of scene.supportPanels??[]){if(p.connector&&!scene.sourcePresentation)drawLine(p.connector.points,p.connector.style==='dashed');drawCard(p.official!,p.x,p.y,p.width,p.height);}
     page.drawText(pdfText(`${exportLifecycleLabel(scene).replaceAll('•','-')} - Generated ${scene.generatedAt}`,regular),{x:offsetX+52*scale,y:mapY(scene.height-12),size:10*scale,font:regular,color:color('595959')});
     return document.save();
   }

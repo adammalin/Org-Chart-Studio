@@ -42,7 +42,9 @@ function readChartFonts(options={}) {
         if (!embeddingAllowed(bytes)) throw Error('Unavailable font');
         return bytes.toString('base64');
       });
-      return {family:'Century Gothic',regular:fonts[0],bold:fonts[1]};
+      const result={family:'Century Gothic',regular:fonts[0],bold:fonts[1]};
+      for(const [key,file] of [['italic',pair[0].replace(/\.ttf$/i,process.platform==='win32'?'I.TTF':' Italic.ttf')],['boldItalic',pair[1].replace(/\.ttf$/i,process.platform==='win32'?'I.TTF':' Italic.ttf')]]){try{const stat=fs.statSync(file);if(stat.isFile()&&stat.size<=5_000_000){const bytes=fs.readFileSync(file);if(embeddingAllowed(bytes))result[key]=bytes.toString('base64');}}catch{/* Optional installed style. */}}
+      return result;
     } catch { /* Try the next known installation location. */ }
   }
   return null;

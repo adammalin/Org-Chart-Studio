@@ -32,3 +32,11 @@ Implementation: `lib/chart-appearance.ts` supplies the shared line layout, metri
 The full production build/typecheck and synthetic regression suite passed 213 tests with one Windows-only skip. Lint and diff checks passed. The native Mac test profile passed the official font, text-bounds, optional annotations, global-preference and preview-deferral identity checks along with prior history/monthly/source workflows. The real BESS chart was inspected and exported through the actual Studio UI; both Century Gothic faces are embedded in that PDF. Windows native and fresh installer execution remain unverified in this pass.
 
 An additional visual-test finding was fixed: opening a proposal for a just-created chart now inserts its saved base into the in-memory library when absent, so Review later cannot pair that chart's cards with an unrelated fallback chart's name. This does not insert or apply any chart in the database.
+
+## Source-specific formatting
+
+When a reviewed chart includes `sourceLayout.presentation`, the official individual-card view uses its original per-shape fills, borders, paragraph arrangement, source connector strokes and text styles instead of applying the representative default tokens. Geometry/content guards disclose and disable stale source drawing after relevant edits. See [captured source drawing](SUPPORT-PANELS-AND-SOURCE-LAYOUT.md#captured-source-drawing).
+
+The browser's **Load local chart fonts** control accepts Century Gothic regular/bold and optional italic faces from the user's existing licensed installation. It checks format, size and embedding restrictions and loads them only for that session; no upload or library storage occurs. Without them, the toolbar discloses the fallback. Desktop discovery supports the same optional italic faces.
+
+The editor retains a 320px minimum chart surface in short windows and scrolls its controls. The minimap is hidden in short windows to avoid obscuring the source diagram. **Fit view** includes the complete source canvas and support panels when the captured arrangement is active, and the source zoom range permits it to fit.

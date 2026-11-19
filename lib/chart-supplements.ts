@@ -1,3 +1,4 @@
+import { normalizeSourcePresentation, type SourcePresentation } from "./source-presentation";
 import type { ChartDocument } from "./chart-library";
 import type { PositionStatus, SourceCertainty } from "./org-chart";
 
@@ -27,6 +28,7 @@ export interface SourceLayout {
   height: number;
   /** Source-observed card fills, keyed by stable node ID; never inferred from role names. */
   cardFills?: Record<string, string>;
+  presentation?: SourcePresentation;
 }
 export interface SupportPanel {
   geometry?: SourceBounds;
@@ -114,7 +116,7 @@ function bounds(raw: unknown): SourceBounds {
       Math.abs(v[key] as number) > 50000
     )
       throw Error("Source geometry must use finite chart coordinates.");
-  if ((v.width as number) < 120 || (v.height as number) < 80)
+  if ((v.width as number) <= 0 || (v.height as number) <= 0)
     throw Error("Source cards need readable positive bounds.");
   return {
     x: v.x as number,
@@ -217,6 +219,9 @@ export function normalizeSupplements(
           throw Error("Source card fills need an existing node and six-digit RGB color.");
       result.sourceLayout.cardFills = Object.fromEntries(entries.map(([id, fill]) => [id, (fill as string).toUpperCase()]));
     }
+  }
+  if (input.sourceLayout?.presentation !== undefined && result.sourceLayout) {
+    result.sourceLayout.presentation = normalizeSourcePresentation(input.sourceLayout.presentation,new Set(input.nodes.map(n=>n.id)),new Set((input.supportPanels??[]).map(p=>p.id)),new Set((input.edges??[]).map(e=>e.id)));
   }
   for (const edge of input.edges ?? [])
     if (edge.data?.sourceRoute) {

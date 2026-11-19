@@ -1,8 +1,11 @@
 "use client";
 import { RuntimeLibraryControls, useStudioEnvironment } from "../runtime/ui";
 import { studioRequest, downloadStudioFile } from "../runtime/request";
+import { SourcePresentationDrawing } from "./source-presentation";
+import {sourcePresentationActive,sourceCardPresentation,unitPresentationKey} from "../lib/source-presentation";
 import { OfficialCardDrawing } from "./official-card";
 import { officialCard, officialScale, officialAssignment, type ChartAppearance } from "../lib/chart-appearance";
+import { LocalChartFonts } from "./local-chart-fonts";
 import { loadChartFonts } from "../lib/chart-fonts";
 import {
   SupportPanelsCanvas,
@@ -498,6 +501,7 @@ interface RelationshipEdgeRenderData extends Record<string, unknown> {
   aiChange?: "added" | "changed";
   route?: OrthogonalEdgeRoute;
   appearance?:ChartAppearance;
+  sourceDrawingActive?:boolean;
   onCornerDragStart?: (
     edgeId: string,
     route: OrthogonalEdgeRoute,
@@ -526,7 +530,7 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
   const { unit } = data;
   const official = data.appearance !== "annotated";
   const cardWidth = data.visualWidth ?? NODE_WIDTH, cardHeight = data.visualHeight ?? NODE_HEIGHT;
-  const sourceCard = official ? officialCard(unit,cardWidth,cardHeight,data.hierarchyLevel??1,officialScale(data.presentationMode === "compact" ? undefined : data.sourceCanvasWidth,cardWidth),false,(data.compactEntries??[]).map(e=>({id:e.id,title:cleanOrgChartDisplayText(e.unit.shortName||e.unit.name),assignment:officialAssignment(e.unit)})),data.sourceCardFill) : null;
+  const sourceCard = official ? data.sourceCardDrawing ?? officialCard(unit,cardWidth,cardHeight,data.hierarchyLevel??1,officialScale(data.presentationMode === "compact" ? undefined : data.sourceCanvasWidth,cardWidth),false,(data.compactEntries??[]).map(e=>({id:e.id,title:cleanOrgChartDisplayText(e.unit.shortName||e.unit.name),assignment:officialAssignment(e.unit)})),data.sourceCardFill) : null;
   const displayName = cleanOrgChartDisplayText(unit.shortName || unit.name);
   const displayPositionTitle = cleanOrgChartDisplayText(unit.positionTitle);
   const displayStatus =
@@ -725,6 +729,7 @@ function OrgRelationshipEdge({
   const { screenToFlowPosition } = useReactFlow();
   if (!route) return null;
   const path = edgeRoutePath(route);
+  if(renderData?.sourceDrawingActive && !selected) return <BaseEdge id={id} path={path} style={{stroke:"transparent",strokeWidth:1}} interactionWidth={interactionWidth}/>;
 
   const beginCornerDrag = (
     event: React.PointerEvent<SVGGElement>,
@@ -2699,6 +2704,15 @@ function StudioWorkspace() {
     [setNotice],
   );
 
+  const capturedPresentation = useMemo(()=> chartAppearance === "official" && presentationMode === "individual" && canvasChart && !presentationHiddenIds.size && sourcePresentationActive({...canvasChart,nodes,edges}) ? canvasChart.sourceLayout?.presentation : undefined,[chartAppearance,presentationMode,canvasChart,nodes,edges,presentationHiddenIds]);
+  const fitChartView = useCallback(() => {
+    if (capturedPresentation && canvasChart?.sourceLayout) {
+      void fitBounds({x:0,y:0,width:canvasChart.sourceLayout.width,height:canvasChart.sourceLayout.height},{padding:0.1});
+    } else {
+      void fitView({duration:420,padding:0.14});
+    }
+  }, [capturedPresentation,canvasChart,fitBounds,fitView]);
+
   const displayNodes = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
     const matchesQuery = (flowNode: OrgFlowNode) =>
@@ -2757,6 +2771,7 @@ function StudioWorkspace() {
           appearance: chartAppearance,
           sourceCanvasWidth: canvasChart?.sourceLayout?.width,
           sourceCardFill: canvasChart?.sourceLayout?.cardFills?.[flowNode.id],
+          sourceCardDrawing: presentationMode === "individual" ? sourceCardPresentation(canvasChart?.sourceLayout?.presentation?.cards[flowNode.id],unitPresentationKey(flowNode.data.unit),Number(flowNode.style?.width)||NODE_WIDTH,Number(flowNode.style?.height)||NODE_HEIGHT) : undefined,
           visualWidth: Number(flowNode.style?.width) || NODE_WIDTH,
           visualHeight: Number(flowNode.style?.height) || NODE_HEIGHT,
           aiChange: aiPreviewMarks?.addedNodes.has(flowNode.id)
@@ -2776,7 +2791,7 @@ function StudioWorkspace() {
       };
     });
   }, [
-    chartAppearance, canvasChart?.sourceLayout?.width, canvasChart?.sourceLayout?.cardFills, edgeRoutes,
+    chartAppearance, canvasChart?.sourceLayout?.width, canvasChart?.sourceLayout?.cardFills, canvasChart?.sourceLayout?.presentation, edgeRoutes,
     aiPreviewMarks,
     collapsedIds,
     compactPresentation.entriesByParent,
@@ -2819,6 +2834,7 @@ function StudioWorkspace() {
                 : undefined,
             route,
             appearance:chartAppearance,
+            sourceDrawingActive:!!capturedPresentation,
             onCornerDragStart: startRouteCornerDrag,
             onCornerDrag: dragRouteCorner,
             onCornerDragEnd: finishRouteCornerDrag,
@@ -2829,6 +2845,7 @@ function StudioWorkspace() {
     });
   }, [
     chartAppearance,
+    capturedPresentation,
     dragRouteCorner,
     aiPreviewMarks,
     edgeRoutes,
@@ -5484,7 +5501,8 @@ function StudioWorkspace() {
           >
             <div className="chart-appearance-toolbar">
               <label>Chart appearance <select aria-label="Chart appearance" value={chartAppearance} disabled={!libraryViewReady} onChange={e=>void chooseChartAppearance(e.target.value as ChartAppearance)}><option value="official">Official slide</option><option value="annotated">Editor annotations</option></select></label>
-              <span>{chartFontAvailable === false ? "Century Gothic unavailable; using the system fallback" : "Century Gothic"} · bold headings · regular names · thin gray borders. Saved positions stay unchanged.</span>
+              <span>{chartFontAvailable === false ? "Century Gothic unavailable; using the system fallback" : "Century Gothic"} · source formatting where captured. Saved positions stay unchanged.</span>
+              {environment.kind === "browser" ? <LocalChartFonts onLoaded={()=>setChartFontAvailable(true)} onNotice={setNotice}/> : null}
             </div>
             <div className="canvas-toolbar">
               <div className="canvas-toolbar__mode">
@@ -5715,9 +5733,7 @@ function StudioWorkspace() {
                 <button
                   type="button"
                   className="button button--secondary"
-                  onClick={() => {
-                    void fitView({ duration: 420, padding: 0.14 });
-                  }}
+                  onClick={fitChartView}
                 >
                   <ArrowsOut size={17} aria-hidden="true" />
                   Fit view
@@ -5929,6 +5945,7 @@ function StudioWorkspace() {
               <div className="source-layout-toolbar">
                 <strong>Official slide arrangement</strong>
                 <span>{canvasChart.sourceLayout.sourceLocator}</span>
+                {canvasChart.sourceLayout.presentation ? <small className="source-formatting-status">{capturedPresentation?"Captured source formatting in use":"Source formatting needs rechecking after edits; standard drawing is shown."}</small> : null}
                 <button
                   type="button"
                   onClick={() => {
@@ -6131,7 +6148,7 @@ function StudioWorkspace() {
                 }}
                 fitView
                 fitViewOptions={{ padding: 0.14 }}
-                minZoom={presentationMode === "compact" ? 0.08 : 0.22}
+                minZoom={canvasChart?.sourceLayout ? 0.04 : presentationMode === "compact" ? 0.08 : 0.22}
                 maxZoom={1.6}
                 nodesConnectable={false}
                 nodesDraggable={
@@ -6166,6 +6183,7 @@ function StudioWorkspace() {
                 />
                 {activeChart ? (
                   <ViewportPortal>
+                    {capturedPresentation ? <SourcePresentationDrawing presentation={capturedPresentation}/> : null}
                     <SupportPanelsCanvas
                       chart={{
                         ...(pendingAiProposal?.proposed ?? activeChart),
@@ -6175,11 +6193,12 @@ function StudioWorkspace() {
                             : nodes,
                       }}
                       appearance={chartAppearance}
+                      sourceWiresActive={!!capturedPresentation}
                       compact={presentationMode === "compact"}
                     />
                   </ViewportPortal>
                 ) : null}
-                <Controls showInteractive={false} />
+                <Controls showInteractive={false} onFitView={fitChartView} />
                 <MiniMap
                   nodeColor={(flowNode) => {
                     const typedNode = flowNode as OrgFlowNode;

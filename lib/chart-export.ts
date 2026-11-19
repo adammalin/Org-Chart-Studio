@@ -1,3 +1,4 @@
+import {sourcePresentationActive,sourceCardPresentation,unitPresentationKey,panelPresentationKey,type SourcePresentation} from "./source-presentation";
 import {officialCard,officialSupport,officialScale,type OfficialCard,type ChartAppearance,type ChartFonts} from "./chart-appearance";
 import {officialCardSvg,officialFontStyle} from "./official-export";
 import { audienceSupportPanels, panelGeometry } from "./chart-supplements";
@@ -150,6 +151,7 @@ export interface ExportSceneSupportPanel {
 }
 
 export interface ChartExportScene {
+  sourcePresentation?: Pick<SourcePresentation,"strokes"|"annotations">;
   appearance?: ChartAppearance;
   connectorWidth?: number;
   supportPanels?: ExportSceneSupportPanel[];
@@ -481,7 +483,7 @@ export function buildChartExportScene(
       fontSize,
       lineHeight: fontSize * 1.5,
       assignmentCount: p.entries.length,
-      ...(official?{official:officialSupport(p.title,p.entries,geometry.width,geometry.height,officialScale(presentationMode === "compact"?undefined:chart.sourceLayout?.width,geometry.width))}:{}),
+      ...(official?{official:(audience === "internal" && presentationMode === "individual" && sourceCardPresentation(chart.sourceLayout?.presentation?.panels[p.id],panelPresentationKey(p),geometry.width,geometry.height)) || officialSupport(p.title,p.entries,geometry.width,geometry.height,officialScale(presentationMode === "compact"?undefined:chart.sourceLayout?.width,geometry.width))}:{}),
     };
   });
   const rectangles = [
@@ -603,7 +605,7 @@ export function buildChartExportScene(
       Math.max(18, (compactListStartY ?? dimensions.height) - 110),
     );
     return {
-      ...(official?{official:officialCard(unit,dimensions.width,dimensions.height,hierarchyLevel,officialScale(presentationMode === "compact"?undefined:chart.sourceLayout?.width,dimensions.width),audience === "public",compactEntries.map(e=>({id:e.id,title:e.name,assignment:e.statusText})),chart.sourceLayout?.cardFills?.[node.id])}:{}),
+      ...(official?{official:(audience === "internal" && presentationMode === "individual" && sourceCardPresentation(chart.sourceLayout?.presentation?.cards[node.id],unitPresentationKey(unit),dimensions.width,dimensions.height)) || officialCard(unit,dimensions.width,dimensions.height,hierarchyLevel,officialScale(presentationMode === "compact"?undefined:chart.sourceLayout?.width,dimensions.width),audience === "public",compactEntries.map(e=>({id:e.id,title:e.name,assignment:e.statusText})),chart.sourceLayout?.cardFills?.[node.id])}:{}),
       id: node.id,
       x: node.position.x + offsetX,
       y: node.position.y + offsetY,
@@ -683,7 +685,9 @@ export function buildChartExportScene(
     ];
   });
 
+  const sourceDrawing = official && audience === "internal" && presentationMode === "individual" && sourcePresentationActive(chart) ? chart.sourceLayout?.presentation : undefined;
   return {
+    ...(sourceDrawing ? {sourcePresentation:{strokes:sourceDrawing.strokes.map(s=>({...s,points:s.points.map(p=>({x:p.x+offsetX,y:p.y+offsetY}))})),annotations:sourceDrawing.annotations.map(a=>({...a,bounds:{...a.bounds,x:a.bounds.x+offsetX,y:a.bounds.y+offsetY}}))}} : {}),
     appearance,
     connectorWidth: official ? 1.5*(presentationMode === "compact"?1:(chart.sourceLayout?.width??960)/960) : 2,
     chartId: chart.id,
@@ -800,9 +804,9 @@ export function buildChartSvg(
   const viewport = resolveExportViewport(scene, presetId);
   const audienceLabel = exportLifecycleLabel(scene);
   if(scene.appearance === "official") {
-    const connectors=scene.edges.map(e=>`<polyline points="${e.points.map(p=>`${p.x},${p.y}`).join(' ')}" fill="none" stroke="#595959" stroke-width="${scene.connectorWidth??1.5}"/>`).join('');
+    const connectors=scene.sourcePresentation ? scene.sourcePresentation.strokes.map(s=>`<polyline points="${s.points.map(p=>`${p.x},${p.y}`).join(' ')}" fill="none" stroke="#${s.color}" stroke-width="${s.width}"${s.dash?` stroke-dasharray="${s.dash.join(' ')}"`:''}/>`).join('')+scene.sourcePresentation.annotations.map((a,i)=>officialCardSvg(a.card,a.bounds.x,a.bounds.y,a.bounds.width,a.bounds.height,`source-annotation-${i}`)).join('') : scene.edges.map(e=>`<polyline points="${e.points.map(p=>`${p.x},${p.y}`).join(' ')}" fill="none" stroke="#595959" stroke-width="${scene.connectorWidth??1.5}"/>`).join('');
     const cards=scene.nodes.map(n=>officialCardSvg(n.official!,n.x,n.y,n.width,n.height,n.id)).join('');
-    const panels=(scene.supportPanels??[]).map(p=>`${p.connector?`<polyline points="${p.connector.points.map(v=>`${v.x},${v.y}`).join(' ')}" fill="none" stroke="#595959" stroke-width="${scene.connectorWidth??1.5}"${p.connector.style==='dashed'?` stroke-dasharray="${(scene.connectorWidth??1.5)*3} ${(scene.connectorWidth??1.5)*2}"`:''}/>`:''}${officialCardSvg(p.official!,p.x,p.y,p.width,p.height,p.id).replace('data-unit-id=','data-support-panel-id=')}`).join('');
+    const panels=(scene.supportPanels??[]).map(p=>`${p.connector&&!scene.sourcePresentation?`<polyline points="${p.connector.points.map(v=>`${v.x},${v.y}`).join(' ')}" fill="none" stroke="#595959" stroke-width="${scene.connectorWidth??1.5}"${p.connector.style==='dashed'?` stroke-dasharray="${(scene.connectorWidth??1.5)*3} ${(scene.connectorWidth??1.5)*2}"`:''}/>`:''}${officialCardSvg(p.official!,p.x,p.y,p.width,p.height,p.id).replace('data-unit-id=','data-support-panel-id=')}`).join('');
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${viewport.width}" height="${viewport.height}" viewBox="0 0 ${viewport.width} ${viewport.height}" role="img" aria-labelledby="title description"><title id="title">${escapeXml(scene.chartName)} organizational chart</title><desc id="description">${escapeXml(audienceLabel)}; official slide appearance; saved arrangement.</desc><defs>${officialFontStyle(fonts)}</defs><rect width="100%" height="100%" fill="#FFFFFF"/><g transform="translate(${viewport.offsetX} ${viewport.offsetY}) scale(${viewport.scale})">${connectors}${cards}${panels}<text x="${PADDING}" y="${scene.height-12}" font-family="Arial,sans-serif" font-size="10" fill="#595959">${escapeXml(audienceLabel)} · Generated ${escapeXml(scene.generatedAt)}</text></g></svg>`;
   }
 
