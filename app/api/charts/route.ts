@@ -1,3 +1,17 @@
+import { nextSavedTimestamp } from "../../../lib/save-timestamp";
+import { editableChartShapeError } from "../../../lib/editable-chart-shape";
+import { readJsonObject, jsonField } from "../../../lib/json-request";
+import {
+  normalizeSupplements,
+  contentFingerprint,
+  currentSourceChecks,
+  supportReviewCount,
+  type SourceCheck,
+} from "../../../lib/chart-supplements";
+import {
+  checkpointStatement,
+  recordChartMutation,
+} from "../../../lib/chart-history";
 import { ensureSchema, getBindings } from "../../../db";
 import {
   createBlankChart,
@@ -12,6 +26,7 @@ import {
 } from "../../../lib/chart-library";
 import {
   lifecycleTransitionError,
+  sourceReviewItemCount,
 } from "../../../lib/chart-lifecycle";
 import { parseImportBytes } from "../../../lib/import-org-chart-file";
 import { validateHierarchy } from "../../../lib/org-chart";
@@ -73,26 +88,49 @@ interface IntakeFileRow {
   created_at: string;
 }
 
-const chartStatuses: ChartStatus[] = ["draft", "in_review", "current", "archived"];
+const chartStatuses: ChartStatus[] = [
+  "draft",
+  "in_review",
+  "current",
+  "archived",
+];
 function validateEditableChart(chart: ChartDocument): {
   error?: string;
   findings?: ReturnType<typeof validateHierarchy>;
 } {
-  if (!chart.id || !chart.name?.trim()) return { error: "Chart ID and name are required." };
-  if (chart.name.trim().length > 160) return { error: "Chart names are limited to 160 characters." };
+  const shapeError = editableChartShapeError(chart);
+  if (shapeError) return { error: shapeError };
+  if (!chart.id || !chart.name?.trim())
+    return { error: "Chart ID and name are required." };
+  if (chart.name.trim().length > 160)
+    return { error: "Chart names are limited to 160 characters." };
   if ((chart.description ?? "").length > 2_000) {
     return { error: "Chart descriptions are limited to 2,000 characters." };
   }
-  if (!chartStatuses.includes(chart.status)) return { error: "Chart status is invalid." };
+  if (!chartStatuses.includes(chart.status))
+    return { error: "Chart status is invalid." };
   if (!Array.isArray(chart.nodes) || !Array.isArray(chart.edges)) {
     return { error: "Chart nodes and relationships are required." };
   }
   if (chart.nodes.length > 5_000 || chart.edges.length > 10_000) {
-    return { error: "This human-test build is limited to 5,000 units and 10,000 relationships." };
+    return {
+      error:
+        "This human-test build is limited to 5,000 units and 10,000 relationships.",
+    };
+  }
+  try {
+    normalizeSupplements(chart);
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : "Invalid support data.",
+    };
   }
   const findings = validateHierarchy(chart.nodes, chart.edges);
   if (findings.some((finding) => finding.severity === "blocking")) {
-    return { error: "Resolve blocking structural findings before saving.", findings };
+    return {
+      error: "Resolve blocking structural findings before saving.",
+      findings,
+    };
   }
   return {};
 }
@@ -121,8 +159,12 @@ function sourceFromRow(row: SourceRow): SourceRecord {
 }
 
 function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
-  const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges"> & {
+  const payload = JSON.parse(row.payload) as Pick<
+    ChartDocument,
+    "nodes" | "edges"
+  > & {
     lifecycle?: Partial<ChartDocument["lifecycle"]>;
+    libraryParentId?: string | null;
   };
   const status = normalizeChartStatus(row.status);
   return {
@@ -140,6 +182,8 @@ function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
       row.version,
       row.status === "approved",
     ),
+    ...normalizeSupplements({ ...payload, nodes: payload.nodes }),
+    libraryParentId: payload.libraryParentId,
     nodes: payload.nodes,
     edges: payload.edges,
     sources,
@@ -147,7 +191,10 @@ function chartFromRow(row: ChartRow, sources: SourceRecord[]): ChartDocument {
 }
 
 function versionFromRow(row: VersionRow): ChartVersion {
-  const payload = JSON.parse(row.payload) as Pick<ChartVersion, "nodes" | "edges">;
+  const payload = JSON.parse(row.payload) as Pick<
+    ChartVersion,
+    "nodes" | "edges"
+  >;
   return {
     id: row.id,
     chartId: row.chart_id,
@@ -157,17 +204,29 @@ function versionFromRow(row: VersionRow): ChartVersion {
     restoredFromVersion: row.restored_from_version,
     nodes: payload.nodes,
     edges: payload.edges,
+    ...normalizeSupplements(payload),
   };
 }
 
 function chartPayload(
   chart: Pick<ChartDocument, "nodes" | "edges"> &
-    Partial<Pick<ChartDocument, "lifecycle">>,
+    Partial<
+      Pick<
+        ChartDocument,
+        | "lifecycle"
+        | "libraryParentId"
+        | "supportPanels"
+        | "sourceChecks"
+        | "sourceLayout"
+      >
+    >,
 ) {
   return JSON.stringify({
     nodes: storageSafeNodes(chart.nodes),
     edges: chart.edges,
     lifecycle: chart.lifecycle,
+    libraryParentId: chart.libraryParentId,
+    ...normalizeSupplements(chart),
   });
 }
 
@@ -192,7 +251,10 @@ function chartInsert(db: D1Database, chart: ChartDocument) {
 
 function versionInsert(
   db: D1Database,
-  chart: Pick<ChartDocument, "id" | "version" | "nodes" | "edges">,
+  chart: Pick<ChartDocument, "id" | "version" | "nodes" | "edges"> &
+    Partial<
+      Pick<ChartDocument, "supportPanels" | "sourceChecks" | "sourceLayout">
+    >,
   label: string,
   createdAt: string,
   restoredFromVersion: number | null = null,
@@ -201,7 +263,7 @@ function versionInsert(
     .prepare(
       `INSERT INTO chart_versions
         (id, chart_id, version, label, created_at, payload, restored_from_version)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS(SELECT 1 FROM charts WHERE id=? AND updated_at=?)`,
     )
     .bind(
       `version-${crypto.randomUUID()}`,
@@ -211,6 +273,8 @@ function versionInsert(
       createdAt,
       chartPayload(chart),
       restoredFromVersion,
+      chart.id,
+      createdAt,
     );
 }
 
@@ -287,7 +351,9 @@ async function ensureVersionBaselines(db: D1Database) {
 async function loadCharts(db: D1Database): Promise<ChartDocument[]> {
   const [chartResult, sourceResult] = await Promise.all([
     db.prepare("SELECT * FROM charts ORDER BY updated_at DESC").all<ChartRow>(),
-    db.prepare("SELECT * FROM source_records ORDER BY imported_at DESC").all<SourceRow>(),
+    db
+      .prepare("SELECT * FROM source_records ORDER BY imported_at DESC")
+      .all<SourceRow>(),
   ]);
   const sources = sourceResult.results.map(sourceFromRow);
   return chartResult.results.map((row) =>
@@ -311,11 +377,17 @@ export async function GET(request: Request) {
       .bind(sourceId)
       .first<SourceRow>();
     if (!row || !row.storage_key) {
-      return Response.json({ error: "Stored source file is unavailable." }, { status: 404 });
+      return Response.json(
+        { error: "Stored source file is unavailable." },
+        { status: 404 },
+      );
     }
     const object = await SOURCE_FILES.get(row.storage_key);
     if (!object) {
-      return Response.json({ error: "Stored source file is unavailable." }, { status: 404 });
+      return Response.json(
+        { error: "Stored source file is unavailable." },
+        { status: 404 },
+      );
     }
     const bytes = await object.arrayBuffer();
     if ((await sha256Hex(bytes)) !== row.checksum) {
@@ -340,6 +412,24 @@ export async function GET(request: Request) {
       },
     });
   }
+  if (url.searchParams.get("resource") === "source_checks" && chartId) {
+    const row = await DB.prepare("SELECT * FROM charts WHERE id=?")
+      .bind(chartId)
+      .first<ChartRow>();
+    if (!row)
+      return Response.json({ error: "Chart not found." }, { status: 404 });
+    const chart = chartFromRow(row, []);
+    return Response.json({
+      chartId,
+      checks: await currentSourceChecks(chart),
+      supportPanels: chart.supportPanels?.length ?? 0,
+      supportAssignments: (chart.supportPanels ?? []).reduce(
+        (n, p) => n + p.entries.length,
+        0,
+      ),
+      supportReviewItems: supportReviewCount(chart),
+    });
+  }
   if (url.searchParams.get("resource") === "validate" && chartId) {
     const row = await DB.prepare("SELECT * FROM charts WHERE id = ?")
       .bind(chartId)
@@ -349,6 +439,16 @@ export async function GET(request: Request) {
     }
     const chart = chartFromRow(row, []);
     const findings = validateHierarchy(chart.nodes, chart.edges);
+    try {
+      normalizeSupplements(chart);
+    } catch (error) {
+      findings.push({
+        code: "INVALID_SUPPORT_DATA",
+        severity: "blocking",
+        message:
+          error instanceof Error ? error.message : "Invalid support data.",
+      });
+    }
     return Response.json({
       chartId,
       chartVersion: chart.version,
@@ -376,16 +476,22 @@ export async function POST(request: Request) {
     const file = formData.get("file");
     const evidenceFiles = formData
       .getAll("evidence")
-      .filter((value): value is File => value instanceof File && value.size > 0);
+      .filter(
+        (value): value is File => value instanceof File && value.size > 0,
+      );
     const chartName = String(formData.get("chartName") ?? "").trim();
     const validateOnly = formData.get("validateOnly") === "1";
     const intakeId = String(formData.get("intakeId") ?? "").trim();
     const [intake, intakeFileResult] = intakeId
       ? await Promise.all([
-          DB.prepare("SELECT * FROM import_intakes WHERE id = ? AND status = 'pending'")
+          DB.prepare(
+            "SELECT * FROM import_intakes WHERE id = ? AND status = 'pending'",
+          )
             .bind(intakeId)
             .first<IntakeRow>(),
-          DB.prepare("SELECT * FROM import_intake_files WHERE intake_id = ? ORDER BY created_at")
+          DB.prepare(
+            "SELECT * FROM import_intake_files WHERE intake_id = ? ORDER BY created_at",
+          )
             .bind(intakeId)
             .all<IntakeFileRow>(),
         ])
@@ -401,12 +507,17 @@ export async function POST(request: Request) {
 
     if (!(file instanceof File) || !chartName) {
       return Response.json(
-        { error: "Choose a CSV, JSON, or Excel file and provide a chart name." },
+        {
+          error: "Choose a CSV, JSON, or Excel file and provide a chart name.",
+        },
         { status: 400 },
       );
     }
     if (chartName.length > 160) {
-      return Response.json({ error: "Chart names are limited to 160 characters." }, { status: 400 });
+      return Response.json(
+        { error: "Chart names are limited to 160 characters." },
+        { status: 400 },
+      );
     }
     if (file.size > 5_000_000) {
       return Response.json(
@@ -420,15 +531,20 @@ export async function POST(request: Request) {
         { status: 413 },
       );
     }
-    const oversizedEvidence = evidenceFiles.find((evidence) => evidence.size > 20_000_000);
+    const oversizedEvidence = evidenceFiles.find(
+      (evidence) => evidence.size > 20_000_000,
+    );
     if (oversizedEvidence) {
       return Response.json(
-        { error: `Source evidence files are limited to 20 MB each (${oversizedEvidence.name}).` },
+        {
+          error: `Source evidence files are limited to 20 MB each (${oversizedEvidence.name}).`,
+        },
         { status: 413 },
       );
     }
     const unsupportedEvidence = evidenceFiles.find(
-      (evidence) => !/\.(pptx|docx|pdf|png|jpe?g|csv|xlsx)$/i.test(evidence.name),
+      (evidence) =>
+        !/\.(pptx|docx|pdf|png|jpe?g|csv|xlsx)$/i.test(evidence.name),
     );
     if (unsupportedEvidence) {
       return Response.json(
@@ -443,7 +559,10 @@ export async function POST(request: Request) {
       intakeFiles.reduce((total, evidence) => total + evidence.file_size, 0);
     if (file.size + evidenceSize > 25_000_000) {
       return Response.json(
-        { error: "The normalized data and source evidence files exceed the 25 MB intake limit." },
+        {
+          error:
+            "The normalized data and source evidence files exceed the 25 MB intake limit.",
+        },
         { status: 413 },
       );
     }
@@ -454,7 +573,12 @@ export async function POST(request: Request) {
       preview = parseImportBytes(file.name, new Uint8Array(fileBytes));
     } catch (error) {
       return Response.json(
-        { error: error instanceof Error ? error.message : "The import could not be parsed." },
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "The import could not be parsed.",
+        },
         { status: 422 },
       );
     }
@@ -465,7 +589,10 @@ export async function POST(request: Request) {
     };
     if (preview.rowCount > 5_000) {
       return Response.json(
-        { error: "This human-test build is limited to 5,000 units per imported chart." },
+        {
+          error:
+            "This human-test build is limited to 5,000 units per imported chart.",
+        },
         { status: 413 },
       );
     }
@@ -473,7 +600,8 @@ export async function POST(request: Request) {
     if (preview.findings.some((finding) => finding.severity === "blocking")) {
       return Response.json(
         {
-          error: "Resolve blocking validation findings before creating the chart.",
+          error:
+            "Resolve blocking validation findings before creating the chart.",
           findings: preview.findings,
           rowCount: preview.rowCount,
         },
@@ -486,6 +614,8 @@ export async function POST(request: Request) {
         preview: {
           nodes: preview.nodes,
           edges: preview.edges,
+          supportPanels: preview.supportPanels,
+          sourceLayout: preview.sourceLayout,
           rowCount: preview.rowCount,
           findings: preview.findings,
         },
@@ -513,7 +643,9 @@ export async function POST(request: Request) {
       sourceType: "structured_import",
       importedAt: now,
       rowCount: preview.rowCount,
-      warningCount: preview.findings.filter((finding) => finding.severity === "warning").length,
+      warningCount: preview.findings.filter(
+        (finding) => finding.severity === "warning",
+      ).length,
     };
     const evidenceItems = await Promise.all(
       evidenceFiles.map(async (evidence) => {
@@ -564,6 +696,8 @@ export async function POST(request: Request) {
       lifecycle: normalizeChartLifecycle(null, "draft", now, 1),
       nodes: preview.nodes,
       edges: preview.edges,
+      supportPanels: preview.supportPanels,
+      sourceLayout: preview.sourceLayout,
       sources: [
         source,
         ...intakeEvidenceItems.map((item) => item.source),
@@ -577,22 +711,30 @@ export async function POST(request: Request) {
         customMetadata: { chartId, sourceId, checksum },
       });
       for (const evidenceItem of evidenceItems) {
-        await SOURCE_FILES.put(evidenceItem.source.storageKey, evidenceItem.bytes, {
-          httpMetadata: { contentType: evidenceItem.source.contentType },
-          customMetadata: {
-            chartId,
-            sourceId: evidenceItem.source.id,
-            checksum: evidenceItem.source.checksum,
+        await SOURCE_FILES.put(
+          evidenceItem.source.storageKey,
+          evidenceItem.bytes,
+          {
+            httpMetadata: { contentType: evidenceItem.source.contentType },
+            customMetadata: {
+              chartId,
+              sourceId: evidenceItem.source.id,
+              checksum: evidenceItem.source.checksum,
+            },
           },
-        });
+        );
       }
       const statements = [
         chartInsert(DB, chart),
         versionInsert(DB, chart, `Imported from ${file.name}`, now),
         sourceInsert(DB, source),
       ];
-      intakeEvidenceItems.forEach((item) => statements.push(sourceInsert(DB, item.source)));
-      evidenceItems.forEach((item) => statements.push(sourceInsert(DB, item.source)));
+      intakeEvidenceItems.forEach((item) =>
+        statements.push(sourceInsert(DB, item.source)),
+      );
+      evidenceItems.forEach((item) =>
+        statements.push(sourceInsert(DB, item.source)),
+      );
       if (intake) {
         statements.push(
           DB.prepare(
@@ -603,17 +745,39 @@ export async function POST(request: Request) {
       await DB.batch(statements);
     } catch (error) {
       await Promise.all(
-        [storageKey, ...evidenceItems.map((item) => item.source.storageKey)]
-          .map((key) => SOURCE_FILES.delete(key)),
+        [
+          storageKey,
+          ...evidenceItems.map((item) => item.source.storageKey),
+        ].map((key) => SOURCE_FILES.delete(key)),
       );
       throw error;
     }
 
-    return Response.json({ chart, findings: preview.findings }, { status: 201 });
+    return Response.json(
+      { chart, findings: preview.findings },
+      { status: 201 },
+    );
   }
 
-  const body = (await request.json()) as {
+  const requestBody = await readJsonObject(request, {
+    action: jsonField.text,
+    name: jsonField.text,
+    chartId: jsonField.text,
+    label: jsonField.text,
+    versionId: jsonField.text,
+    expectedUpdatedAt: jsonField.text,
+    targetStatus: jsonField.text,
+    currentBy: jsonField.text,
+    approvalNote: jsonField.text,
+    expectedVersion: jsonField.number,
+    acknowledgeReview: jsonField.boolean,
+    sourceCheck: jsonField.object,
+    chart: jsonField.object,
+  });
+  if (!requestBody.ok) return requestBody.response;
+  const body = requestBody.body as {
     action?:
+      | "record_source_check"
       | "create"
       | "duplicate"
       | "save"
@@ -622,6 +786,7 @@ export async function POST(request: Request) {
       | "snapshot_current"
       | "restore_version"
       | "delete";
+    sourceCheck?: Omit<SourceCheck, "id" | "checkedAt" | "contentFingerprint">;
     name?: string;
     chartId?: string;
     chart?: ChartDocument;
@@ -632,12 +797,20 @@ export async function POST(request: Request) {
     targetStatus?: ChartStatus;
     currentBy?: string;
     approvalNote?: string;
+    acknowledgeReview?: boolean;
   };
+  if (body.chart) {
+    const shapeError = editableChartShapeError(body.chart);
+    if (shapeError) return Response.json({ error: shapeError }, { status: 422 });
+  }
 
   if (body.action === "create") {
     const name = body.name?.trim() || "Untitled chart";
     if (name.length > 160) {
-      return Response.json({ error: "Chart names are limited to 160 characters." }, { status: 400 });
+      return Response.json(
+        { error: "Chart names are limited to 160 characters." },
+        { status: 400 },
+      );
     }
     const chart = createBlankChart(name, `chart-${crypto.randomUUID()}`);
     await DB.batch([
@@ -648,8 +821,11 @@ export async function POST(request: Request) {
   }
 
   if (body.action === "duplicate" && body.chartId) {
-    const row = await DB.prepare("SELECT * FROM charts WHERE id = ?").bind(body.chartId).first<ChartRow>();
-    if (!row) return Response.json({ error: "Chart not found." }, { status: 404 });
+    const row = await DB.prepare("SELECT * FROM charts WHERE id = ?")
+      .bind(body.chartId)
+      .first<ChartRow>();
+    if (!row)
+      return Response.json({ error: "Chart not found." }, { status: 404 });
     const existing = chartFromRow(row, []);
     const now = new Date().toISOString();
     const chart: ChartDocument = {
@@ -672,35 +848,70 @@ export async function POST(request: Request) {
     return Response.json({ chart }, { status: 201 });
   }
 
-  if (body.action === "transition_status" && body.chartId && body.targetStatus) {
+  if (
+    body.action === "transition_status" &&
+    body.chartId &&
+    body.targetStatus
+  ) {
     if (!chartStatuses.includes(body.targetStatus)) {
-      return Response.json({ error: "Chart lifecycle status is invalid." }, { status: 400 });
+      return Response.json(
+        { error: "Chart lifecycle status is invalid." },
+        { status: 400 },
+      );
     }
     const [row, sourceResult] = await Promise.all([
       DB.prepare("SELECT * FROM charts WHERE id = ?")
         .bind(body.chartId)
         .first<ChartRow>(),
-      DB.prepare("SELECT * FROM source_records WHERE chart_id = ? ORDER BY imported_at DESC")
+      DB.prepare(
+        "SELECT * FROM source_records WHERE chart_id = ? ORDER BY imported_at DESC",
+      )
         .bind(body.chartId)
         .all<SourceRow>(),
     ]);
-    if (!row) return Response.json({ error: "Chart not found." }, { status: 404 });
-    if (body.expectedVersion !== row.version || body.expectedUpdatedAt !== row.updated_at) {
+    if (!row)
+      return Response.json({ error: "Chart not found." }, { status: 404 });
+    if (
+      body.expectedVersion !== row.version ||
+      body.expectedUpdatedAt !== row.updated_at
+    ) {
       return Response.json(
         {
-          error: "The chart changed before its lifecycle status could be updated.",
+          error:
+            "The chart changed before its lifecycle status could be updated.",
           currentVersion: row.version,
           currentUpdatedAt: row.updated_at,
         },
         { status: 409 },
       );
     }
-    const currentChart = chartFromRow(row, sourceResult.results.map(sourceFromRow));
-    const transitionError = lifecycleTransitionError(currentChart, body.targetStatus);
+    const currentChart = chartFromRow(
+      row,
+      sourceResult.results.map(sourceFromRow),
+    );
+    const transitionError = lifecycleTransitionError(
+      currentChart,
+      body.targetStatus,
+    );
+    if (
+      body.targetStatus === "current" &&
+      sourceReviewItemCount(currentChart.nodes, currentChart.edges) +
+        supportReviewCount(currentChart) >
+        0 &&
+      !body.acknowledgeReview
+    ) {
+      return Response.json(
+        {
+          error:
+            "Acknowledge the unresolved source review notes before designating this chart Current. The notes will remain visible.",
+        },
+        { status: 422 },
+      );
+    }
     if (transitionError) {
       return Response.json({ error: transitionError }, { status: 422 });
     }
-    const updatedAt = new Date().toISOString();
+    const updatedAt = nextSavedTimestamp(row.updated_at);
     if (body.targetStatus === "current") {
       const currentBy = body.currentBy?.trim().slice(0, 120) ?? "";
       if (!currentBy) {
@@ -714,7 +925,8 @@ export async function POST(request: Request) {
       )
         .bind(currentChart.id)
         .first<{ version: number | null }>();
-      const nextVersion = Math.max(currentChart.version, latest?.version ?? 0) + 1;
+      const nextVersion =
+        Math.max(currentChart.version, latest?.version ?? 0) + 1;
       const nextChart: ChartDocument = {
         ...currentChart,
         status: "current",
@@ -742,10 +954,27 @@ export async function POST(request: Request) {
         currentChart.version,
         currentChart.updatedAt,
       );
-      await DB.batch([
+      const result = await recordChartMutation(
+        DB,
+        nextChart.id,
+        currentChart.updatedAt,
+        updatedAt,
+        `Designated Current by ${currentBy}`,
         update,
-        versionInsert(DB, nextChart, `Marked Current by ${currentBy}`, updatedAt),
-      ]);
+        [
+          versionInsert(
+            DB,
+            nextChart,
+            `Marked Current by ${currentBy}`,
+            updatedAt,
+          ),
+        ],
+      );
+      if ((result.meta.changes ?? 0) < 1)
+        return Response.json(
+          { error: "The chart changed before designation." },
+          { status: 409 },
+        );
       const versionRow = await DB.prepare(
         "SELECT * FROM chart_versions WHERE chart_id = ? AND version = ?",
       )
@@ -766,26 +995,116 @@ export async function POST(request: Request) {
         statusChangedAt: updatedAt,
       },
     };
-    const result = await DB.prepare(
-      `UPDATE charts SET status = ?, updated_at = ?, payload = ?
+    const result = await recordChartMutation(
+      DB,
+      nextChart.id,
+      currentChart.updatedAt,
+      updatedAt,
+      `Status: ${body.targetStatus}`,
+      DB.prepare(
+        `UPDATE charts SET status = ?, updated_at = ?, payload = ?
        WHERE id = ? AND version = ? AND updated_at = ?`,
-    )
-      .bind(
+      ).bind(
         nextChart.status,
         updatedAt,
         chartPayload(nextChart),
         nextChart.id,
         currentChart.version,
         currentChart.updatedAt,
-      )
-      .run();
-    if ((result.meta.changes ?? 0) !== 1) {
+      ),
+    );
+    if ((result.meta.changes ?? 0) < 1) {
       return Response.json(
-        { error: "The chart changed before its lifecycle status could be updated." },
+        {
+          error:
+            "The chart changed before its lifecycle status could be updated.",
+        },
         { status: 409 },
       );
     }
     return Response.json({ chart: nextChart });
+  }
+
+  if (
+    body.action === "record_source_check" &&
+    body.chartId &&
+    body.sourceCheck
+  ) {
+    const [row, sourceRows] = await Promise.all([
+      DB.prepare("SELECT * FROM charts WHERE id=?")
+        .bind(body.chartId)
+        .first<ChartRow>(),
+      DB.prepare("SELECT * FROM source_records WHERE chart_id=?")
+        .bind(body.chartId)
+        .all<SourceRow>(),
+    ]);
+    if (!row)
+      return Response.json({ error: "Chart not found." }, { status: 404 });
+    if (row.status === "archived")
+      return Response.json(
+        { error: "Archived charts are read-only." },
+        { status: 423 },
+      );
+    if (
+      body.expectedVersion !== row.version ||
+      body.expectedUpdatedAt !== row.updated_at
+    )
+      return Response.json(
+        {
+          error:
+            "The chart changed before this check was recorded. Read and compare the current chart.",
+        },
+        { status: 409 },
+      );
+    const chart = chartFromRow(row, sourceRows.results.map(sourceFromRow)),
+      at = nextSavedTimestamp(row.updated_at);
+    let sourceCheck: SourceCheck;
+    try {
+      const candidate = {
+        ...body.sourceCheck,
+        id: `check-${crypto.randomUUID()}`,
+        checkedAt: at,
+        contentFingerprint: await contentFingerprint(
+          chart,
+          body.sourceCheck.scope,
+        ),
+      };
+      const valid = normalizeSupplements({
+        ...chart,
+        sourceChecks: [...(chart.sourceChecks ?? []), candidate],
+      });
+      sourceCheck = valid.sourceChecks!.at(-1)!;
+    } catch (error) {
+      return Response.json(
+        {
+          error:
+            error instanceof Error ? error.message : "Invalid source check.",
+        },
+        { status: 422 },
+      );
+    }
+    const next = {
+      ...chart,
+      updatedAt: at,
+      sourceChecks: [...(chart.sourceChecks ?? []), sourceCheck],
+    };
+    const update = DB.prepare(
+      "UPDATE charts SET updated_at=?,payload=? WHERE id=? AND version=? AND updated_at=?",
+    ).bind(at, chartPayload(next), chart.id, chart.version, chart.updatedAt);
+    const result = await recordChartMutation(
+      DB,
+      chart.id,
+      chart.updatedAt,
+      at,
+      `${sourceCheck.reviewerType === "ai" ? "AI source check" : "Human source review"}: ${sourceCheck.result}`,
+      update,
+    );
+    if ((result.meta.changes ?? 0) < 1)
+      return Response.json(
+        { error: "The chart changed before the source check was saved." },
+        { status: 409 },
+      );
+    return Response.json({ chart: next, sourceCheck }, { status: 201 });
   }
 
   if (body.action === "save" && body.chart) {
@@ -797,8 +1116,12 @@ export async function POST(request: Request) {
     const existing = await DB.prepare("SELECT * FROM charts WHERE id = ?")
       .bind(chart.id)
       .first<ChartRow>();
-    if (!existing) return Response.json({ error: "Chart not found." }, { status: 404 });
-    if (chart.version !== existing.version || chart.updatedAt !== existing.updated_at) {
+    if (!existing)
+      return Response.json({ error: "Chart not found." }, { status: 404 });
+    if (
+      chart.version !== existing.version ||
+      chart.updatedAt !== existing.updated_at
+    ) {
       return Response.json(
         {
           error: "The working draft changed while this save was pending.",
@@ -809,14 +1132,35 @@ export async function POST(request: Request) {
       );
     }
     const existingChart = chartFromRow(existing, []);
+    if (
+      chart.sourceChecks !== undefined &&
+      JSON.stringify(chart.sourceChecks) !==
+        JSON.stringify(existingChart.sourceChecks ?? [])
+    )
+      return Response.json(
+        {
+          error:
+            "Recorded source checks are immutable. Use Record source check to add one.",
+        },
+        { status: 422 },
+      );
+    if (chart.supportPanels === undefined)
+      chart.supportPanels = existingChart.supportPanels;
+    if (chart.sourceLayout === undefined)
+      chart.sourceLayout = existingChart.sourceLayout;
+    chart.sourceChecks = existingChart.sourceChecks;
     if (existingChart.status === "archived") {
       return Response.json(
-        { error: "Archived charts are read-only. Restore this chart as a Draft before editing." },
+        {
+          error:
+            "Archived charts are read-only. Restore this chart as a Draft before editing.",
+        },
         { status: 423 },
       );
     }
     const incomingStatus = normalizeChartStatus(chart.status);
-    const editingCurrent = existingChart.status === "current" && incomingStatus === "draft";
+    const editingCurrent =
+      existingChart.status === "current" && incomingStatus === "draft";
     if (incomingStatus !== existingChart.status && !editingCurrent) {
       return Response.json(
         { error: "Use the chart lifecycle control to change this status." },
@@ -825,35 +1169,64 @@ export async function POST(request: Request) {
     }
     if (existingChart.status === "current" && !editingCurrent) {
       return Response.json(
-        { error: "Current charts are protected. Begin editing to return it to Draft first." },
+        {
+          error:
+            "Current charts are protected. Begin editing to return it to Draft first.",
+        },
         { status: 423 },
       );
     }
-    const updatedAt = new Date().toISOString();
+    if (chart.libraryParentId) {
+      const ancestors = await DB.prepare("SELECT id,payload FROM charts").all<{
+        id: string;
+        payload: string;
+      }>();
+      const parents = new Map(
+        ancestors.results.map((r) => [
+          r.id,
+          JSON.parse(r.payload).libraryParentId as string | null,
+        ]),
+      );
+      const seen = new Set([chart.id]);
+      let parent: string | null | undefined = chart.libraryParentId;
+      while (parent) {
+        if (seen.has(parent) || !parents.has(parent))
+          return Response.json(
+            {
+              error:
+                "Library placement must use an existing parent without creating a cycle.",
+            },
+            { status: 422 },
+          );
+        seen.add(parent);
+        parent = parents.get(parent);
+      }
+    }
+    const updatedAt = nextSavedTimestamp(existing.updated_at);
     const nextChart: ChartDocument = {
       ...chart,
       status: editingCurrent ? "draft" : existingChart.status,
       version: existing.version,
       updatedAt,
       lifecycle: {
-        ...normalizeChartLifecycle(
-          chart.lifecycle,
-          editingCurrent ? "draft" : existingChart.status,
-          existing.updated_at,
-          existing.version,
-        ),
+        ...existingChart.lifecycle,
         statusChangedAt: editingCurrent
           ? updatedAt
           : existingChart.lifecycle.statusChangedAt,
       },
       nodes: storageSafeNodes(chart.nodes),
     };
-    const result = await DB.prepare(
-      `UPDATE charts
+    const result = await recordChartMutation(
+      DB,
+      chart.id,
+      existing.updated_at,
+      updatedAt,
+      typeof body.label === "string" && body.label.trim() ? body.label.trim().slice(0, 160) : "Saved chart changes",
+      DB.prepare(
+        `UPDATE charts
        SET name = ?, description = ?, status = ?, version = ?, updated_at = ?, payload = ?
        WHERE id = ? AND updated_at = ?`,
-    )
-      .bind(
+      ).bind(
         nextChart.name,
         nextChart.description,
         nextChart.status,
@@ -862,10 +1235,12 @@ export async function POST(request: Request) {
         chartPayload(nextChart),
         chart.id,
         existing.updated_at,
+      ),
+    );
+    if ((result.meta.changes ?? 0) < 1) {
+      const current = await DB.prepare(
+        "SELECT version, updated_at FROM charts WHERE id = ?",
       )
-      .run();
-    if ((result.meta.changes ?? 0) !== 1) {
-      const current = await DB.prepare("SELECT version, updated_at FROM charts WHERE id = ?")
         .bind(chart.id)
         .first<{ version: number; updated_at: string }>();
       return Response.json(
@@ -886,22 +1261,41 @@ export async function POST(request: Request) {
     const existing = await DB.prepare("SELECT * FROM charts WHERE id = ?")
       .bind(chart.id)
       .first<ChartRow>();
-    if (!existing) return Response.json({ error: "Chart not found." }, { status: 404 });
+    if (!existing)
+      return Response.json({ error: "Chart not found." }, { status: 404 });
     const existingChart = chartFromRow(existing, []);
-    if (existingChart.status === "current" || existingChart.status === "archived") {
+    if (chart.status !== existingChart.status)
+      return Response.json(
+        { error: "Use the chart lifecycle control to change this status." },
+        { status: 422 },
+      );
+    if ((chart.libraryParentId ?? null) !== (existingChart.libraryParentId ?? null))
+      return Response.json(
+        { error: "Save library placement through the chart controls before creating a named version." },
+        { status: 422 },
+      );
+    if (
+      existingChart.status === "current" ||
+      existingChart.status === "archived"
+    ) {
       return Response.json(
         {
-          error: existingChart.status === "current"
-            ? "Current already points to its approved checkpoint. Begin editing to create a Draft before saving another version."
-            : "Archived charts are read-only. Restore this chart as a Draft before saving another version.",
+          error:
+            existingChart.status === "current"
+              ? "Current already points to its approved checkpoint. Begin editing to create a Draft before saving another version."
+              : "Archived charts are read-only. Restore this chart as a Draft before saving another version.",
         },
         { status: 423 },
       );
     }
-    if (chart.version !== existing.version || chart.updatedAt !== existing.updated_at) {
+    if (
+      chart.version !== existing.version ||
+      chart.updatedAt !== existing.updated_at
+    ) {
       return Response.json(
         {
-          error: "The working draft changed before the named version could be saved.",
+          error:
+            "The working draft changed before the named version could be saved.",
           currentVersion: existing.version,
           currentUpdatedAt: existing.updated_at,
         },
@@ -918,19 +1312,30 @@ export async function POST(request: Request) {
       .bind(chart.id)
       .first<{ version: number | null }>();
     const nextVersion = Math.max(existing.version, latest?.version ?? 0) + 1;
-    const updatedAt = new Date().toISOString();
+    const updatedAt = nextSavedTimestamp(existing.updated_at);
     const nextChart: ChartDocument = {
       ...chart,
+      sourceChecks: existingChart.sourceChecks,
+      lifecycle: existingChart.lifecycle,
+      supportPanels: chart.supportPanels ?? existingChart.supportPanels,
+      sourceLayout: chart.sourceLayout ?? existingChart.sourceLayout,
       version: nextVersion,
       updatedAt,
       nodes: storageSafeNodes(chart.nodes),
     };
 
-    await DB.batch([
+    const snapshotResults = await DB.batch([
+      checkpointStatement(
+        DB,
+        nextChart.id,
+        existing.updated_at,
+        "before",
+        label,
+      ),
       DB.prepare(
         `UPDATE charts
          SET name = ?, description = ?, status = ?, version = ?, updated_at = ?, payload = ?
-         WHERE id = ?`,
+         WHERE id = ? AND updated_at = ?`,
       ).bind(
         nextChart.name,
         nextChart.description,
@@ -939,16 +1344,24 @@ export async function POST(request: Request) {
         updatedAt,
         chartPayload(nextChart),
         nextChart.id,
+        existing.updated_at,
       ),
       versionInsert(DB, nextChart, label, updatedAt),
+      checkpointStatement(DB, nextChart.id, updatedAt, "after", label),
     ]);
+    if ((snapshotResults[1].meta.changes ?? 0) < 1)
+      return Response.json(
+        { error: "The chart changed before the version could be saved." },
+        { status: 409 },
+      );
     const versionRow = await DB.prepare(
       "SELECT * FROM chart_versions WHERE chart_id = ? AND version = ?",
     )
       .bind(nextChart.id, nextVersion)
       .first<VersionRow>();
     const savedVersion = versionRow ? versionFromRow(versionRow) : null;
-    if (savedVersion) await linkAcceptedAiActivity(DB, nextChart.id, savedVersion);
+    if (savedVersion)
+      await linkAcceptedAiActivity(DB, nextChart.id, savedVersion);
     return Response.json(
       { chart: nextChart, version: savedVersion },
       { status: 201 },
@@ -959,11 +1372,14 @@ export async function POST(request: Request) {
     const existing = await DB.prepare("SELECT * FROM charts WHERE id = ?")
       .bind(body.chartId)
       .first<ChartRow>();
-    if (!existing) return Response.json({ error: "Chart not found." }, { status: 404 });
+    if (!existing)
+      return Response.json({ error: "Chart not found." }, { status: 404 });
     const existingStatus = normalizeChartStatus(existing.status);
     if (existingStatus === "current" || existingStatus === "archived") {
       return Response.json(
-        { error: `${existingStatus === "current" ? "Current" : "Archived"} charts cannot create a new working checkpoint.` },
+        {
+          error: `${existingStatus === "current" ? "Current" : "Archived"} charts cannot create a new working checkpoint.`,
+        },
         { status: 423 },
       );
     }
@@ -973,7 +1389,8 @@ export async function POST(request: Request) {
     ) {
       return Response.json(
         {
-          error: "The working draft changed before the named version could be saved.",
+          error:
+            "The working draft changed before the named version could be saved.",
           currentVersion: existing.version,
           currentUpdatedAt: existing.updated_at,
         },
@@ -985,7 +1402,10 @@ export async function POST(request: Request) {
     )
       .bind(body.chartId)
       .all<SourceRow>();
-    const chart = chartFromRow(existing, sourceResult.results.map(sourceFromRow));
+    const chart = chartFromRow(
+      existing,
+      sourceResult.results.map(sourceFromRow),
+    );
     const validation = validateEditableChart(chart);
     if (validation.error) return Response.json(validation, { status: 422 });
     const latest = await DB.prepare(
@@ -994,33 +1414,48 @@ export async function POST(request: Request) {
       .bind(chart.id)
       .first<{ version: number | null }>();
     const nextVersion = Math.max(existing.version, latest?.version ?? 0) + 1;
-    const updatedAt = new Date().toISOString();
+    const updatedAt = nextSavedTimestamp(existing.updated_at);
     const label = body.label?.trim().slice(0, 160) || "Saved working version";
     const nextChart: ChartDocument = {
       ...chart,
       version: nextVersion,
       updatedAt,
     };
-    const update = await DB.prepare(
-      `UPDATE charts SET version = ?, updated_at = ?
+    const update = await recordChartMutation(
+      DB,
+      chart.id,
+      existing.updated_at,
+      updatedAt,
+      label,
+      DB.prepare(
+        `UPDATE charts SET version = ?, updated_at = ?
        WHERE id = ? AND version = ? AND updated_at = ?`,
-    )
-      .bind(nextVersion, updatedAt, chart.id, existing.version, existing.updated_at)
-      .run();
-    if ((update.meta.changes ?? 0) !== 1) {
+      ).bind(
+        nextVersion,
+        updatedAt,
+        chart.id,
+        existing.version,
+        existing.updated_at,
+      ),
+      [versionInsert(DB, nextChart, label, updatedAt)],
+    );
+    if ((update.meta.changes ?? 0) < 1) {
       return Response.json(
-        { error: "The working draft changed before the named version could be saved." },
+        {
+          error:
+            "The working draft changed before the named version could be saved.",
+        },
         { status: 409 },
       );
     }
-    await versionInsert(DB, nextChart, label, updatedAt).run();
     const versionRow = await DB.prepare(
       "SELECT * FROM chart_versions WHERE chart_id = ? AND version = ?",
     )
       .bind(nextChart.id, nextVersion)
       .first<VersionRow>();
     const savedVersion = versionRow ? versionFromRow(versionRow) : null;
-    if (savedVersion) await linkAcceptedAiActivity(DB, nextChart.id, savedVersion);
+    if (savedVersion)
+      await linkAcceptedAiActivity(DB, nextChart.id, savedVersion);
     return Response.json(
       { chart: nextChart, version: savedVersion },
       { status: 201 },
@@ -1040,14 +1475,20 @@ export async function POST(request: Request) {
         .all<SourceRow>(),
     ]);
     if (!chartRow || !versionRow) {
-      return Response.json({ error: "Chart version not found." }, { status: 404 });
+      return Response.json(
+        { error: "Chart version not found." },
+        { status: 404 },
+      );
     }
 
     const restoredPayload = JSON.parse(versionRow.payload) as Pick<
       ChartDocument,
       "nodes" | "edges"
     >;
-    const findings = validateHierarchy(restoredPayload.nodes, restoredPayload.edges);
+    const findings = validateHierarchy(
+      restoredPayload.nodes,
+      restoredPayload.edges,
+    );
     if (findings.some((finding) => finding.severity === "blocking")) {
       return Response.json(
         { error: "The saved version failed structural validation.", findings },
@@ -1061,7 +1502,7 @@ export async function POST(request: Request) {
       .bind(body.chartId)
       .first<{ version: number | null }>();
     const nextVersion = Math.max(chartRow.version, latest?.version ?? 0) + 1;
-    const updatedAt = new Date().toISOString();
+    const updatedAt = nextSavedTimestamp(chartRow.updated_at);
     const current = chartFromRow(
       chartRow,
       sourceResult.results.map(sourceFromRow),
@@ -1077,23 +1518,45 @@ export async function POST(request: Request) {
       },
       nodes: storageSafeNodes(restoredPayload.nodes),
       edges: restoredPayload.edges,
+      sourceLayout: normalizeSupplements(restoredPayload).sourceLayout,
+      supportPanels: normalizeSupplements(restoredPayload).supportPanels,
+      sourceChecks: [...new Map([...(normalizeSupplements(restoredPayload).sourceChecks ?? []), ...(current.sourceChecks ?? [])].map(check => [check.id, check])).values()],
     };
     const label = `Restored from v${versionRow.version}${
       body.label?.trim() ? `: ${body.label.trim().slice(0, 120)}` : ""
     }`;
 
-    await DB.batch([
-      DB.prepare(
-        "UPDATE charts SET status = ?, version = ?, updated_at = ?, payload = ? WHERE id = ?",
-      ).bind("draft", nextVersion, updatedAt, chartPayload(restoredChart), body.chartId),
-      versionInsert(
+    const restoreResults = await DB.batch([
+      checkpointStatement(
         DB,
-        restoredChart,
+        body.chartId,
+        chartRow.updated_at,
+        "before",
         label,
-        updatedAt,
-        versionRow.version,
       ),
+      DB.prepare(
+        "UPDATE charts SET status = ?, version = ?, updated_at = ?, payload = ? WHERE id = ? AND updated_at = ?",
+      ).bind(
+        "draft",
+        nextVersion,
+        updatedAt,
+        chartPayload(restoredChart),
+        body.chartId,
+        chartRow.updated_at,
+      ),
+      checkpointStatement(DB, body.chartId, updatedAt, "after", label),
+      versionInsert(DB, restoredChart, label, updatedAt, versionRow.version),
     ]);
+    // D1 includes trigger writes in its change count. A primary-key guarded
+    // UPDATE can affect at most one chart; zero, not a count above one, is stale.
+    if ((restoreResults[1].meta.changes ?? 0) < 1)
+      return Response.json(
+        {
+          error:
+            "The chart changed before the saved version could be restored.",
+        },
+        { status: 409 },
+      );
     const restoredVersionRow = await DB.prepare(
       "SELECT * FROM chart_versions WHERE chart_id = ? AND version = ?",
     )
@@ -1109,7 +1572,8 @@ export async function POST(request: Request) {
     const chartRow = await DB.prepare("SELECT status FROM charts WHERE id = ?")
       .bind(body.chartId)
       .first<{ status: string }>();
-    if (!chartRow) return Response.json({ error: "Chart not found." }, { status: 404 });
+    if (!chartRow)
+      return Response.json({ error: "Chart not found." }, { status: 404 });
     if (normalizeChartStatus(chartRow.status) !== "archived") {
       return Response.json(
         { error: "Archive a chart before permanently deleting it." },
@@ -1122,20 +1586,39 @@ export async function POST(request: Request) {
       .bind(body.chartId)
       .all<{ storage_key: string }>();
     await Promise.all(
-      sourceResult.results.map((source) => SOURCE_FILES.delete(source.storage_key)),
+      sourceResult.results.map((source) =>
+        SOURCE_FILES.delete(source.storage_key),
+      ),
     );
     await DB.batch([
-      DB.prepare("DELETE FROM ai_activity_events WHERE chart_id = ?").bind(body.chartId),
-      DB.prepare("DELETE FROM chart_versions WHERE chart_id = ?").bind(body.chartId),
-      DB.prepare("DELETE FROM source_records WHERE chart_id = ?").bind(body.chartId),
+      DB.prepare("DELETE FROM ai_activity_events WHERE chart_id = ?").bind(
+        body.chartId,
+      ),
+      DB.prepare("DELETE FROM chart_versions WHERE chart_id = ?").bind(
+        body.chartId,
+      ),
+      DB.prepare("DELETE FROM chart_checkpoints WHERE chart_id = ?").bind(
+        body.chartId,
+      ),
+      DB.prepare("DELETE FROM chart_edit_events WHERE chart_id=?").bind(body.chartId),
+      DB.prepare("DELETE FROM chart_edit_operations WHERE chart_id=?").bind(body.chartId),
+      DB.prepare("DELETE FROM chart_edit_context WHERE chart_id=?").bind(body.chartId),
+      DB.prepare("DELETE FROM source_records WHERE chart_id = ?").bind(
+        body.chartId,
+      ),
       DB.prepare(
         "DELETE FROM import_intake_files WHERE intake_id IN (SELECT id FROM import_intakes WHERE chart_id = ?)",
       ).bind(body.chartId),
-      DB.prepare("DELETE FROM import_intakes WHERE chart_id = ?").bind(body.chartId),
+      DB.prepare("DELETE FROM import_intakes WHERE chart_id = ?").bind(
+        body.chartId,
+      ),
       DB.prepare("DELETE FROM charts WHERE id = ?").bind(body.chartId),
     ]);
     return Response.json({ deleted: body.chartId });
   }
 
-  return Response.json({ error: "Unsupported chart library action." }, { status: 400 });
+  return Response.json(
+    { error: "Unsupported chart library action." },
+    { status: 400 },
+  );
 }

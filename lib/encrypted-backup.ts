@@ -106,6 +106,7 @@ export async function decryptLibraryBackup(
   try {
     const salt = base64ToBytes(value.encryption.saltBase64);
     const iv = base64ToBytes(value.encryption.ivBase64);
+    if (salt.length !== 16 || iv.length !== 12) throw new Error("Invalid encryption parameters.");
     const ciphertext = base64ToBytes(value.ciphertextBase64);
     const key = await deriveKey(passphrase, salt, value.encryption.iterations);
     const plaintext = await crypto.subtle.decrypt(

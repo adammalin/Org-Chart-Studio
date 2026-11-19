@@ -124,7 +124,8 @@ fi
 
 cd "${PROJECT_ROOT}"
 
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+CHART_GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -n "${CHART_GIT_ROOT}" && "${CHART_GIT_ROOT:A}" == "${PROJECT_ROOT:A}" ]]; then
   git config core.hooksPath .githooks
   print "Enabled repository hooks that block chart databases and backup files from commits and pushes."
 fi

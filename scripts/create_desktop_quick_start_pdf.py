@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "docs" / "ORNL-OrgChart-Studio-Desktop-Quick-Start.pdf"
 PAGE_W, PAGE_H = letter
 WINDOWS_COMMAND = (ROOT / "scripts" / "install-windows-command.txt").read_text().strip()
+MAC_COMMAND = (ROOT / "scripts" / "install-macos-command.txt").read_text().strip()
 INSTALL_PAGE = "https://adammalin.github.io/Team-App-Library/apps/orgchart-studio/install/#windows-install"
 
 GREEN = HexColor("#00662C")
@@ -74,7 +75,7 @@ def footer(pdf, page_number):
     pdf.rect(0, 0, PAGE_W, 52, stroke=0, fill=1)
     pdf.setFillColor(WHITE)
     pdf.setFont("Helvetica", 7.2)
-    pdf.drawString(40, 30, "ORNL OrgChart Studio | Desktop quick start | October 27, 2026")
+    pdf.drawString(40, 30, "ORNL OrgChart Studio | Desktop quick start | November 17, 2026")
     pdf.drawRightString(572, 30, f"PAGE {page_number} OF 3")
 
 
@@ -88,7 +89,7 @@ def code_box(pdf, title, lines, x, y, width, height, accent, actual_text=None):
     pdf.setFont("Helvetica-Bold", 10.5)
     pdf.drawString(x + 13, y + height - 20, title)
     pdf.setFillColor(DARK)
-    pdf.setFont("Courier", 6.35)
+    pdf.setFont("Courier", 7.2)
     cursor = y + height - 48
     if actual_text:
         # Preserve a single command when viewers copy visually wrapped PDF text.
@@ -137,24 +138,20 @@ def build_pdf(output):
     )
     code_box(
         pdf,
-        "Mac - paste all five lines into Terminal",
-        [
-            "/usr/bin/curl --fail --location --show-error \\",
-            "  --output \"$HOME/Downloads/orgchart-studio-install.zsh\" \\",
-            "  \"https://raw.githubusercontent.com/adammalin/Org-Chart-Studio/main/scripts/bootstrap-mac-source-test.zsh\"",
-            "/bin/zsh \"$HOME/Downloads/orgchart-studio-install.zsh\" \\",
-            "  \"$HOME/OrgChart-Studio-source-test\"",
-        ],
+        "Mac - one command in Terminal",
+        textwrap.wrap(MAC_COMMAND, width=110, break_long_words=False, break_on_hyphens=False),
         40,
         378,
         532,
         148,
         GREEN,
+        actual_text=MAC_COMMAND,
     )
+    wrapped(pdf, "Select the full command above and copy it. Display wrapping is not a separate step.", 54, 394, 500, size=7.5, leading=10)
     code_box(
         pdf,
         "Windows - one command in Terminal, Command Prompt, or PowerShell",
-        textwrap.wrap(WINDOWS_COMMAND, width=125, break_long_words=False, break_on_hyphens=False),
+        textwrap.wrap(WINDOWS_COMMAND, width=110, break_long_words=False, break_on_hyphens=False),
         40,
         191,
         532,
@@ -170,7 +167,7 @@ def build_pdf(output):
     label(pdf, "During setup", 56, 145)
     wrapped(
         pdf,
-        "Allow several minutes. Setup downloads, installs, checks, and opens the app. Windows setup creates Start menu and desktop shortcuts; optional AI setup is available in the app later. On Mac, type y at Install the local MCP integration? [y/N] to connect AI, or press Return to skip.",
+        "Allow several minutes. Setup downloads, installs, checks, and opens the app. These manual commands install public main. Codex uses the plugin's verified installer. On Mac, type y at Install the local MCP integration? [y/N] to connect AI, or press Return to skip.",
         56,
         125,
         500,
@@ -191,7 +188,8 @@ def build_pdf(output):
     code_box(
         pdf,
         "Mac - easiest option",
-        ["Double-click Start-OrgChart-Studio.command in the OrgChart-Studio-source-test folder."],
+        ['Ask the ORNL - OrgChart Studio plugin in Codex: "Open OrgChart Studio."',
+         'Or run: /bin/zsh "$HOME/OrgChart-Studio-source-test/scripts/start-mac-source-test.zsh"'],
         40,
         506,
         532,
@@ -201,7 +199,8 @@ def build_pdf(output):
     code_box(
         pdf,
         "Windows - easiest option",
-        ["Choose OrgChart Studio from the Start menu or desktop.", "Fallback: double-click Start-OrgChart-Studio.cmd in the installed folder."],
+        ['Ask the ORNL - OrgChart Studio plugin in Codex: "Open OrgChart Studio."',
+         'Or run in PowerShell: & "$env:USERPROFILE\\OrgChart-Studio-source-test\\scripts\\start-windows-source-test.ps1"'],
         40,
         410,
         532,
@@ -211,7 +210,7 @@ def build_pdf(output):
     label(pdf, "Update", 40, 380)
     wrapped(
         pdf,
-        "Make a fresh backup, close the app with its red X, and repeat the same installation commands from page 1. The script downloads one exact current commit, removes obsolete application files, preserves the private runtime and working folders, rebuilds, tests, and starts the updated copy.",
+        "Make a fresh backup, close the app with its red X, and repeat the same installation command from page 1 for your system. The script downloads public main, rebuilds, tests, and opens it. For a newer local or development copy, ask Codex to inspect its version first; public main can be older.",
         40,
         361,
         532,
@@ -242,12 +241,12 @@ def build_pdf(output):
         pdf,
         "Optional local AI | human-reviewed changes",
         "Connect AI locally.",
-        "AI proposes. You review. OrgChart Studio remains the source of truth.",
+        "Codex can install and launch Studio, then help with charts and backups.",
         3,
     )
-    step_card(pdf, "1", "INSTALL", "In the app, use Install local AI integration. On Mac, you can also type y at the setup prompt.", 40, 516, 166, 82)
+    step_card(pdf, "1", "ENABLE THE PLUGIN", "Install ORNL - OrgChart Studio in Codex. The plugin can find an existing app or install a missing one.", 40, 516, 166, 82)
     step_card(pdf, "2", "RESTART AI", "Quit and reopen ChatGPT Desktop or Codex once so it discovers orgchart_studio.", 223, 516, 166, 82, SOFT_NAVY, NAVY)
-    step_card(pdf, "3", "OPEN THE APP", "OrgChart Studio must be running before an AI can call its local tools.", 406, 516, 166, 82, PALE, DARK)
+    step_card(pdf, "3", "OPEN AND CONNECT", "The plugin launches Studio and checks readiness. Use Install local AI integration if the MCP connection is missing.", 406, 516, 166, 82, PALE, DARK)
 
     label(pdf, "A good first prompt", 40, 478)
     pdf.setFillColor(NAVY)
@@ -256,7 +255,7 @@ def build_pdf(output):
     pdf.rect(40, 375, 5, 82, stroke=0, fill=1)
     wrapped(
         pdf,
-        'Use the orgchart_studio MCP server. List the charts first. Open the chart I name, then stage the smallest reviewed proposal for this change: "Renee is retiring soon. Show that position as vacant." Do not save it directly.',
+        'Open OrgChart Studio; install it if needed, then check the local app connection. Use the existing installation when it is already working. After it opens, help me update charts, review changes, save history, export, or back up my library.',
         58,
         431,
         490,
@@ -265,6 +264,7 @@ def build_pdf(output):
         leading=12,
         color=WHITE,
     )
+    pdf.linkURL("https://chatgpt.com/plugins/Plugin_8765a02936388191b4ce25a3ad811246", (40, 516, 206, 598), relative=0, thickness=0)
     label(pdf, "What happens next", 40, 338)
     wrapped(
         pdf,
@@ -280,7 +280,7 @@ def build_pdf(output):
     label(pdf, "Controls that stay with you", 56, 238)
     wrapped(
         pdf,
-        "Pause local AI access, limit it to selected charts, or remove the integration without changing charts. Retained-source extraction starts off and is session-only. Chart fields returned through MCP enter that AI conversation, so use only content approved for that AI environment.",
+        "Pause local AI access, limit it to selected charts, or remove the integration without changing charts. Retained-source extraction starts on and can be switched off for the session. Chart fields returned through MCP enter that AI conversation, so use only content approved for that AI environment.",
         56,
         217,
         500,

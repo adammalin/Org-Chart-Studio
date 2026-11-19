@@ -1,6 +1,29 @@
 "use client";
+import { OfficialCardDrawing } from "./official-card";
+import { officialCard, officialScale, officialAssignment, type ChartAppearance } from "../lib/chart-appearance";
+import { loadChartFonts } from "../lib/chart-fonts";
+import {
+  SupportPanelsCanvas,
+  SupportPanelsEditor,
+  SourceChecks,
+  SourceCheckProgress,
+  SupplementHistoryDetails,
+} from "./support-panels";
+import { supportReviewCount } from "../lib/chart-supplements";
+import { MonthlyWorkspace } from "./monthly-workspace";
+import { PortfolioReview } from "./portfolio-review";
+import {
+  auditPortfolio,
+  nodeReviewPriority,
+} from "../lib/portfolio-consistency";
+import { DesktopRecovery } from "./desktop-recovery";
+import { EditHistoryPanel, useEditHistory } from "./edit-history";
+import { HistoryTimeline } from "./history-timeline";
+import { LibraryTree } from "./library-tree";
+import { chartMatches, searchLibrary } from "../lib/library-navigation";
 
 import {
+  ViewportPortal,
   Background,
   BackgroundVariant,
   BaseEdge,
@@ -69,6 +92,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -175,6 +199,8 @@ import type { McpControlResponse, McpControlState } from "../lib/mcp-control";
 type LayoutMode = "preserve" | "branch" | "respect-pins" | "full";
 type WorkspaceView =
   | "library"
+  | "consistency"
+  | "monthly"
   | "canvas"
   | "table"
   | "review"
@@ -214,7 +240,13 @@ interface OnboardingTourStep {
   eyebrow: string;
   title: string;
   body: string;
-  target: "navigation" | "presentation" | "chart-status" | "ai-control" | "tips" | null;
+  target:
+    | "navigation"
+    | "presentation"
+    | "chart-status"
+    | "ai-control"
+    | "tips"
+    | null;
   placement: "center" | "right" | "bottom";
 }
 
@@ -242,48 +274,42 @@ const ONBOARDING_TOUR_STEPS: OnboardingTourStep[] = [
   {
     eyebrow: "Welcome",
     title: "Know what is saved—and what still needs you",
-    body:
-      "This short tour shows where to open charts, check save state, review AI proposals, and return for help. You remain in control of every applied change.",
+    body: "This short tour shows where to open charts, check save state, review AI proposals, and return for help. You remain in control of every applied change.",
     target: null,
     placement: "center",
   },
   {
     eyebrow: "Step 1",
     title: "Move through the chart workflow",
-    body:
-      "Use the workspace navigation to open the chart library, edit the selected chart, resolve imported cards and reporting lines in Review queue, make backups, export, and inspect version history.",
+    body: "Use the workspace navigation to open the chart library, edit the selected chart, resolve imported cards and reporting lines in Review queue, make backups, export, and inspect version history.",
     target: "navigation",
     placement: "right",
   },
   {
     eyebrow: "Step 2",
     title: "Choose grouped, vertical, horizontal, or individual cards",
-    body:
-      "Compact groups keeps major units as cards and lists terminal assignments inside their parent group. Vertical is the default column stack; Horizontal uses wider hierarchy rows. Individual cards restores one card for every record. Switching views never removes chart data.",
+    body: "Compact groups keeps major units as cards and lists terminal assignments inside their parent group. Vertical is the default column stack; Horizontal uses wider hierarchy rows. Individual cards restores one card for every record. Switching views never removes chart data.",
     target: "presentation",
     placement: "bottom",
   },
   {
     eyebrow: "Step 3",
     title: "Follow the chart lifecycle",
-    body:
-      "The top bar shows Draft, In review, Current, or Archived alongside the saved version and validation result. Current means approved and in use; Archived is historical and read-only. “Not applied” means an AI proposal is still only a preview.",
+    body: "The top bar shows Draft, In review, Current, or Archived alongside the saved version and validation result. Current means designated as the working chart; Archived is historical and read-only. “Not applied” means an AI proposal is still only a preview.",
     target: "chart-status",
     placement: "bottom",
   },
   {
     eyebrow: "Step 4",
     title: "AI proposals always wait for your decision",
-    body:
-      "Open Local AI control to manage access and receipts. When a proposal arrives, compare Before and After, then apply it, reject it, or choose Review later. A pending banner keeps unsaved proposals easy to find.",
+    body: "Open Local AI control to manage access and receipts. When a proposal arrives, compare Before and After, then apply it, reject it, or choose Review later. A pending banner keeps unsaved proposals easy to find.",
     target: "ai-control",
     placement: "right",
   },
   {
     eyebrow: "Step 5",
     title: "Replay these tips anytime",
-    body:
-      "Choose Tips & tour whenever you want this walkthrough again. Nothing in the tour edits, applies, publishes, or exports a chart.",
+    body: "Choose Tips & tour whenever you want this walkthrough again. Nothing in the tour edits, applies, publishes, or exports a chart.",
     target: "tips",
     placement: "right",
   },
@@ -310,15 +336,16 @@ function storedBackupHealth(): BackupHealthState {
 }
 
 function storedPresentationMode(): ChartPresentationMode {
-  if (typeof window === "undefined") return "compact";
-  return window.localStorage.getItem(PRESENTATION_STORAGE_KEY) === "individual"
-    ? "individual"
-    : "compact";
+  if (typeof window === "undefined") return "individual";
+  return window.localStorage.getItem(PRESENTATION_STORAGE_KEY) === "compact"
+    ? "compact"
+    : "individual";
 }
 
 function storedCompactLayoutOrientation(): CompactLayoutOrientation {
   if (typeof window === "undefined") return "vertical";
-  return window.localStorage.getItem(COMPACT_LAYOUT_STORAGE_KEY) === "horizontal"
+  return window.localStorage.getItem(COMPACT_LAYOUT_STORAGE_KEY) ===
+    "horizontal"
     ? "horizontal"
     : "vertical";
 }
@@ -386,6 +413,7 @@ const statusLabels = {
   filled: "Filled",
   acting: "Acting",
   vacant: "Vacant",
+  not_specified: "Not specified",
 };
 
 function tableSourceCertainty(flowNode: OrgFlowNode): SourceCertainty {
@@ -411,8 +439,10 @@ function hasMissingSourceDate(flowNode: OrgFlowNode): boolean {
 
 function tableReviewCue(flowNode: OrgFlowNode): string {
   if (isLikelyImportPlaceholder(flowNode)) return "Likely import placeholder";
-  if (tableSourceCertainty(flowNode) === "needs_review") return "Source needs review";
-  if (tableSourceCertainty(flowNode) === "inferred") return "Source relationship inferred";
+  if (tableSourceCertainty(flowNode) === "needs_review")
+    return "Source needs review";
+  if (tableSourceCertainty(flowNode) === "inferred")
+    return "Source relationship inferred";
   if (hasMissingSourceDate(flowNode)) return "Source date not supplied";
   return "No automated flag";
 }
@@ -455,10 +485,7 @@ function cloneEditorEdges(edges: Edge[]): Edge[] {
   }));
 }
 
-function edgeWithManualRoute(
-  edge: Edge,
-  manualRoute?: ManualEdgeRoute,
-): Edge {
+function edgeWithManualRoute(edge: Edge, manualRoute?: ManualEdgeRoute): Edge {
   const data = { ...(edge.data ?? {}) };
   if (manualRoute) data.manualRoute = manualRoute;
   else delete data.manualRoute;
@@ -468,6 +495,7 @@ function edgeWithManualRoute(
 interface RelationshipEdgeRenderData extends Record<string, unknown> {
   aiChange?: "added" | "changed";
   route?: OrthogonalEdgeRoute;
+  appearance?:ChartAppearance;
   onCornerDragStart?: (
     edgeId: string,
     route: OrthogonalEdgeRoute,
@@ -494,29 +522,51 @@ function editorSnapshot(
 
 function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
   const { unit } = data;
+  const official = data.appearance !== "annotated";
+  const cardWidth = data.visualWidth ?? NODE_WIDTH, cardHeight = data.visualHeight ?? NODE_HEIGHT;
+  const sourceCard = official ? officialCard(unit,cardWidth,cardHeight,data.hierarchyLevel??1,officialScale(data.presentationMode === "compact" ? undefined : data.sourceCanvasWidth,cardWidth),false,(data.compactEntries??[]).map(e=>({id:e.id,title:cleanOrgChartDisplayText(e.unit.shortName||e.unit.name),assignment:officialAssignment(e.unit)}))) : null;
   const displayName = cleanOrgChartDisplayText(unit.shortName || unit.name);
   const displayPositionTitle = cleanOrgChartDisplayText(unit.positionTitle);
-  const displayStatus = unit.positionStatus === "filled"
-    ? cleanOrgChartDisplayText(unit.assignmentLabel)
-    : statusLabels[unit.positionStatus];
+  const displayStatus =
+    unit.positionStatus === "filled"
+      ? cleanOrgChartDisplayText(unit.assignmentLabel)
+      : statusLabels[unit.positionStatus];
+  const sourceSized =
+    data.presentationMode !== "compact" &&
+    (Number(data.visualWidth) !== NODE_WIDTH ||
+      Number(data.visualHeight) !== NODE_HEIGHT);
   const hasChildren = Boolean(data.childCount);
   const compactEntries = data.compactEntries ?? [];
-  const sourceHandleCount = Math.max(0, data.sourcePortCount ?? data.childCount ?? 0);
+  const sourceHandleCount = Math.max(
+    0,
+    data.sourcePortCount ?? data.childCount ?? 0,
+  );
   const targetSide = data.targetSide ?? "top";
 
   return (
     <article
-      className={`org-node org-node--${unit.type} ${
+      className={`org-node ${official ? "is-official" : ""} ${sourceSized ? "is-source-sized" : ""} org-node--${unit.type} ${
         selected ? "is-selected" : ""
       } ${data.isSearchMatch ? "is-search-match" : ""} ${data.aiChange ? `is-ai-${data.aiChange}` : ""} ${unit.planningState === "planned" ? "is-planned" : ""} ${unit.sourceCertainty === "needs_review" ? "needs-source-review" : ""} ${data.presentationMode === "compact" ? `is-compact is-level-${data.hierarchyLevel ?? 1}` : ""} ${data.compactSidecar ? "is-compact-sidecar" : ""} ${compactEntries.length ? "has-compact-list" : ""}`}
       aria-label={`${cleanOrgChartDisplayText(unit.name)}, ${displayPositionTitle}, ${displayStatus}`}
       style={{
         width: data.visualWidth,
         height: data.visualHeight,
+        ...(sourceSized
+          ? {
+              fontSize: Math.max(
+                14,
+                Math.min(22, Number(data.visualWidth) / 35),
+              ),
+            }
+          : {}),
       }}
     >
+      {sourceCard ? <OfficialCardDrawing card={sourceCard} width={cardWidth} height={cardHeight} onEntry={data.onSelectCompactEntry}/> : <>
       {data.aiChange ? (
-        <span className={`org-node__ai-change org-node__ai-change--${data.aiChange}`}>
+        <span
+          className={`org-node__ai-change org-node__ai-change--${data.aiChange}`}
+        >
           AI {data.aiChange}
         </span>
       ) : null}
@@ -526,6 +576,7 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
       {unit.sourceCertainty === "needs_review" ? (
         <span className="org-node__source-review">Needs review</span>
       ) : null}
+      </>}
       <Handle
         id="parent"
         type="target"
@@ -537,6 +588,7 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
             : { left: `calc(50% + ${data.targetPortOffset ?? 0}px)` }
         }
       />
+      {!official ? <>
       <div className="org-node__eyebrow">
         <span>{unit.type}</span>
         {data.pinned ? (
@@ -547,7 +599,13 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
         ) : null}
       </div>
       <h3 title={displayName}>{displayName}</h3>
-      <p title={displayPositionTitle}>{displayPositionTitle}</p>
+      {sourceSized &&
+      (/assignment shown in source/i.test(displayPositionTitle) ||
+        unit.assignmentLabel
+          .toLowerCase()
+          .includes(displayPositionTitle.toLowerCase())) ? null : (
+        <p title={displayPositionTitle}>{displayPositionTitle}</p>
+      )}
       <div className={`org-node__status status--${unit.positionStatus}`}>
         <span className="status-marker" aria-hidden="true" />
         <span title={displayStatus}>{displayStatus}</span>
@@ -555,7 +613,10 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
       {compactEntries.length ? (
         <div className="org-node__compact-roster">
           <div className="org-node__compact-roster-heading">
-            <span>{compactEntries.length} listed assignment{compactEntries.length === 1 ? "" : "s"}</span>
+            <span>
+              {compactEntries.length} listed assignment
+              {compactEntries.length === 1 ? "" : "s"}
+            </span>
             <small>Level 4+ shown in this group</small>
           </div>
           <ul>
@@ -573,10 +634,18 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
                   }}
                   aria-label={`Open ${cleanOrgChartDisplayText(entry.unit.name)}`}
                 >
-                  <strong title={cleanOrgChartDisplayText(entry.unit.shortName || entry.unit.name)}>
-                    {cleanOrgChartDisplayText(entry.unit.shortName || entry.unit.name)}
+                  <strong
+                    title={cleanOrgChartDisplayText(
+                      entry.unit.shortName || entry.unit.name,
+                    )}
+                  >
+                    {cleanOrgChartDisplayText(
+                      entry.unit.shortName || entry.unit.name,
+                    )}
                   </strong>
-                  <span title={cleanOrgChartDisplayText(entry.unit.positionTitle)}>
+                  <span
+                    title={cleanOrgChartDisplayText(entry.unit.positionTitle)}
+                  >
                     {cleanOrgChartDisplayText(entry.unit.positionTitle)}
                   </span>
                   <small className={`status--${entry.unit.positionStatus}`}>
@@ -591,6 +660,7 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
           </ul>
         </div>
       ) : null}
+      </> : null}
       {hasChildren && data.presentationMode !== "compact" ? (
         <button
           type="button"
@@ -619,20 +689,20 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
           isConnectable={false}
         />
       ) : null}
-      {data.presentationMode === "individual" ? (
-        Array.from({ length: sourceHandleCount }, (_, index) => (
-          <Handle
-            key={`route-${index}`}
-            id={`route-${index}`}
-            type="source"
-            position={Position.Bottom}
-            isConnectable={false}
-            style={{
-              left: `calc(50% + ${sourcePortOffset(index, sourceHandleCount, data.visualWidth ?? NODE_WIDTH)}px)`,
-            }}
-          />
-        ))
-      ) : null}
+      {data.presentationMode === "individual"
+        ? Array.from({ length: sourceHandleCount }, (_, index) => (
+            <Handle
+              key={`route-${index}`}
+              id={`route-${index}`}
+              type="source"
+              position={Position.Bottom}
+              isConnectable={false}
+              style={{
+                left: `calc(50% + ${sourcePortOffset(index, sourceHandleCount, data.visualWidth ?? NODE_WIDTH)}px)`,
+              }}
+            />
+          ))
+        : null}
     </article>
   );
 }
@@ -662,7 +732,10 @@ function OrgRelationshipEdge({
     event.preventDefault();
     event.stopPropagation();
     const pointerId = event.pointerId;
-    const pointer = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    const pointer = screenToFlowPosition({
+      x: event.clientX,
+      y: event.clientY,
+    });
     renderData?.onCornerDragStart?.(id, route, control, pointer);
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
@@ -680,7 +753,9 @@ function OrgRelationshipEdge({
       window.removeEventListener("pointercancel", finishPointerDrag);
       renderData?.onCornerDragEnd?.(id);
     };
-    window.addEventListener("pointermove", handlePointerMove, { passive: false });
+    window.addEventListener("pointermove", handlePointerMove, {
+      passive: false,
+    });
     window.addEventListener("pointerup", finishPointerDrag);
     window.addEventListener("pointercancel", finishPointerDrag);
   };
@@ -688,7 +763,7 @@ function OrgRelationshipEdge({
   return (
     <>
       <path
-        className={`org-relationship-edge__halo ${selected ? "is-selected" : ""} ${renderData?.aiChange ? `is-ai-${renderData.aiChange}` : ""}`}
+        className={`org-relationship-edge__halo ${renderData?.appearance === "official" ? "is-official" : ""} ${selected ? "is-selected" : ""} ${renderData?.aiChange ? `is-ai-${renderData.aiChange}` : ""}`}
         d={path}
       />
       <BaseEdge
@@ -741,15 +816,71 @@ function StudioWorkspace() {
   const [charts, setCharts] = useState<ChartDocument[]>([]);
   const [activeChartId, setActiveChartId] = useState("");
   const [libraryLoading, setLibraryLoading] = useState(true);
-  const [saveState, setSaveState] = useState<"saved" | "saving" | "proposal" | "error">("saved");
+  const [saveState, setSaveState] = useState<
+    "saved" | "saving" | "proposal" | "error"
+  >("saved");
   const [saveRetryRevision, setSaveRetryRevision] = useState(0);
+  const [historyReplayBusy,setHistoryReplayBusy]=useState(false);
   const [selectedId, setSelectedId] = useState("");
   const [selectedEdgeId, setSelectedEdgeId] = useState("");
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
-  const [presentationMode, setPresentationMode] = useState<ChartPresentationMode>(
-    storedPresentationMode,
-  );
+  const [searchOpen, setSearchOpen] = useState(false);
+  useEffect(() => {
+    const close = (e: PointerEvent) => {
+      if (e.target instanceof Element && !e.target.closest(".global-search"))
+        setSearchOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, []);
+  const [searchArchives, setSearchArchives] = useState(false);
+  const [libraryView, setLibraryView] = useState<"flat" | "tree">("flat");
+  const [libraryViewReady, setLibraryViewReady] = useState(false);
+  const [chartAppearance,setChartAppearance] = useState<ChartAppearance>("official");
+  const [chartFontAvailable,setChartFontAvailable] = useState<boolean|null>(null);
+  useEffect(()=>{void loadChartFonts().then(fonts=>setChartFontAvailable(Boolean(fonts)));},[]);
+  const chooseChartAppearance = async (appearance:ChartAppearance) => {
+    setChartAppearance(appearance);
+    try {
+      const response=await fetch("/api/preferences",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({chartAppearance:appearance})});
+      if(!response.ok)throw Error();
+    } catch { setNotice("Appearance changed for this session; its preference could not be saved."); }
+  };
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/preferences", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok)
+          throw new Error("Library view preference could not be loaded.");
+        const p = (await response.json()) as { libraryView: string;chartAppearance?:ChartAppearance };
+        if (active) { setLibraryView(p.libraryView === "tree" ? "tree" : "flat"); setChartAppearance(p.chartAppearance === "annotated" ? "annotated" : "official"); }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setLibraryViewReady(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  const chooseLibraryView = async (view: "flat" | "tree") => {
+    setLibraryView(view);
+    try {
+      const response = await fetch("/api/preferences", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ libraryView: view }),
+      });
+      if (!response.ok) throw new Error();
+    } catch {
+      setNotice(
+        "Library view changed for this session, but the preference could not be saved.",
+      );
+    }
+  };
+  const [presentationMode, setPresentationMode] =
+    useState<ChartPresentationMode>(storedPresentationMode);
   const [compactLayoutOrientation, setCompactLayoutOrientation] =
     useState<CompactLayoutOrientation>(storedCompactLayoutOrientation);
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("respect-pins");
@@ -774,70 +905,94 @@ function StudioWorkspace() {
   const [intakeFiles, setIntakeFiles] = useState<File[]>([]);
   const [intakeBusy, setIntakeBusy] = useState(false);
   const [importFindings, setImportFindings] = useState<ValidationFinding[]>([]);
-  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(
+    null,
+  );
   const [importReviewed, setImportReviewed] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const [backupPassphrase, setBackupPassphrase] = useState("");
   const [backupPassphraseConfirm, setBackupPassphraseConfirm] = useState("");
-  const [backupProtection, setBackupProtection] = useState<BackupProtection>("encrypted");
-  const [unencryptedBackupConfirmed, setUnencryptedBackupConfirmed] = useState(false);
+  const [backupProtection, setBackupProtection] =
+    useState<BackupProtection>("unencrypted");
   const [backupScope, setBackupScope] = useState<BackupScope>("all");
-  const [backupSelectedChartIds, setBackupSelectedChartIds] = useState<Set<string>>(
-    new Set(),
-  );
+  const [backupSelectedChartIds, setBackupSelectedChartIds] = useState<
+    Set<string>
+  >(new Set());
   const [restorePassphrase, setRestorePassphrase] = useState("");
   const [backupFile, setBackupFile] = useState<File | null>(null);
-  const [backupBusy, setBackupBusy] = useState<"export" | "restore" | null>(null);
-  const [backupMessage, setBackupMessage] = useState("");
-  const [backupHealth, setBackupHealth] = useState<BackupHealthState>(storedBackupHealth);
-  const [backupClock, setBackupClock] = useState(0);
-  const [desktopStorage, setDesktopStorage] = useState<DesktopStorageSettings | null>(null);
-  const [desktopMcpConfiguration, setDesktopMcpConfiguration] =
-    useState<DesktopMcpConfigurationStatus | null>(null);
-  const [desktopMcpConfigurationBusy, setDesktopMcpConfigurationBusy] = useState(false);
-  const [storageMode, setStorageMode] = useState<"loading" | "desktop" | "browser">(
-    "browser",
-  );
-  const [storageBusy, setStorageBusy] = useState<"data" | "backup" | "restart" | null>(
+  const [backupBusy, setBackupBusy] = useState<"export" | "restore" | null>(
     null,
   );
+  const [backupMessage, setBackupMessage] = useState("");
+  const [backupHealth, setBackupHealth] =
+    useState<BackupHealthState>(storedBackupHealth);
+  const [backupClock, setBackupClock] = useState(0);
+  const [desktopStorage, setDesktopStorage] =
+    useState<DesktopStorageSettings | null>(null);
+  const [desktopMcpConfiguration, setDesktopMcpConfiguration] =
+    useState<DesktopMcpConfigurationStatus | null>(null);
+  const [desktopMcpConfigurationBusy, setDesktopMcpConfigurationBusy] =
+    useState(false);
+  const [storageMode, setStorageMode] = useState<
+    "loading" | "desktop" | "browser"
+  >("browser");
+  const [storageBusy, setStorageBusy] = useState<
+    "data" | "backup" | "restart" | null
+  >(null);
   const [quitBusy, setQuitBusy] = useState(false);
   const [storageMessage, setStorageMessage] = useState("");
   const [versions, setVersions] = useState<ChartVersion[]>([]);
   const [versionSummary, setVersionSummary] = useState("");
-  const [historyBusy, setHistoryBusy] = useState<"load" | "save" | "restore" | null>(null);
+  const [historyBusy, setHistoryBusy] = useState<
+    "load" | "save" | "restore" | null
+  >(null);
   const [compareVersionId, setCompareVersionId] = useState("");
-  const [exportAudience, setExportAudience] = useState<ExportAudience>("internal");
-  const [exportPreset, setExportPreset] = useState<ExportPresetId>("presentation-wide");
+  const [exportAudience, setExportAudience] =
+    useState<ExportAudience>("internal");
+  const [exportPreset, setExportPreset] =
+    useState<ExportPresetId>("presentation-wide");
   const [pngScale, setPngScale] = useState<1 | 2 | 4>(2);
   const [exportBusy, setExportBusy] = useState<ExportFormat | null>(null);
-  const [undoStack, setUndoStack] = useState<EditorSnapshot[]>([]);
-  const [redoStack, setRedoStack] = useState<EditorSnapshot[]>([]);
-  const [editorDialog, setEditorDialog] = useState<EditorDialogState | null>(null);
-  const [lifecycleDialog, setLifecycleDialog] = useState<LifecycleDialogState | null>(null);
+  const editLabelRef = useRef("Saved chart changes");
+  const [editorDialog, setEditorDialog] = useState<EditorDialogState | null>(
+    null,
+  );
+  const [lifecycleDialog, setLifecycleDialog] =
+    useState<LifecycleDialogState | null>(null);
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [lifecycleError, setLifecycleError] = useState("");
-  const [deleteChartDialog, setDeleteChartDialog] = useState<DeleteChartDialogState | null>(null);
+  const [deleteChartDialog, setDeleteChartDialog] =
+    useState<DeleteChartDialogState | null>(null);
   const [deleteChartBusy, setDeleteChartBusy] = useState(false);
   const [deleteChartError, setDeleteChartError] = useState("");
   const [deleteChartConfirmation, setDeleteChartConfirmation] = useState("");
   const [libraryStatusFilter, setLibraryStatusFilter] =
     useState<LibraryStatusFilter>("active");
-  const [mcpActivity, setMcpActivity] = useState<McpActivitySnapshot>(
-    IDLE_MCP_ACTIVITY,
-  );
+  const [mcpActivity, setMcpActivity] =
+    useState<McpActivitySnapshot>(IDLE_MCP_ACTIVITY);
   const [dismissedMcpRevision, setDismissedMcpRevision] = useState(0);
-  const [pendingAiProposal, setPendingAiProposal] = useState<AiChartProposal | null>(null);
+  const [pendingAiProposal, setPendingAiProposal] =
+    useState<AiChartProposal | null>(null);
   const [pendingAiProposalSummaries, setPendingAiProposalSummaries] = useState<
     AiPendingProposalSummary[]
   >([]);
+  const [pendingReviewChoice, setPendingReviewChoice] = useState("");
+  const [pendingReviewScope, setPendingReviewScope] = useState<
+    "updates" | "archives"
+  >("updates");
   const [pendingAiImportProposal, setPendingAiImportProposal] =
     useState<AiImportProposal | null>(null);
-  const [aiProposalBusy, setAiProposalBusy] = useState<"load" | "accept" | "reject" | null>(null);
+  const [aiProposalBusy, setAiProposalBusy] = useState<
+    "load" | "accept" | "reject" | null
+  >(null);
   const [aiProposalError, setAiProposalError] = useState("");
-  const [aiImportBusy, setAiImportBusy] = useState<"load" | "accept" | "reject" | null>(null);
+  const [aiImportBusy, setAiImportBusy] = useState<
+    "load" | "accept" | "reject" | null
+  >(null);
   const [aiImportError, setAiImportError] = useState("");
-  const [aiReviewCategory, setAiReviewCategory] = useState<"all" | AiChangeCategory>("all");
+  const [aiReviewCategory, setAiReviewCategory] = useState<
+    "all" | AiChangeCategory
+  >("all");
   const [aiActivities, setAiActivities] = useState<AiActivityRecord[]>([]);
   const [mcpControl, setMcpControl] = useState<McpControlState | null>(null);
   const [mcpControlBusy, setMcpControlBusy] = useState(false);
@@ -862,6 +1017,10 @@ function StudioWorkspace() {
     panel: { top: 0, left: 0 },
   });
   const hydratedChartRef = useRef<string | null>(null);
+  const selectedChartIdRef = useRef(activeChartId);
+  useLayoutEffect(() => {
+    selectedChartIdRef.current = activeChartId;
+  }, [activeChartId]);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveGenerationRef = useRef(0);
   const saveInFlightRef = useRef(false);
@@ -875,17 +1034,33 @@ function StudioWorkspace() {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const onboardingDialogRef = useRef<HTMLElement | null>(null);
   const onboardingInitializedRef = useRef(false);
-  const handledMcpCompletionRevisionRef = useRef(0);
-  const mcpCompletionRefreshInFlightRef = useRef(0);
-  const { fitView } = useReactFlow<OrgFlowNode>();
+  const handledMcpCompletionRevisionRef = useRef("");
+  const mcpCompletionRefreshInFlightRef = useRef("");
+  const { fitView, fitBounds } = useReactFlow<OrgFlowNode>();
 
-  const activeChart = charts.find((chart) => chart.id === activeChartId) ?? charts[0];
-  const activeChartReadOnly = activeChart?.status === "archived";
+  const activeChart =
+    charts.find((chart) => chart.id === activeChartId) ?? charts[0];
+  const activeChartReadOnly = activeChart?.status === "archived" || historyReplayBusy;
+  const canvasChart = pendingAiProposal?.proposed ?? activeChart;
   const visibleLibraryCharts = charts.filter((chart) => {
+    if (!chartMatches(chart, searchQuery)) return false;
     if (libraryStatusFilter === "all") return true;
     if (libraryStatusFilter === "active") return chart.status !== "archived";
     return chart.status === libraryStatusFilter;
   });
+  const librarySearchResults = useMemo(
+    () =>
+      searchLibrary(
+        charts.filter((c) => searchArchives || c.status !== "archived"),
+        searchQuery,
+      ),
+    [charts, searchArchives, searchQuery],
+  );
+  const treeCharts = charts.filter((c) =>
+    libraryStatusFilter === "all" || libraryStatusFilter === "active"
+      ? libraryStatusFilter === "all" || c.status !== "archived"
+      : c.status === libraryStatusFilter,
+  );
   const switchableCharts = charts.filter(
     (chart) => chart.status !== "archived" || chart.id === activeChart?.id,
   );
@@ -895,10 +1070,13 @@ function StudioWorkspace() {
   const backupAgeDays = backupHealth.lastBackupAt
     ? Math.max(
         0,
-        Math.floor((backupClock - Date.parse(backupHealth.lastBackupAt)) / 86_400_000),
+        Math.floor(
+          (backupClock - Date.parse(backupHealth.lastBackupAt)) / 86_400_000,
+        ),
       )
     : null;
-  const backupIsDue = backupAgeDays === null || backupAgeDays >= backupHealth.reminderDays;
+  const backupIsDue =
+    backupAgeDays === null || backupAgeDays >= backupHealth.reminderDays;
   const desktopBackupDestinationMissing =
     storageMode === "desktop" && !desktopStorage?.backupDirectory;
   const version = activeChart
@@ -918,37 +1096,50 @@ function StudioWorkspace() {
         : null,
     [activeChart, charts, edges, nodes],
   );
+  const portfolioIssues = useMemo(() => auditPortfolio(charts), [charts]);
   const sourceReviewNodes = useMemo(
     () =>
-      activeChartReadOnly ? [] : nodes.filter(
-        (flowNode) => flowNode.data.unit.sourceCertainty === "needs_review",
-      ),
-    [activeChartReadOnly, nodes],
+      activeChartReadOnly
+        ? []
+        : nodes
+            .filter(
+              (flowNode) =>
+                flowNode.data.unit.sourceCertainty === "needs_review",
+            )
+            .sort(
+              (a, b) =>
+                nodeReviewPriority(a, activeChartId, portfolioIssues) -
+                nodeReviewPriority(b, activeChartId, portfolioIssues),
+            ),
+    [activeChartReadOnly, nodes, activeChartId, portfolioIssues],
   );
   const sourceReviewEdges = useMemo(
-    () => activeChartReadOnly
-      ? []
-      : edges.filter((edge) => edge.data?.sourceCertainty === "needs_review"),
+    () =>
+      activeChartReadOnly
+        ? []
+        : edges.filter((edge) => edge.data?.sourceCertainty === "needs_review"),
     [activeChartReadOnly, edges],
   );
   const sourceReviewSummaries = useMemo<ChartSourceReviewSummary[]>(
     () =>
-      charts.filter((chart) => chart.status !== "archived").map((chart) => {
-        const chartNodes = chart.id === activeChartId ? nodes : chart.nodes;
-        const chartEdges = chart.id === activeChartId ? edges : chart.edges;
-        const cardCount = chartNodes.filter(
-          (flowNode) => flowNode.data.unit.sourceCertainty === "needs_review",
-        ).length;
-        const relationshipCount = chartEdges.filter(
-          (edge) => edge.data?.sourceCertainty === "needs_review",
-        ).length;
-        return {
-          chart,
-          cardCount,
-          relationshipCount,
-          total: cardCount + relationshipCount,
-        };
-      }),
+      charts
+        .filter((chart) => chart.status !== "archived")
+        .map((chart) => {
+          const chartNodes = chart.id === activeChartId ? nodes : chart.nodes;
+          const chartEdges = chart.id === activeChartId ? edges : chart.edges;
+          const cardCount = chartNodes.filter(
+            (flowNode) => flowNode.data.unit.sourceCertainty === "needs_review",
+          ).length;
+          const relationshipCount = chartEdges.filter(
+            (edge) => edge.data?.sourceCertainty === "needs_review",
+          ).length;
+          return {
+            chart,
+            cardCount,
+            relationshipCount,
+            total: cardCount + relationshipCount + supportReviewCount(chart),
+          };
+        }),
     [activeChartId, charts, edges, nodes],
   );
   const chartsNeedingSourceReview = sourceReviewSummaries.filter(
@@ -958,7 +1149,9 @@ function StudioWorkspace() {
     (total, summary) => total + summary.total,
     0,
   );
-  const deferredTableSearchQuery = useDeferredValue(tableSearchQuery.trim().toLowerCase());
+  const deferredTableSearchQuery = useDeferredValue(
+    tableSearchQuery.trim().toLowerCase(),
+  );
   const tableNodeById = useMemo(
     () => new Map(nodes.map((flowNode) => [flowNode.id, flowNode])),
     [nodes],
@@ -974,9 +1167,15 @@ function StudioWorkspace() {
   const tableCounts = useMemo(
     () => ({
       all: nodes.length,
-      filled: nodes.filter((flowNode) => flowNode.data.unit.positionStatus === "filled").length,
-      acting: nodes.filter((flowNode) => flowNode.data.unit.positionStatus === "acting").length,
-      vacant: nodes.filter((flowNode) => flowNode.data.unit.positionStatus === "vacant").length,
+      filled: nodes.filter(
+        (flowNode) => flowNode.data.unit.positionStatus === "filled",
+      ).length,
+      acting: nodes.filter(
+        (flowNode) => flowNode.data.unit.positionStatus === "acting",
+      ).length,
+      vacant: nodes.filter(
+        (flowNode) => flowNode.data.unit.positionStatus === "vacant",
+      ).length,
       importPlaceholders: nodes.filter(isLikelyImportPlaceholder).length,
     }),
     [nodes],
@@ -987,30 +1186,39 @@ function StudioWorkspace() {
         const unit = flowNode.data.unit;
         const parentId = tableParentByNodeId.get(flowNode.id);
         const parentName = parentId
-          ? tableNodeById.get(parentId)?.data.unit.shortName ?? ""
+          ? (tableNodeById.get(parentId)?.data.unit.shortName ?? "")
           : "Root";
-        const matchesSearch = !deferredTableSearchQuery || [
-          unit.name,
-          unit.shortName,
-          unit.positionTitle,
-          unit.assignmentLabel,
-          parentName,
-          unit.source,
-          unit.sourceLocator ?? "",
-          tableReviewCue(flowNode),
-        ].some((value) => value.toLowerCase().includes(deferredTableSearchQuery));
+        const matchesSearch =
+          !deferredTableSearchQuery ||
+          [
+            unit.name,
+            unit.shortName,
+            unit.positionTitle,
+            unit.assignmentLabel,
+            parentName,
+            unit.source,
+            unit.sourceLocator ?? "",
+            tableReviewCue(flowNode),
+          ].some((value) =>
+            value.toLowerCase().includes(deferredTableSearchQuery),
+          );
         const matchesPlanning =
-          planningFilter === "all" || planningStateForNode(flowNode) === planningFilter;
+          planningFilter === "all" ||
+          planningStateForNode(flowNode) === planningFilter;
         const matchesPosition =
-          tablePositionFilter === "all" || unit.positionStatus === tablePositionFilter;
+          tablePositionFilter === "all" ||
+          unit.positionStatus === tablePositionFilter;
         const matchesSource =
-          tableSourceFilter === "all" || tableSourceCertainty(flowNode) === tableSourceFilter;
+          tableSourceFilter === "all" ||
+          tableSourceCertainty(flowNode) === tableSourceFilter;
         const matchesUnitType =
           tableUnitTypeFilter === "all" || unit.type === tableUnitTypeFilter;
         const matchesQuality =
           tableQualityFilter === "all" ||
-          (tableQualityFilter === "import_placeholder" && isLikelyImportPlaceholder(flowNode)) ||
-          (tableQualityFilter === "missing_date" && hasMissingSourceDate(flowNode));
+          (tableQualityFilter === "import_placeholder" &&
+            isLikelyImportPlaceholder(flowNode)) ||
+          (tableQualityFilter === "missing_date" &&
+            hasMissingSourceDate(flowNode));
         return (
           matchesSearch &&
           matchesPlanning &&
@@ -1033,7 +1241,10 @@ function StudioWorkspace() {
     ],
   );
   const tableImportWarningCount =
-    activeChart?.sources.reduce((total, source) => total + source.warningCount, 0) ?? 0;
+    activeChart?.sources.reduce(
+      (total, source) => total + source.warningCount,
+      0,
+    ) ?? 0;
   const hasActiveTableFilters = Boolean(
     tableSearchQuery.trim() ||
     planningFilter !== "all" ||
@@ -1052,24 +1263,43 @@ function StudioWorkspace() {
     setTableQualityFilter("all");
   }, []);
 
-  const comparisonCharts = charts.filter((chart) => chart.status !== "archived");
-  const effectiveComparisonTargetId = comparisonCharts.some((chart) => chart.id === comparisonTargetId)
+  const comparisonCharts = charts.filter(
+    (chart) => chart.status !== "archived",
+  );
+  const effectiveComparisonTargetId = comparisonCharts.some(
+    (chart) => chart.id === comparisonTargetId,
+  )
     ? comparisonTargetId
-    : comparisonCharts.find((chart) => chart.id === activeChart?.id)?.id ?? comparisonCharts[0]?.id ?? "";
-  const effectiveComparisonSourceId = comparisonCharts.some((chart) => chart.id === comparisonSourceId)
+    : (comparisonCharts.find((chart) => chart.id === activeChart?.id)?.id ??
+      comparisonCharts[0]?.id ??
+      "");
+  const effectiveComparisonSourceId = comparisonCharts.some(
+    (chart) => chart.id === comparisonSourceId,
+  )
     ? comparisonSourceId
-    : comparisonCharts.find((chart) => chart.id !== effectiveComparisonTargetId)?.id ?? "";
-  const comparisonSource = comparisonCharts.find((chart) => chart.id === effectiveComparisonSourceId);
-  const comparisonTarget = comparisonCharts.find((chart) => chart.id === effectiveComparisonTargetId);
+    : (comparisonCharts.find(
+        (chart) => chart.id !== effectiveComparisonTargetId,
+      )?.id ?? "");
+  const comparisonSource = comparisonCharts.find(
+    (chart) => chart.id === effectiveComparisonSourceId,
+  );
+  const comparisonTarget = comparisonCharts.find(
+    (chart) => chart.id === effectiveComparisonTargetId,
+  );
   const chartComparison =
-    comparisonSource && comparisonTarget && comparisonSource.id !== comparisonTarget.id
+    comparisonSource &&
+    comparisonTarget &&
+    comparisonSource.id !== comparisonTarget.id
       ? compareChartDocuments(comparisonTarget, comparisonSource)
       : null;
 
   const saveBackupHealth = useCallback((next: BackupHealthState) => {
     setBackupHealth(next);
     setBackupClock(Date.now());
-    window.localStorage.setItem(BACKUP_HEALTH_STORAGE_KEY, JSON.stringify(next));
+    window.localStorage.setItem(
+      BACKUP_HEALTH_STORAGE_KEY,
+      JSON.stringify(next),
+    );
   }, []);
 
   useEffect(() => {
@@ -1097,8 +1327,11 @@ function StudioWorkspace() {
   }, []);
 
   const loadPendingAiProposals = useCallback(async () => {
-    const response = await fetch("/api/ai-proposals?status=pending", { cache: "no-store" });
-    if (!response.ok) throw new Error("Pending AI proposals could not be loaded.");
+    const response = await fetch("/api/ai-proposals?status=pending", {
+      cache: "no-store",
+    });
+    if (!response.ok)
+      throw new Error("Pending AI proposals could not be loaded.");
     const data = (await response.json()) as AiPendingProposalsResponse;
     setPendingAiProposalSummaries(data.proposals);
     return data.proposals;
@@ -1140,7 +1373,8 @@ function StudioWorkspace() {
     onboardingInitializedRef.current = true;
     let completed = false;
     try {
-      completed = window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === "complete";
+      completed =
+        window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === "complete";
     } catch {
       completed = false;
     }
@@ -1160,22 +1394,26 @@ function StudioWorkspace() {
       const clamp = (value: number, minimum: number, maximum: number) =>
         Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
       const targetElement = step.target
-        ? [...document.querySelectorAll<HTMLElement>(`[data-tour-target="${step.target}"]`)].find(
-            (candidate) => {
-              const candidateRect = candidate.getBoundingClientRect();
-              return (
-                candidateRect.width > 0 &&
-                candidateRect.height > 0 &&
-                candidateRect.right > 0 &&
-                candidateRect.bottom > 0 &&
-                candidateRect.left < viewportWidth &&
-                candidateRect.top < viewportHeight
-              );
-            },
-          )
+        ? [
+            ...document.querySelectorAll<HTMLElement>(
+              `[data-tour-target="${step.target}"]`,
+            ),
+          ].find((candidate) => {
+            const candidateRect = candidate.getBoundingClientRect();
+            return (
+              candidateRect.width > 0 &&
+              candidateRect.height > 0 &&
+              candidateRect.right > 0 &&
+              candidateRect.bottom > 0 &&
+              candidateRect.left < viewportWidth &&
+              candidateRect.top < viewportHeight
+            );
+          })
         : null;
       const rect = targetElement?.getBoundingClientRect();
-      const hasVisibleTarget = Boolean(rect && rect.width > 0 && rect.height > 0);
+      const hasVisibleTarget = Boolean(
+        rect && rect.width > 0 && rect.height > 0,
+      );
       if (!rect || !hasVisibleTarget || step.placement === "center") {
         setTourGeometry({
           target: null,
@@ -1223,11 +1461,15 @@ function StudioWorkspace() {
       } else if (event.key === "ArrowRight") {
         event.preventDefault();
         setOnboardingStep((current) =>
-          current === null ? null : Math.min(current + 1, ONBOARDING_TOUR_STEPS.length - 1),
+          current === null
+            ? null
+            : Math.min(current + 1, ONBOARDING_TOUR_STEPS.length - 1),
         );
       } else if (event.key === "ArrowLeft") {
         event.preventDefault();
-        setOnboardingStep((current) => (current === null ? null : Math.max(current - 1, 0)));
+        setOnboardingStep((current) =>
+          current === null ? null : Math.max(current - 1, 0),
+        );
       }
     };
     window.addEventListener("keydown", handleTourKeyDown);
@@ -1238,11 +1480,17 @@ function StudioWorkspace() {
     const reviewNeedsAttention =
       pendingAiProposal !== null ||
       pendingAiImportProposal !== null ||
-      (mcpActivity.phase === "succeeded" && mcpActivity.completionKind === "review_ready");
+      (mcpActivity.phase === "succeeded" &&
+        mcpActivity.completionKind === "review_ready");
     if (!reviewNeedsAttention) return;
     const timer = window.setTimeout(() => setOnboardingStep(null), 0);
     return () => window.clearTimeout(timer);
-  }, [mcpActivity.completionKind, mcpActivity.phase, pendingAiImportProposal, pendingAiProposal]);
+  }, [
+    mcpActivity.completionKind,
+    mcpActivity.phase,
+    pendingAiImportProposal,
+    pendingAiProposal,
+  ]);
 
   useEffect(() => {
     if (workspaceView !== "ai") return;
@@ -1266,7 +1514,6 @@ function StudioWorkspace() {
       if (timer) clearTimeout(timer);
     };
   }, [workspaceView]);
-
 
   useEffect(() => {
     let cancelled = false;
@@ -1307,7 +1554,9 @@ function StudioWorkspace() {
         if (cancelled) return;
         setStorageMode("desktop");
         setStorageMessage(
-          error instanceof Error ? error.message : "Storage settings could not be loaded.",
+          error instanceof Error
+            ? error.message
+            : "Storage settings could not be loaded.",
         );
       });
     return () => {
@@ -1346,7 +1595,7 @@ function StudioWorkspace() {
           : "Separate connector lanes enabled. Every relationship receives an independent non-overlapping route.",
       );
     },
-    [],
+    [setNotice],
   );
 
   const changePresentationMode = useCallback(
@@ -1363,7 +1612,7 @@ function StudioWorkspace() {
         void fitView({ duration: 420, padding: 0.14 });
       });
     },
-    [compactLayoutOrientation, fitView],
+    [compactLayoutOrientation, fitView, setPresentationMode, setNotice],
   );
 
   const changeCompactLayoutOrientation = useCallback(
@@ -1380,12 +1629,13 @@ function StudioWorkspace() {
         void fitView({ duration: 420, padding: 0.14 });
       });
     },
-    [fitView],
+    [fitView, setCompactLayoutOrientation, setNotice],
   );
 
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
-      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey)
+        return;
       if (
         event.target instanceof HTMLInputElement ||
         event.target instanceof HTMLSelectElement ||
@@ -1404,11 +1654,15 @@ function StudioWorkspace() {
 
   const openChart = useCallback(
     (chart: ChartDocument, nextView: WorkspaceView = "canvas") => {
+      if(historyReplayBusy){setNotice("Wait for the history recovery to finish before switching charts.");return;}
       if (chart.id === activeChartId && hydratedChartRef.current === chart.id) {
         setWorkspaceView(nextView);
         return;
       }
-      if (hydratedChartRef.current && (saveState === "saving" || saveState === "error")) {
+      if (
+        hydratedChartRef.current &&
+        (saveState === "saving" || saveState === "error")
+      ) {
         setNotice(
           saveState === "saving"
             ? "Wait for Saved before opening another chart. Your current change is still being written to local storage."
@@ -1420,22 +1674,43 @@ function StudioWorkspace() {
       setActiveChartId(chart.id);
       setNodes(chart.nodes);
       setEdges(chart.edges);
+      if (chart.sourceLayout) setPresentationMode("individual");
       setSelectedId("");
       setSelectedEdgeId("");
       setCollapsedIds(new Set());
       setSearchQuery("");
-      setUndoStack([]);
-      setRedoStack([]);
+      editLabelRef.current = "Saved chart changes";
       setVersions([]);
       setCompareVersionId("");
       setVersionSummary("");
       setWorkspaceView(nextView);
       window.requestAnimationFrame(() => {
         hydratedChartRef.current = chart.id;
-        void fitView({ duration: 420, padding: 0.14 });
+        if (chart.sourceLayout)
+          void fitBounds(
+            {
+              x: 0,
+              y: 0,
+              width: chart.sourceLayout.width,
+              height: chart.sourceLayout.height,
+            },
+            { duration: 420, padding: 0.1 },
+          );
+        else void fitView({ duration: 420, padding: 0.14 });
       });
     },
-    [activeChartId, fitView, saveState, setEdges, setNodes],
+    [
+      activeChartId,
+      historyReplayBusy,
+      fitView,
+      fitBounds,
+      saveState,
+      setEdges,
+      setNodes,
+      setPresentationMode,
+      setWorkspaceView,
+      setNotice,
+    ],
   );
 
   const retryCurrentSave = () => {
@@ -1445,19 +1720,22 @@ function StudioWorkspace() {
     setSaveRetryRevision((revision) => revision + 1);
   };
 
-  const dismissMcpActivity = useCallback(async (activityId = mcpActivity.activityId) => {
-    setDismissedMcpRevision(mcpActivity.revision);
-    if (!activityId) return;
-    try {
-      await fetch("/api/ai-activity", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "dismiss", activityId }),
-      });
-    } catch {
-      // The visual receipt is best-effort; proposal review remains available in this session.
-    }
-  }, [mcpActivity.activityId, mcpActivity.revision]);
+  const dismissMcpActivity = useCallback(
+    async (activityId = mcpActivity.activityId) => {
+      setDismissedMcpRevision(mcpActivity.revision);
+      if (!activityId) return;
+      try {
+        await fetch("/api/ai-activity", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "dismiss", activityId }),
+        });
+      } catch {
+        // The visual receipt is best-effort; proposal review remains available in this session.
+      }
+    },
+    [mcpActivity.activityId, mcpActivity.revision],
+  );
 
   const showAiProposal = useCallback(
     (proposal: AiChartProposal) => {
@@ -1469,12 +1747,20 @@ function StudioWorkspace() {
       hydratedChartRef.current = null;
       setAiProposalBusy(null);
       setAiProposalError("");
+      // A just-created chart may not have reached the periodic library refresh.
+      // Keep its identity/metadata paired with the preview and Review later state.
+      setCharts(current => current.some(c => c.id === proposal.current.id) ? current : [proposal.current,...current]);
       setPendingAiProposal(proposal);
       setAiReviewCategory("all");
       setActiveChartId(proposal.chartId);
       setNodes(proposal.proposed.nodes);
       setEdges(proposal.proposed.edges);
-      setSelectedId(proposal.summary.changedNodeIds[0] ?? proposal.proposed.nodes[0]?.id ?? "");
+      if (proposal.proposed.sourceLayout) setPresentationMode("individual");
+      setSelectedId(
+        proposal.summary.changedNodeIds[0] ??
+          proposal.proposed.nodes[0]?.id ??
+          "",
+      );
       setSelectedEdgeId("");
       setCollapsedIds(new Set());
       setWorkspaceView("canvas");
@@ -1482,9 +1768,13 @@ function StudioWorkspace() {
       setNotice(
         `Previewing ${proposal.summary.total} proposed AI change${proposal.summary.total === 1 ? "" : "s"}. Nothing has been saved yet.`,
       );
-      window.requestAnimationFrame(() => void fitView({ duration: 420, padding: 0.14 }));
+      window.requestAnimationFrame(() => {
+        const layout=proposal.proposed.sourceLayout;
+        if(layout) void fitBounds({x:0,y:0,width:layout.width,height:layout.height},{duration:420,padding:0.1});
+        else void fitView({duration:420,padding:0.14});
+      });
     },
-    [fitView, setEdges, setNodes],
+    [fitView, fitBounds, setPresentationMode, setEdges, setNodes, setWorkspaceView, setNotice],
   );
 
   const reviewPendingAiProposal = useCallback(
@@ -1496,22 +1786,34 @@ function StudioWorkspace() {
           `/api/ai-proposals?proposalId=${encodeURIComponent(proposalId)}`,
           { cache: "no-store" },
         );
-        const data = (await response.json()) as AiProposalResponse & { error?: string };
+        const data = (await response.json()) as AiProposalResponse & {
+          error?: string;
+        };
         if (!response.ok || !data.proposal) {
-          throw new Error(data.error ?? "The pending AI proposal could not be loaded.");
+          throw new Error(
+            data.error ?? "The pending AI proposal could not be loaded.",
+          );
         }
         showAiProposal(data.proposal);
       } catch (error) {
         await loadPendingAiProposals().catch(() => undefined);
         setSaveState("error");
         setNotice(
-          error instanceof Error ? error.message : "The pending AI proposal could not be loaded.",
+          error instanceof Error
+            ? error.message
+            : "The pending AI proposal could not be loaded.",
         );
       } finally {
         setAiProposalBusy(null);
       }
     },
-    [aiProposalBusy, loadPendingAiProposals, pendingAiProposalSummaries, showAiProposal],
+    [
+      aiProposalBusy,
+      loadPendingAiProposals,
+      pendingAiProposalSummaries,
+      showAiProposal,
+      setNotice,
+    ],
   );
 
   const deferAiProposal = useCallback(() => {
@@ -1524,86 +1826,105 @@ function StudioWorkspace() {
     setSelectedEdgeId("");
     setSaveState("saved");
     setDismissedMcpRevision(mcpActivity.revision);
-    const deadline = new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(new Date(proposal.expiresAt));
     setNotice(
-      `Review deferred. The saved chart is unchanged, and this proposal remains available from the pending-review banner until ${deadline}.`,
+      "Review deferred. The saved chart is unchanged, and this proposal is saved locally until you apply, reject, or replace it.",
     );
     window.requestAnimationFrame(() => {
       hydratedChartRef.current = proposal.current.id;
       void fitView({ duration: 320, padding: 0.14 });
     });
-  }, [aiProposalBusy, fitView, mcpActivity.revision, pendingAiProposal, setEdges, setNodes]);
+  }, [
+    aiProposalBusy,
+    fitView,
+    mcpActivity.revision,
+    pendingAiProposal,
+    setEdges,
+    setNodes,
+    setNotice,
+  ]);
 
   const startOnboardingTour = useCallback(() => {
     setOnboardingStep(0);
   }, []);
 
-  const finishOnboardingTour = useCallback((noticeMessage: string) => {
-    try {
-      window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "complete");
-    } catch {
-      // The tour can still close when local preference storage is unavailable.
-    }
-    setOnboardingStep(null);
-    setNotice(noticeMessage);
-  }, []);
+  const finishOnboardingTour = useCallback(
+    (noticeMessage: string) => {
+      try {
+        window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "complete");
+      } catch {
+        // The tour can still close when local preference storage is unavailable.
+      }
+      setOnboardingStep(null);
+      setNotice(noticeMessage);
+    },
+    [setNotice],
+  );
 
-  const loadMcpReview = useCallback(async (activity: McpActivitySnapshot) => {
-    if (!activity.proposalId) return false;
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-    saveGenerationRef.current += 1;
-    hydratedChartRef.current = null;
-    try {
-      if (activity.operation === "stage_normalized_import") {
-        setAiImportBusy("load");
+  const loadMcpReview = useCallback(
+    async (activity: McpActivitySnapshot) => {
+      if (!activity.proposalId) return false;
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      saveGenerationRef.current += 1;
+      hydratedChartRef.current = null;
+      try {
+        if (activity.operation === "stage_normalized_import") {
+          setAiImportBusy("load");
+          const response = await fetch(
+            `/api/ai-import-proposals?proposalId=${encodeURIComponent(activity.proposalId)}`,
+            { cache: "no-store" },
+          );
+          const data = (await response.json()) as AiImportProposalResponse;
+          if (!response.ok || !data.proposal) {
+            throw new Error(
+              data.error ?? "The AI import proposal could not be loaded.",
+            );
+          }
+          setPendingAiImportProposal(data.proposal);
+          setAiImportError("");
+          setWorkspaceView("sources");
+          setNotice(
+            `Reviewing ${data.proposal.proposed.nodes.length} proposed units. No chart has been created.`,
+          );
+          return true;
+        }
+        setAiProposalBusy("load");
         const response = await fetch(
-          `/api/ai-import-proposals?proposalId=${encodeURIComponent(activity.proposalId)}`,
+          `/api/ai-proposals?proposalId=${encodeURIComponent(activity.proposalId)}`,
           { cache: "no-store" },
         );
-        const data = (await response.json()) as AiImportProposalResponse;
+        const data = (await response.json()) as AiProposalResponse & {
+          error?: string;
+        };
         if (!response.ok || !data.proposal) {
-          throw new Error(data.error ?? "The AI import proposal could not be loaded.");
+          throw new Error(data.error ?? "The AI proposal could not be loaded.");
         }
-        setPendingAiImportProposal(data.proposal);
-        setAiImportError("");
-        setWorkspaceView("sources");
-        setNotice(
-          `Reviewing ${data.proposal.proposed.nodes.length} proposed units. No chart has been created.`,
-        );
+        showAiProposal(data.proposal);
         return true;
+      } catch (error) {
+        setSaveState("error");
+        setNotice(
+          error instanceof Error
+            ? error.message
+            : "The AI-assisted review could not be loaded.",
+        );
+        return false;
+      } finally {
+        setAiProposalBusy(null);
+        setAiImportBusy(null);
       }
-      setAiProposalBusy("load");
-      const response = await fetch(
-        `/api/ai-proposals?proposalId=${encodeURIComponent(activity.proposalId)}`,
-        { cache: "no-store" },
-      );
-      const data = (await response.json()) as AiProposalResponse & { error?: string };
-      if (!response.ok || !data.proposal) {
-        throw new Error(data.error ?? "The AI proposal could not be loaded.");
-      }
-      showAiProposal(data.proposal);
-      return true;
-    } catch (error) {
-      setSaveState("error");
-      setNotice(
-        error instanceof Error ? error.message : "The AI-assisted review could not be loaded.",
-      );
-      return false;
-    } finally {
-      setAiProposalBusy(null);
-      setAiImportBusy(null);
-    }
-  }, [showAiProposal]);
+    },
+    [showAiProposal, setWorkspaceView, setNotice],
+  );
 
   const reviewMcpUpdate = useCallback(async () => {
     if (!mcpActivity.chartId && !mcpActivity.proposalId) return;
-    if (mcpActivity.completionKind === "review_ready" && mcpActivity.proposalId) {
+    if (
+      mcpActivity.completionKind === "review_ready" &&
+      mcpActivity.proposalId
+    ) {
       const loaded = await loadMcpReview(mcpActivity);
       if (loaded) setDismissedMcpRevision(mcpActivity.revision);
       return;
@@ -1616,14 +1937,17 @@ function StudioWorkspace() {
     hydratedChartRef.current = null;
     try {
       const response = await fetch("/api/charts", { cache: "no-store" });
-      if (!response.ok) throw new Error("The updated chart library could not be loaded.");
+      if (!response.ok)
+        throw new Error("The updated chart library could not be loaded.");
       const data = (await response.json()) as ChartLibraryResponse;
       const updatedChart = data.charts.find(
         (chart) => chart.id === mcpActivity.chartId,
       );
       setCharts(data.charts);
       if (!updatedChart) {
-        setNotice("The AI-updated chart is no longer available in the local library.");
+        setNotice(
+          "The AI-updated chart is no longer available in the local library.",
+        );
         setDismissedMcpRevision(mcpActivity.revision);
         return;
       }
@@ -1636,26 +1960,31 @@ function StudioWorkspace() {
     } catch (error) {
       setSaveState("error");
       setNotice(
-        error instanceof Error ? error.message : "The AI-assisted update could not be loaded.",
+        error instanceof Error
+          ? error.message
+          : "The AI-assisted update could not be loaded.",
       );
     } finally {
       setAiProposalBusy(null);
       setAiImportBusy(null);
     }
-  }, [loadMcpReview, mcpActivity, openChart]);
+  }, [loadMcpReview, mcpActivity, openChart, setNotice]);
 
   useEffect(() => {
+    // Activity revisions restart with the local service. Identify a completion by
+    // its operation and finish time so recovery cannot hide later MCP updates.
+    const completionKey = `${mcpActivity.activityId}:${mcpActivity.finishedAt}`;
     if (
       mcpActivity.phase !== "succeeded" ||
-      mcpActivity.revision <= handledMcpCompletionRevisionRef.current ||
-      mcpActivity.revision === mcpCompletionRefreshInFlightRef.current
+      completionKey === handledMcpCompletionRevisionRef.current ||
+      completionKey === mcpCompletionRefreshInFlightRef.current
     ) {
       return;
     }
 
     const activity = mcpActivity;
     const revision = activity.revision;
-    mcpCompletionRefreshInFlightRef.current = revision;
+    mcpCompletionRefreshInFlightRef.current = completionKey;
 
     const synchronizeCompletedActivity = async (attempt = 0): Promise<void> => {
       try {
@@ -1665,7 +1994,8 @@ function StudioWorkspace() {
           setDismissedMcpRevision(revision);
         } else {
           const response = await fetch("/api/charts", { cache: "no-store" });
-          if (!response.ok) throw new Error("The updated chart library could not be loaded.");
+          if (!response.ok)
+            throw new Error("The updated chart library could not be loaded.");
           const data = (await response.json()) as ChartLibraryResponse;
           const updatedChart = activity.chartId
             ? data.charts.find((chart) => chart.id === activity.chartId)
@@ -1688,7 +2018,7 @@ function StudioWorkspace() {
             setSelectedId((current) =>
               updatedChart.nodes.some((node) => node.id === current)
                 ? current
-                : updatedChart.nodes[0]?.id ?? "",
+                : (updatedChart.nodes[0]?.id ?? ""),
             );
             setSelectedEdgeId("");
             window.requestAnimationFrame(() => {
@@ -1699,14 +2029,17 @@ function StudioWorkspace() {
             `${activity.label ?? "AI-assisted update"} completed. The chart library refreshed automatically${updatedChart ? ` and now includes ${updatedChart.name}` : ""}.`,
           );
         }
-        handledMcpCompletionRevisionRef.current = revision;
-        mcpCompletionRefreshInFlightRef.current = 0;
+        handledMcpCompletionRevisionRef.current = completionKey;
+        mcpCompletionRefreshInFlightRef.current = "";
       } catch {
         if (attempt < 2) {
-          window.setTimeout(() => void synchronizeCompletedActivity(attempt + 1), 400);
+          window.setTimeout(
+            () => void synchronizeCompletedActivity(attempt + 1),
+            400,
+          );
           return;
         }
-        mcpCompletionRefreshInFlightRef.current = 0;
+        mcpCompletionRefreshInFlightRef.current = "";
       }
     };
 
@@ -1728,7 +2061,8 @@ function StudioWorkspace() {
       `/api/ai-proposals?chartId=${encodeURIComponent(chartId)}`,
       { cache: "no-store" },
     );
-    if (!response.ok) throw new Error("AI-assisted activity could not be loaded.");
+    if (!response.ok)
+      throw new Error("AI-assisted activity could not be loaded.");
     const data = (await response.json()) as AiActivityHistoryResponse;
     setAiActivities(data.activities);
   }, []);
@@ -1740,7 +2074,10 @@ function StudioWorkspace() {
       setAiProposalBusy(action);
       setAiProposalError("");
       const controller = new AbortController();
-      const requestTimeout = window.setTimeout(() => controller.abort(), 15_000);
+      const requestTimeout = window.setTimeout(
+        () => controller.abort(),
+        15_000,
+      );
       try {
         const response = await fetch("/api/ai-proposals", {
           method: "POST",
@@ -1756,9 +2093,12 @@ function StudioWorkspace() {
         };
         if (!response.ok) {
           if (response.status === 404 || response.status === 409) {
-            const libraryResponse = await fetch("/api/charts", { cache: "no-store" });
+            const libraryResponse = await fetch("/api/charts", {
+              cache: "no-store",
+            });
             if (libraryResponse.ok) {
-              const library = (await libraryResponse.json()) as ChartLibraryResponse;
+              const library =
+                (await libraryResponse.json()) as ChartLibraryResponse;
               const currentChart = library.charts.find(
                 (chart) => chart.id === proposal.chartId,
               );
@@ -1779,16 +2119,24 @@ function StudioWorkspace() {
               }
             }
           }
-          throw new Error(data.error ?? "The AI proposal could not be resolved.");
+          throw new Error(
+            data.error ?? "The AI proposal could not be resolved.",
+          );
         }
-        const resolvedChart = action === "accept" ? data.chart : proposal.current;
-        if (!resolvedChart) throw new Error("The applied chart was not returned by local storage.");
+        const resolvedChart =
+          action === "accept" ? data.chart : proposal.current;
+        if (!resolvedChart)
+          throw new Error(
+            "The applied chart was not returned by local storage.",
+          );
         setPendingAiProposal(null);
         setPendingAiProposalSummaries((current) =>
           current.filter((item) => item.id !== proposal.id),
         );
         setCharts((current) =>
-          current.map((chart) => (chart.id === resolvedChart.id ? resolvedChart : chart)),
+          current.map((chart) =>
+            chart.id === resolvedChart.id ? resolvedChart : chart,
+          ),
         );
         setNodes(resolvedChart.nodes);
         setEdges(resolvedChart.edges);
@@ -1828,6 +2176,7 @@ function StudioWorkspace() {
       pendingAiProposal,
       setEdges,
       setNodes,
+      setNotice,
     ],
   );
 
@@ -1838,7 +2187,10 @@ function StudioWorkspace() {
       setAiImportBusy(action);
       setAiImportError("");
       const controller = new AbortController();
-      const requestTimeout = window.setTimeout(() => controller.abort(), 15_000);
+      const requestTimeout = window.setTimeout(
+        () => controller.abort(),
+        15_000,
+      );
       try {
         const response = await fetch("/api/ai-import-proposals", {
           method: "POST",
@@ -1848,16 +2200,23 @@ function StudioWorkspace() {
         });
         const data = (await response.json()) as AiImportProposalResponse;
         if (!response.ok) {
-          throw new Error(data.error ?? "The AI import proposal could not be resolved.");
+          throw new Error(
+            data.error ?? "The AI import proposal could not be resolved.",
+          );
         }
         setPendingAiImportProposal(null);
         void dismissMcpActivity();
         if (action === "reject") {
-          setNotice(`Rejected the proposed import for ${proposal.chartName}. No chart was created.`);
+          setNotice(
+            `Rejected the proposed import for ${proposal.chartName}. No chart was created.`,
+          );
           return;
         }
-        if (!data.chart) throw new Error("The new chart was not returned by local storage.");
-        const libraryResponse = await fetch("/api/charts", { cache: "no-store" });
+        if (!data.chart)
+          throw new Error("The new chart was not returned by local storage.");
+        const libraryResponse = await fetch("/api/charts", {
+          cache: "no-store",
+        });
         const library = libraryResponse.ok
           ? ((await libraryResponse.json()) as ChartLibraryResponse)
           : { charts: [...chartsRef.current, data.chart] };
@@ -1881,7 +2240,14 @@ function StudioWorkspace() {
         setAiImportBusy(null);
       }
     },
-    [aiImportBusy, dismissMcpActivity, loadImportIntakes, openChart, pendingAiImportProposal],
+    [
+      aiImportBusy,
+      dismissMcpActivity,
+      loadImportIntakes,
+      openChart,
+      pendingAiImportProposal,
+      setNotice,
+    ],
   );
 
   useEffect(() => {
@@ -1901,7 +2267,9 @@ function StudioWorkspace() {
       } catch {
         if (!cancelled) {
           setSaveState("error");
-          setNotice("Persistent chart storage is unavailable; no chart data was loaded.");
+          setNotice(
+            "Persistent chart storage is unavailable; no chart data was loaded.",
+          );
         }
       } finally {
         if (!cancelled) setLibraryLoading(false);
@@ -1916,7 +2284,9 @@ function StudioWorkspace() {
   }, []);
 
   useEffect(() => {
-    const chartSnapshot = chartsRef.current.find((chart) => chart.id === activeChartId);
+    const chartSnapshot = chartsRef.current.find(
+      (chart) => chart.id === activeChartId,
+    );
     if (!chartSnapshot || hydratedChartRef.current !== chartSnapshot.id) return;
     if (chartSnapshot.status === "archived") {
       setSaveState("saved");
@@ -1949,7 +2319,8 @@ function StudioWorkspace() {
       let saveSucceeded = false;
       const chartToSave: ChartDocument = {
         ...chartSnapshot,
-        status: chartSnapshot.status === "current" ? "draft" : chartSnapshot.status,
+        status:
+          chartSnapshot.status === "current" ? "draft" : chartSnapshot.status,
         nodes,
         edges,
       };
@@ -1958,7 +2329,7 @@ function StudioWorkspace() {
           fetch("/api/charts", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ action: "save", chart }),
+            body: JSON.stringify({ action: "save", chart, label: editLabelRef.current }),
           });
         const response = await sendSave(chartToSave);
         const data = (await response.json()) as {
@@ -1978,7 +2349,8 @@ function StudioWorkspace() {
           );
           return;
         }
-        if (!response.ok || !data.chart) throw new Error(data.error ?? "Save failed.");
+        if (!response.ok || !data.chart)
+          throw new Error(data.error ?? "Save failed.");
         const nextCharts = chartsRef.current.map((chart) =>
           chart.id === data.chart!.id ? data.chart! : chart,
         );
@@ -1993,7 +2365,7 @@ function StudioWorkspace() {
         }
         if (data.returnedToDraft) {
           setNotice(
-            `Editing began from Current v${chartSnapshot.version}. That approved checkpoint is preserved, and the working chart is now a Draft.`,
+            `Editing began from Current v${chartSnapshot.version}. That Current checkpoint is preserved, and the working chart is now a Draft.`,
           );
         }
       } catch {
@@ -2002,7 +2374,8 @@ function StudioWorkspace() {
         saveInFlightRef.current = false;
         if (
           saveSucceeded &&
-          (saveQueuedRef.current || saveGeneration !== saveGenerationRef.current)
+          (saveQueuedRef.current ||
+            saveGeneration !== saveGenerationRef.current)
         ) {
           saveQueuedRef.current = false;
           setSaveRetryRevision((revision) => revision + 1);
@@ -2036,16 +2409,15 @@ function StudioWorkspace() {
     });
   }, []);
 
-  const pushUndoSnapshot = useCallback((snapshot: EditorSnapshot) => {
-    setUndoStack((current) => [...current.slice(-39), snapshot]);
-    setRedoStack([]);
+  const labelCompletedGesture = useCallback((snapshot: EditorSnapshot) => {
+    editLabelRef.current = snapshot.label;
   }, []);
 
-  const recordCurrentState = useCallback(
+  const labelNextEdit = useCallback(
     (label: string) => {
-      pushUndoSnapshot(editorSnapshot(nodes, edges, selectedId, label));
+      editLabelRef.current = label;
     },
-    [edges, nodes, pushUndoSnapshot, selectedId],
+    [],
   );
 
   const compactPresentation = useMemo(
@@ -2063,11 +2435,15 @@ function StudioWorkspace() {
     [compactLayoutOrientation, compactPresentation, edges, nodes],
   );
   const compactPositionById = useMemo(
-    () => new Map(compactLayoutNodes.map((flowNode) => [flowNode.id, flowNode.position])),
+    () =>
+      new Map(
+        compactLayoutNodes.map((flowNode) => [flowNode.id, flowNode.position]),
+      ),
     [compactLayoutNodes],
   );
   const presentationHiddenIds = useMemo(() => {
-    const hidden = presentationMode === "compact" ? new Set<string>() : new Set(hiddenIds);
+    const hidden =
+      presentationMode === "compact" ? new Set<string>() : new Set(hiddenIds);
     if (presentationMode === "compact") {
       compactPresentation.listedNodeIds.forEach((id) => hidden.add(id));
     }
@@ -2077,18 +2453,29 @@ function StudioWorkspace() {
     () =>
       nodes.map((flowNode) => {
         if (presentationMode === "individual") {
+          const width = Number(flowNode.style?.width) || NODE_WIDTH;
+          const height = Number(flowNode.style?.height) || NODE_HEIGHT;
           return {
             ...flowNode,
-            width: NODE_WIDTH,
-            height: NODE_HEIGHT,
-            measured: { width: NODE_WIDTH, height: NODE_HEIGHT },
-            style: { ...flowNode.style, width: NODE_WIDTH, height: NODE_HEIGHT },
+            width,
+            height,
+            measured: { width, height },
+            style: {
+              ...flowNode.style,
+              width,
+              height,
+            },
           };
         }
         const level = compactPresentation.levels.get(flowNode.id) ?? 1;
-        const entries = compactPresentation.entriesByParent.get(flowNode.id) ?? [];
+        const entries =
+          compactPresentation.entriesByParent.get(flowNode.id) ?? [];
         const sidecar = compactPresentation.sidecarNodeIds.has(flowNode.id);
-        const dimensions = compactNodeDimensions(level, entries.length, sidecar);
+        const dimensions = compactNodeDimensions(
+          level,
+          entries.length,
+          sidecar,
+        );
         return {
           ...flowNode,
           width: dimensions.width,
@@ -2120,14 +2507,25 @@ function StudioWorkspace() {
             !presentationHiddenIds.has(edge.target),
         )
         .map((edge) =>
-          presentationMode === "compact" && edge.data?.manualRoute
-            ? { ...edge, data: { ...edge.data, manualRoute: undefined } }
+          presentationMode === "compact" &&
+          (edge.data?.manualRoute || edge.data?.sourceRoute)
+            ? {
+                ...edge,
+                data: {
+                  ...edge.data,
+                  manualRoute: undefined,
+                  sourceRoute: undefined,
+                },
+              }
             : edge,
         ),
     [edges, presentationHiddenIds, presentationMode],
   );
   const visiblePresentationNodes = useMemo(
-    () => presentationNodes.filter((flowNode) => !presentationHiddenIds.has(flowNode.id)),
+    () =>
+      presentationNodes.filter(
+        (flowNode) => !presentationHiddenIds.has(flowNode.id),
+      ),
     [presentationHiddenIds, presentationNodes],
   );
   const routingNodes = useDeferredValue(visiblePresentationNodes);
@@ -2235,12 +2633,12 @@ function StudioWorkspace() {
       if (!drag || drag.edgeId !== edgeId) return;
       routeCornerDragRef.current = null;
       if (!drag.moved) return;
-      pushUndoSnapshot(drag.snapshot);
+      labelCompletedGesture(drag.snapshot);
       setNotice(
         "Connector lane pinned. Its saved route remains horizontal and vertical and will be used by exports.",
       );
     },
-    [pushUndoSnapshot],
+    [labelCompletedGesture, setNotice],
   );
 
   const sourcePortCounts = useMemo(() => {
@@ -2253,7 +2651,9 @@ function StudioWorkspace() {
 
   const targetPortOffsets = useMemo(() => {
     const offsets = new Map<string, number>();
-    const nodeById = new Map(routingNodes.map((flowNode) => [flowNode.id, flowNode]));
+    const nodeById = new Map(
+      routingNodes.map((flowNode) => [flowNode.id, flowNode]),
+    );
     edgeRoutes.forEach((route) => {
       const targetNode = nodeById.get(route.targetId);
       const endpoint = route.points.at(-1);
@@ -2271,7 +2671,8 @@ function StudioWorkspace() {
   }, [edgeRoutes, routingNodes]);
 
   const aiPreviewMarks = useMemo(() => {
-    if (!pendingAiProposal || pendingAiProposal.chartId !== activeChartId) return null;
+    if (!pendingAiProposal || pendingAiProposal.chartId !== activeChartId)
+      return null;
     return {
       addedNodes: new Set(pendingAiProposal.summary.addedNodeIds),
       changedNodes: new Set(pendingAiProposal.summary.changedNodeIds),
@@ -2280,12 +2681,17 @@ function StudioWorkspace() {
     };
   }, [activeChartId, pendingAiProposal]);
 
-  const selectCompactEntry = useCallback((id: string) => {
-    dismissedSelectionIdsRef.current.clear();
-    setSelectedId(id);
-    setSelectedEdgeId("");
-    setNotice("Listed assignment selected. Its complete record remains available in the detail panel.");
-  }, []);
+  const selectCompactEntry = useCallback(
+    (id: string) => {
+      dismissedSelectionIdsRef.current.clear();
+      setSelectedId(id);
+      setSelectedEdgeId("");
+      setNotice(
+        "Listed assignment selected. Its complete record remains available in the detail panel.",
+      );
+    },
+    [setNotice],
+  );
 
   const displayNodes = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -2302,19 +2708,21 @@ function StudioWorkspace() {
     return presentationNodes.map((flowNode) => {
       const compactEntries =
         presentationMode === "compact"
-          ? (compactPresentation.entriesByParent.get(flowNode.id) ?? []).map((entry) => {
-              const entryNode = nodeById.get(entry.id);
-              return {
-                ...entry,
-                selected: entry.id === selectedId,
-                isSearchMatch: entryNode ? matchesQuery(entryNode) : false,
-                aiChange: aiPreviewMarks?.addedNodes.has(entry.id)
-                  ? ("added" as const)
-                  : aiPreviewMarks?.changedNodes.has(entry.id)
-                    ? ("changed" as const)
-                    : undefined,
-              };
-            })
+          ? (compactPresentation.entriesByParent.get(flowNode.id) ?? []).map(
+              (entry) => {
+                const entryNode = nodeById.get(entry.id);
+                return {
+                  ...entry,
+                  selected: entry.id === selectedId,
+                  isSearchMatch: entryNode ? matchesQuery(entryNode) : false,
+                  aiChange: aiPreviewMarks?.addedNodes.has(entry.id)
+                    ? ("added" as const)
+                    : aiPreviewMarks?.changedNodes.has(entry.id)
+                      ? ("changed" as const)
+                      : undefined,
+                };
+              },
+            )
           : [];
       const level = compactPresentation.levels.get(flowNode.id) ?? 1;
       const targetSide: "top" | "left" =
@@ -2328,8 +2736,10 @@ function StudioWorkspace() {
         hidden: presentationHiddenIds.has(flowNode.id),
         data: {
           ...flowNode.data,
-          collapsed: presentationMode === "individual" && collapsedIds.has(flowNode.id),
-          childCount: edges.filter((edge) => edge.source === flowNode.id).length,
+          collapsed:
+            presentationMode === "individual" && collapsedIds.has(flowNode.id),
+          childCount: edges.filter((edge) => edge.source === flowNode.id)
+            .length,
           sourcePortCount: sourcePortCounts.get(flowNode.id) ?? 0,
           targetPortOffset: targetPortOffsets.get(flowNode.id) ?? 0,
           targetSide,
@@ -2337,6 +2747,8 @@ function StudioWorkspace() {
           presentationMode,
           compactEntries,
           compactSidecar: compactPresentation.sidecarNodeIds.has(flowNode.id),
+          appearance: chartAppearance,
+          sourceCanvasWidth: canvasChart?.sourceLayout?.width,
           visualWidth: Number(flowNode.style?.width) || NODE_WIDTH,
           visualHeight: Number(flowNode.style?.height) || NODE_HEIGHT,
           aiChange: aiPreviewMarks?.addedNodes.has(flowNode.id)
@@ -2344,13 +2756,19 @@ function StudioWorkspace() {
             : aiPreviewMarks?.changedNodes.has(flowNode.id)
               ? "changed"
               : (undefined as "added" | "changed" | undefined),
-          isSearchMatch: matchesQuery(flowNode) || compactEntries.some((entry) => entry.isSearchMatch),
-          onToggleCollapse: presentationMode === "individual" ? toggleCollapse : undefined,
+          isSearchMatch:
+            matchesQuery(flowNode) ||
+            compactEntries.some((entry) => entry.isSearchMatch),
+          onToggleCollapse:
+            presentationMode === "individual" ? toggleCollapse : undefined,
+          // React Flow stores this callback; only a roster click invokes it.
+          // eslint-disable-next-line react-hooks/refs
           onSelectCompactEntry: selectCompactEntry,
         },
       };
     });
   }, [
+    chartAppearance, canvasChart?.sourceLayout?.width,
     aiPreviewMarks,
     collapsedIds,
     compactPresentation.entriesByParent,
@@ -2370,17 +2788,18 @@ function StudioWorkspace() {
     toggleCollapse,
   ]);
 
-  const displayEdges = useMemo(
-    () => {
-      return presentationEdges.flatMap((edge) => {
-        const route = edgeRoutes.get(edge.id);
-        if (!route) return [];
-        return [{
+  const displayEdges = useMemo(() => {
+    return presentationEdges.flatMap((edge) => {
+      const route = edgeRoutes.get(edge.id);
+      if (!route) return [];
+      return [
+        {
           ...edge,
           type: "orgRelationship",
           selectable: presentationMode === "individual",
           focusable: presentationMode === "individual",
-          selected: presentationMode === "individual" && edge.id === selectedEdgeId,
+          selected:
+            presentationMode === "individual" && edge.id === selectedEdgeId,
           sourceHandle: "org-source",
           targetHandle: route.targetHandleId,
           data: {
@@ -2391,53 +2810,70 @@ function StudioWorkspace() {
                 ? "changed"
                 : undefined,
             route,
+            appearance:chartAppearance,
             onCornerDragStart: startRouteCornerDrag,
             onCornerDrag: dragRouteCorner,
             onCornerDragEnd: finishRouteCornerDrag,
           },
           hidden: false,
-        }];
-      });
-    },
-    [
-      dragRouteCorner,
-      aiPreviewMarks,
-      edgeRoutes,
-      presentationEdges,
-      presentationMode,
-      finishRouteCornerDrag,
-      selectedEdgeId,
-      startRouteCornerDrag,
-    ],
-  );
+        },
+      ];
+    });
+  }, [
+    chartAppearance,
+    dragRouteCorner,
+    aiPreviewMarks,
+    edgeRoutes,
+    presentationEdges,
+    presentationMode,
+    finishRouteCornerDrag,
+    selectedEdgeId,
+    startRouteCornerDrag,
+  ]);
 
   const selectedNode = nodes.find((flowNode) => flowNode.id === selectedId);
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
-  const selectedEdgeRoute = selectedEdgeId ? edgeRoutes.get(selectedEdgeId) : undefined;
-  const selectedEdgeSource = nodes.find((node) => node.id === selectedEdge?.source);
-  const selectedEdgeTarget = nodes.find((node) => node.id === selectedEdge?.target);
+  const selectedEdgeRoute = selectedEdgeId
+    ? edgeRoutes.get(selectedEdgeId)
+    : undefined;
+  const selectedEdgeSource = nodes.find(
+    (node) => node.id === selectedEdge?.source,
+  );
+  const selectedEdgeTarget = nodes.find(
+    (node) => node.id === selectedEdge?.target,
+  );
 
   const pinSelectedConnector = useCallback(() => {
     if (!selectedEdge || !selectedEdgeRoute || selectedEdgeRoute.manual) return;
     const manualRoute = manualEdgeRouteFromRoute(selectedEdgeRoute);
     if (!manualRoute) {
-      setNotice("This connector is already a straight orthogonal line with no lane corners to pin.");
+      setNotice(
+        "This connector is already a straight orthogonal line with no lane corners to pin.",
+      );
       return;
     }
-    recordCurrentState("pinning a connector route");
+    labelNextEdit("pinning a connector route");
     setEdges((current) =>
       current.map((edge) =>
-        edge.id === selectedEdge.id ? edgeWithManualRoute(edge, manualRoute) : edge,
+        edge.id === selectedEdge.id
+          ? edgeWithManualRoute(edge, manualRoute)
+          : edge,
       ),
     );
     setNotice(
       "Current connector corners pinned. Drag a pin to move that horizontal or vertical lane.",
     );
-  }, [recordCurrentState, selectedEdge, selectedEdgeRoute, setEdges]);
+  }, [
+    labelNextEdit,
+    selectedEdge,
+    selectedEdgeRoute,
+    setEdges,
+    setNotice,
+  ]);
 
   const resetSelectedConnector = useCallback(() => {
     if (!selectedEdge || !manualEdgeRouteForEdge(selectedEdge)) return;
-    recordCurrentState("resetting a connector route");
+    labelNextEdit("resetting a connector route");
     setEdges((current) =>
       current.map((edge) =>
         edge.id === selectedEdge.id ? edgeWithManualRoute(edge) : edge,
@@ -2446,19 +2882,27 @@ function StudioWorkspace() {
     setNotice(
       "Connector pins cleared. Automatic non-overlapping routing is controlling this relationship again.",
     );
-  }, [recordCurrentState, selectedEdge, setEdges]);
-  const selectedCardCount = nodes.filter((flowNode) => flowNode.selected).length;
-  const selectedParentEdge = edges.find((edge) => edge.target === selectedNode?.id);
+  }, [labelNextEdit, selectedEdge, setEdges, setNotice]);
+  const selectedCardCount = nodes.filter(
+    (flowNode) => flowNode.selected,
+  ).length;
+  const selectedParentEdge = edges.find(
+    (edge) => edge.target === selectedNode?.id,
+  );
   const findings = useMemo(
     () => (activeChart ? validateHierarchy(nodes, edges) : []),
     [activeChart, edges, nodes],
   );
-  const blockingFindings = findings.filter((finding) => finding.severity === "blocking");
+  const blockingFindings = findings.filter(
+    (finding) => finding.severity === "blocking",
+  );
   const publicUnitCount = nodes.filter(
     (flowNode) => flowNode.data.unit.publicationVisibility === "public",
   ).length;
   const effectiveExportAudience: ExportAudience =
-    exportAudience === "public" && publicUnitCount === 0 ? "internal" : exportAudience;
+    exportAudience === "public" && publicUnitCount === 0
+      ? "internal"
+      : exportAudience;
   const exportFit = useMemo(() => {
     if (!activeChart || !nodes.length) return null;
     try {
@@ -2469,6 +2913,7 @@ function StudioWorkspace() {
         connectorRoutingMode,
         presentationMode,
         compactLayoutOrientation,
+        chartAppearance,
       );
       return {
         scene,
@@ -2479,10 +2924,14 @@ function StudioWorkspace() {
       return {
         scene: null,
         viewport: null,
-        error: error instanceof Error ? error.message : "This export profile is not valid.",
+        error:
+          error instanceof Error
+            ? error.message
+            : "This export profile is not valid.",
       };
     }
   }, [
+    chartAppearance,
     activeChart,
     compactLayoutOrientation,
     connectorRoutingMode,
@@ -2492,16 +2941,18 @@ function StudioWorkspace() {
     nodes,
     presentationMode,
   ]);
-  const exportCardWidth = exportFit?.scene && exportFit.viewport
-    ? exportFit.scene.nodes[0].width * exportFit.viewport.scale
-    : 0;
+  const exportCardWidth =
+    exportFit?.scene && exportFit.viewport
+      ? exportFit.scene.nodes[0].width * exportFit.viewport.scale
+      : 0;
   const exportProfileError = exportFit?.error ?? "";
   const selectedDescendantIds = selectedNode
     ? descendantIds(selectedNode.id, edges)
     : new Set<string>();
   const eligibleParents = nodes.filter(
     (flowNode) =>
-      flowNode.id !== selectedNode?.id && !selectedDescendantIds.has(flowNode.id),
+      flowNode.id !== selectedNode?.id &&
+      !selectedDescendantIds.has(flowNode.id),
   );
 
   const positionDraggedBranch = useCallback(
@@ -2550,61 +3001,63 @@ function StudioWorkspace() {
         return;
       }
       const label = selectionArrangementLabels[arrangement];
-      recordCurrentState(label);
-      setNodes((currentNodes) => arrangeSelectedNodes(currentNodes, arrangement));
+      labelNextEdit(label);
+      setNodes((currentNodes) =>
+        arrangeSelectedNodes(currentNodes, arrangement),
+      );
       setNotice(
         `Applied ${label} to ${selectedCardCount} cards and pinned their positions. Only the selected cards moved; reporting lines did not change.`,
       );
     },
-    [recordCurrentState, selectedCardCount, setNodes],
+    [labelNextEdit, selectedCardCount, setNodes, setNotice],
   );
 
+  const applyHistoryChart = useCallback((chart: ChartDocument) => {
+    // Hydrate one committed document as a unit; do not autosave a stale canvas
+    // over an MCP recovery or over support-panel/history metadata.
+    chartsRef.current = chartsRef.current.map(c => c.id === chart.id ? chart : c);
+    setCharts(chartsRef.current);
+    // A background renderer can defer the animation frame that fits a newly
+    // opened chart. Selection, rather than that visual frame, owns recovery.
+    if (selectedChartIdRef.current !== chart.id) return;
+    if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
+    saveGenerationRef.current += 1;
+    hydratedChartRef.current = chart.id;
+    setNodes(chart.nodes); setEdges(chart.edges);
+    setSelectedId(""); setSelectedEdgeId("");
+    setSaveState("saved");
+    editLabelRef.current = "Saved chart changes";
+    setNotice("Recovered the saved chart. Source checks and prior Current checkpoints are preserved; active content is a Draft.");
+  }, [setNodes, setEdges, setNotice]);
+  const durableHistory = useEditHistory(activeChart, applyHistoryChart, setHistoryReplayBusy);
+  const historyUnavailable = Boolean(durableHistory.pendingAction) || saveState !== "saved" || (Boolean(activeChart) && (JSON.stringify(storageSafeNodes(nodes)) !== JSON.stringify(storageSafeNodes(activeChart!.nodes)) || JSON.stringify(edges) !== JSON.stringify(activeChart!.edges))) || Boolean(pendingAiProposal) || pendingAiProposalSummaries.some(p => p.chartId === activeChart?.id);
   const undoChange = useCallback(() => {
-    const previous = undoStack.at(-1);
-    if (!previous) return;
-    setRedoStack((current) => [
-      ...current.slice(-39),
-      editorSnapshot(nodes, edges, selectedId, previous.label),
-    ]);
-    setUndoStack((current) => current.slice(0, -1));
-    setNodes(cloneEditorNodes(previous.nodes));
-    setEdges(cloneEditorEdges(previous.edges));
-    setSelectedId(previous.selectedId);
-    setNotice(`Undid ${previous.label}.`);
-  }, [edges, nodes, selectedId, setEdges, setNodes, undoStack]);
-
+    if (historyUnavailable) { setNotice("Wait for Saved and resolve the pending proposal before undoing saved edits."); return; }
+    void durableHistory.run("undo");
+  }, [durableHistory, historyUnavailable, setNotice]);
   const redoChange = useCallback(() => {
-    const next = redoStack.at(-1);
-    if (!next) return;
-    setUndoStack((current) => [
-      ...current.slice(-39),
-      editorSnapshot(nodes, edges, selectedId, next.label),
-    ]);
-    setRedoStack((current) => current.slice(0, -1));
-    setNodes(cloneEditorNodes(next.nodes));
-    setEdges(cloneEditorEdges(next.edges));
-    setSelectedId(next.selectedId);
-    setNotice(`Redid ${next.label}.`);
-  }, [edges, nodes, redoStack, selectedId, setEdges, setNodes]);
+    if (historyUnavailable) { setNotice("Wait for Saved and resolve the pending proposal before redoing saved edits."); return; }
+    void durableHistory.run("redo");
+  }, [durableHistory, historyUnavailable, setNotice]);
 
   useEffect(() => {
     const handleHistoryShortcut = (event: KeyboardEvent) => {
-      if (activeChartReadOnly) return;
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z") return;
+      if (!(event.metaKey || event.ctrlKey) || !["z", "y"].includes(event.key.toLowerCase()) || event.repeat) return;
       if (
         event.target instanceof HTMLInputElement ||
         event.target instanceof HTMLSelectElement ||
-        event.target instanceof HTMLTextAreaElement
+        event.target instanceof HTMLTextAreaElement ||
+        (event.target instanceof HTMLElement && event.target.isContentEditable)
       ) {
         return;
       }
       event.preventDefault();
-      if (event.shiftKey) redoChange();
+      if (event.shiftKey || event.key.toLowerCase() === "y") redoChange();
       else undoChange();
     };
     window.addEventListener("keydown", handleHistoryShortcut);
     return () => window.removeEventListener("keydown", handleHistoryShortcut);
-  }, [activeChartReadOnly, redoChange, undoChange]);
+  }, [redoChange, undoChange]);
 
   useEffect(() => {
     if (!editorDialog) return;
@@ -2623,15 +3076,15 @@ function StudioWorkspace() {
           `/api/charts?resource=versions&chartId=${encodeURIComponent(chartId)}`,
           { cache: "no-store" },
         ),
-        fetch(
-          `/api/ai-proposals?chartId=${encodeURIComponent(chartId)}`,
-          { cache: "no-store" },
-        ),
+        fetch(`/api/ai-proposals?chartId=${encodeURIComponent(chartId)}`, {
+          cache: "no-store",
+        }),
       ]);
       if (!response.ok) throw new Error("Version history could not be loaded.");
       const data = (await response.json()) as ChartVersionsResponse;
       if (activityResponse.ok) {
-        const activityData = (await activityResponse.json()) as AiActivityHistoryResponse;
+        const activityData =
+          (await activityResponse.json()) as AiActivityHistoryResponse;
         setAiActivities(activityData.activities);
       }
       setVersions(data.versions);
@@ -2641,7 +3094,9 @@ function StudioWorkspace() {
           : (data.versions[1]?.id ?? data.versions[0]?.id ?? ""),
       );
     } catch {
-      setNotice("Version history could not be loaded. The working draft was not changed.");
+      setNotice(
+        "Version history could not be loaded. The working draft was not changed.",
+      );
     } finally {
       setHistoryBusy(null);
     }
@@ -2655,12 +3110,16 @@ function StudioWorkspace() {
   const saveVersionSnapshot = async () => {
     if (!activeChart || historyBusy) return;
     if (blockingFindings.length) {
-      setNotice("Resolve blocking structural findings before saving a version.");
+      setNotice(
+        "Resolve blocking structural findings before saving a version.",
+      );
       return;
     }
     const label = versionSummary.trim();
     if (label.length < 3) {
-      setNotice("Describe the reason for this saved version in at least three characters.");
+      setNotice(
+        "Describe the reason for this saved version in at least three characters.",
+      );
       return;
     }
 
@@ -2689,7 +3148,9 @@ function StudioWorkspace() {
         throw new Error(data.error ?? "The version could not be saved.");
       }
       setCharts((current) =>
-        current.map((chart) => (chart.id === data.chart!.id ? data.chart! : chart)),
+        current.map((chart) =>
+          chart.id === data.chart!.id ? data.chart! : chart,
+        ),
       );
       if (data.version) {
         setVersions((current) => [data.version!, ...current]);
@@ -2700,7 +3161,11 @@ function StudioWorkspace() {
       setSaveState("saved");
       setNotice(`Version ${data.chart.version} was saved: ${label}.`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The version could not be saved.");
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "The version could not be saved.",
+      );
     } finally {
       setHistoryBusy(null);
     }
@@ -2738,17 +3203,26 @@ function StudioWorkspace() {
         error?: string;
       };
       if (!response.ok || !data.chart) {
-        throw new Error(data.error ?? "The saved version could not be restored.");
+        throw new Error(
+          data.error ?? "The saved version could not be restored.",
+        );
       }
 
-      pushUndoSnapshot(
-        editorSnapshot(nodes, edges, selectedId, `restoring version ${versionItem.version}`),
+      labelCompletedGesture(
+        editorSnapshot(
+          nodes,
+          edges,
+          selectedId,
+          `restoring version ${versionItem.version}`,
+        ),
       );
       setNodes(data.chart.nodes);
       setEdges(data.chart.edges);
       setSelectedId(data.chart.nodes[0]?.id ?? "");
       setCharts((current) =>
-        current.map((chart) => (chart.id === data.chart!.id ? data.chart! : chart)),
+        current.map((chart) =>
+          chart.id === data.chart!.id ? data.chart! : chart,
+        ),
       );
       if (data.version) {
         setVersions((current) => [data.version!, ...current]);
@@ -2762,7 +3236,11 @@ function StudioWorkspace() {
         void fitView({ duration: 420, padding: 0.14 });
       });
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The version could not be restored.");
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "The version could not be restored.",
+      );
     } finally {
       setHistoryBusy(null);
     }
@@ -2773,11 +3251,15 @@ function StudioWorkspace() {
   );
   const versionComparison = useMemo(() => {
     if (!compareVersion) return null;
-    const currentById = new Map(nodes.map((flowNode) => [flowNode.id, flowNode]));
+    const currentById = new Map(
+      nodes.map((flowNode) => [flowNode.id, flowNode]),
+    );
     const savedById = new Map(
       compareVersion.nodes.map((flowNode) => [flowNode.id, flowNode]),
     );
-    const currentParents = new Map(edges.map((edge) => [edge.target, edge.source]));
+    const currentParents = new Map(
+      edges.map((edge) => [edge.target, edge.source]),
+    );
     const savedParents = new Map(
       compareVersion.edges.map((edge) => [edge.target, edge.source]),
     );
@@ -2789,29 +3271,44 @@ function StudioWorkspace() {
       const saved = savedById.get(flowNode.id);
       return (
         saved &&
-        (JSON.stringify(saved.data.unit) !== JSON.stringify(flowNode.data.unit) ||
+        (JSON.stringify(saved.data.unit) !==
+          JSON.stringify(flowNode.data.unit) ||
           savedParents.get(flowNode.id) !== currentParents.get(flowNode.id) ||
           saved.data.pinned !== flowNode.data.pinned ||
+          JSON.stringify(saved.style)!==JSON.stringify(flowNode.style) ||
           saved.position.x !== flowNode.position.x ||
           saved.position.y !== flowNode.position.y)
       );
     });
-    return { added, removed, changed };
-  }, [compareVersion, edges, nodes]);
+    const supportChanged=JSON.stringify(compareVersion.supportPanels??[])!==JSON.stringify(activeChart?.supportPanels??[]);
+    const layoutChanged=JSON.stringify(compareVersion.sourceLayout??null)!==JSON.stringify(activeChart?.sourceLayout??null)||JSON.stringify(compareVersion.edges.map(e=>e.data?.sourceRoute))!==JSON.stringify(edges.map(e=>e.data?.sourceRoute));
+    return { added, removed, changed, supportChanged,layoutChanged };
+  }, [compareVersion, edges, nodes,activeChart]);
 
   const focusNode = useCallback(
     (id: string) => {
       setSelectedId(id);
       setWorkspaceView("canvas");
       const visibleId =
-        presentationMode === "compact" && compactPresentation.listedNodeIds.has(id)
+        presentationMode === "compact" &&
+        compactPresentation.listedNodeIds.has(id)
           ? (compactPresentation.parentById.get(id) ?? id)
           : id;
       window.requestAnimationFrame(() => {
-        void fitView({ nodes: [{ id: visibleId }], duration: 420, padding: 1.8 });
+        void fitView({
+          nodes: [{ id: visibleId }],
+          duration: 420,
+          padding: 1.8,
+        });
       });
     },
-    [compactPresentation.listedNodeIds, compactPresentation.parentById, fitView, presentationMode],
+    [
+      compactPresentation.listedNodeIds,
+      compactPresentation.parentById,
+      fitView,
+      presentationMode,
+      setWorkspaceView,
+    ],
   );
 
   const resolveCardSourceReview = (
@@ -2820,7 +3317,7 @@ function StudioWorkspace() {
   ) => {
     const reviewNode = nodes.find((flowNode) => flowNode.id === nodeId);
     if (!reviewNode) return;
-    recordCurrentState(
+    labelNextEdit(
       `${certainty === "confirmed" ? "confirming" : "retaining as inferred"} ${reviewNode.data.unit.shortName}`,
     );
     setNodes((currentNodes) =>
@@ -2852,7 +3349,7 @@ function StudioWorkspace() {
     const parent = nodes.find((flowNode) => flowNode.id === reviewEdge.source);
     const child = nodes.find((flowNode) => flowNode.id === reviewEdge.target);
     const relationshipLabel = `${parent?.data.unit.shortName ?? reviewEdge.source} → ${child?.data.unit.shortName ?? reviewEdge.target}`;
-    recordCurrentState(
+    labelNextEdit(
       `${certainty === "confirmed" ? "confirming" : "retaining as inferred"} ${relationshipLabel}`,
     );
     setEdges((currentEdges) =>
@@ -2897,12 +3394,14 @@ function StudioWorkspace() {
         : `${reviewNode.data.unit.shortName} and ${branchIds.size - 1} record${branchIds.size === 2 ? "" : "s"} below it`;
     if (
       !window.confirm(
-        `Reject and remove ${branchDescription}? This removes the record from the working draft. You can undo it while this chart remains open.`,
+        `Reject and remove ${branchDescription}? This removes the record from the working draft. Saved changes remain recoverable in History / Timeline.`,
       )
     ) {
       return;
     }
-    recordCurrentState(`rejecting imported record ${reviewNode.data.unit.shortName}`);
+    labelNextEdit(
+      `rejecting imported record ${reviewNode.data.unit.shortName}`,
+    );
     setNodes((currentNodes) =>
       currentNodes.filter((flowNode) => !branchIds.has(flowNode.id)),
     );
@@ -2912,7 +3411,9 @@ function StudioWorkspace() {
       ),
     );
     setSelectedId(parentEdge.source);
-    setNotice(`${branchDescription} removed from the working draft. Saving automatically…`);
+    setNotice(
+      `${branchDescription} removed from the working draft. Saving automatically…`,
+    );
   };
 
   const openNextChartForSourceReview = () => {
@@ -2921,35 +3422,15 @@ function StudioWorkspace() {
       (summary) => summary.chart.id === activeChartId,
     );
     const nextSummary =
-      chartsNeedingSourceReview[(currentIndex + 1) % chartsNeedingSourceReview.length];
+      chartsNeedingSourceReview[
+        (currentIndex + 1) % chartsNeedingSourceReview.length
+      ];
     if (nextSummary) openChart(nextSummary.chart, "review");
   };
 
   const handleSearch = (value: string) => {
     setSearchQuery(value);
-    const query = value.trim().toLowerCase();
-    if (query.length < 2) return;
-
-    const match = nodes.find((flowNode) =>
-      [
-        flowNode.data.unit.name,
-        flowNode.data.unit.shortName,
-        flowNode.data.unit.positionTitle,
-        flowNode.data.unit.assignmentLabel,
-      ].some((candidate) => candidate.toLowerCase().includes(query)),
-    );
-
-    if (match) {
-      setSelectedId(match.id);
-      setCollapsedIds(new Set());
-      const visibleId =
-        presentationMode === "compact" && compactPresentation.listedNodeIds.has(match.id)
-          ? (compactPresentation.parentById.get(match.id) ?? match.id)
-          : match.id;
-      window.requestAnimationFrame(() => {
-        void fitView({ nodes: [{ id: visibleId }], duration: 420, padding: 1.8 });
-      });
-    }
+    setSearchOpen(true);
   };
 
   const handleNodeClick: NodeMouseHandler<OrgFlowNode> = (_event, flowNode) => {
@@ -2960,8 +3441,12 @@ function StudioWorkspace() {
 
   const clearSelectedCard = useCallback(() => {
     dismissedSelectionIdsRef.current = new Set(
-      [selectedId, ...nodes.filter((flowNode) => flowNode.selected).map((flowNode) => flowNode.id)]
-        .filter(Boolean),
+      [
+        selectedId,
+        ...nodes
+          .filter((flowNode) => flowNode.selected)
+          .map((flowNode) => flowNode.id),
+      ].filter(Boolean),
     );
     setSelectedId("");
     setNodes((currentNodes) => {
@@ -2994,7 +3479,8 @@ function StudioWorkspace() {
       ) as PositionStatus,
       effectiveDate:
         String(formData.get("effectiveDate") ?? "").trim() || "Current",
-      source: String(formData.get("source") ?? "").trim() || "User-edited draft",
+      source:
+        String(formData.get("source") ?? "").trim() || "User-edited draft",
       sourceLocator: String(formData.get("sourceLocator") ?? "").trim(),
       sourceCertainty: String(
         formData.get("sourceCertainty") ?? "confirmed",
@@ -3012,7 +3498,11 @@ function StudioWorkspace() {
     };
     const parentDraftId = String(formData.get("parentId") ?? "");
 
-    if (!normalizedUnit.name || !normalizedUnit.shortName || !normalizedUnit.positionTitle) {
+    if (
+      !normalizedUnit.name ||
+      !normalizedUnit.shortName ||
+      !normalizedUnit.positionTitle
+    ) {
       setNotice("Name, display name, and position title are required.");
       return;
     }
@@ -3051,7 +3541,9 @@ function StudioWorkspace() {
     }
 
     const nextFindings = validateHierarchy(nextNodes, nextEdges);
-    const blocking = nextFindings.find((finding) => finding.severity === "blocking");
+    const blocking = nextFindings.find(
+      (finding) => finding.severity === "blocking",
+    );
     if (blocking) {
       setNotice(`Changes were not applied: ${blocking.message}`);
       return;
@@ -3060,13 +3552,14 @@ function StudioWorkspace() {
     const unitChanged =
       JSON.stringify(selectedNode.data.unit) !== JSON.stringify(normalizedUnit);
     const parentChanged =
-      Boolean(selectedParentEdge) && parentDraftId !== selectedParentEdge?.source;
+      Boolean(selectedParentEdge) &&
+      parentDraftId !== selectedParentEdge?.source;
     if (!unitChanged && !parentChanged) {
       setNotice("No organizational data changes were detected.");
       return;
     }
 
-    recordCurrentState(`editing ${selectedNode.data.unit.shortName}`);
+    labelNextEdit(`editing ${selectedNode.data.unit.shortName}`);
     setNodes(nextNodes);
     setEdges(nextEdges);
     setNotice(
@@ -3080,7 +3573,9 @@ function StudioWorkspace() {
     if (!selectedNode) return;
 
     const id = `unit-${crypto.randomUUID()}`;
-    const childIndex = edges.filter((edge) => edge.source === selectedNode.id).length;
+    const childIndex = edges.filter(
+      (edge) => edge.source === selectedNode.id,
+    ).length;
     const type: UnitType =
       selectedNode.data.unit.type === "laboratory"
         ? "directorate"
@@ -3126,7 +3621,7 @@ function StudioWorkspace() {
       data: { relationshipType: "primary supervisory" },
     };
 
-    recordCurrentState(`adding ${name}`);
+    labelNextEdit(`adding ${name}`);
     setNodes([...nodes, childNode]);
     setEdges([...edges, childEdge]);
     setSelectedId(id);
@@ -3135,7 +3630,9 @@ function StudioWorkspace() {
       next.delete(selectedNode.id);
       return next;
     });
-    setNotice(`${name} was added as a draft child unit. Review its fields, then save.`);
+    setNotice(
+      `${name} was added as a draft child unit. Review its fields, then save.`,
+    );
   };
 
   const requestAddChildUnit = () => {
@@ -3149,7 +3646,9 @@ function StudioWorkspace() {
 
   const deleteSelectedBranch = () => {
     if (!selectedNode || !selectedParentEdge) {
-      setNotice("The chart root cannot be deleted here. Delete the chart from the library instead.");
+      setNotice(
+        "The chart root cannot be deleted here. Delete the chart from the library instead.",
+      );
       return;
     }
     const branchIds = descendantIds(selectedNode.id, edges);
@@ -3157,11 +3656,15 @@ function StudioWorkspace() {
       branchIds.size === 1
         ? selectedNode.data.unit.shortName
         : `${selectedNode.data.unit.shortName} and ${branchIds.size - 1} descendant units`;
-    if (!window.confirm(`Delete ${branchLabel}? You can undo this while the chart remains open.`)) {
+    if (
+      !window.confirm(
+        `Delete ${branchLabel}? Saved changes remain recoverable in History / Timeline.`,
+      )
+    ) {
       return;
     }
 
-    recordCurrentState(`deleting ${selectedNode.data.unit.shortName}`);
+    labelNextEdit(`deleting ${selectedNode.data.unit.shortName}`);
     setNodes(nodes.filter((flowNode) => !branchIds.has(flowNode.id)));
     setEdges(
       edges.filter(
@@ -3178,7 +3681,9 @@ function StudioWorkspace() {
 
   const runLayout = async () => {
     if (layoutMode === "preserve") {
-      setNotice("Preserve mode kept all existing coordinates. No nodes needed placement.");
+      setNotice(
+        "Preserve mode kept all existing coordinates. No nodes needed placement.",
+      );
       return;
     }
     if (layoutMode === "branch" && !selectedNode) {
@@ -3190,7 +3695,9 @@ function StudioWorkspace() {
     try {
       if (layoutMode === "branch" && selectedNode) {
         const branchIds = descendantIds(selectedNode.id, edges);
-        const branchNodes = nodes.filter((flowNode) => branchIds.has(flowNode.id));
+        const branchNodes = nodes.filter((flowNode) =>
+          branchIds.has(flowNode.id),
+        );
         const branchEdges = edges.filter(
           (edge) => branchIds.has(edge.source) && branchIds.has(edge.target),
         );
@@ -3206,7 +3713,7 @@ function StudioWorkspace() {
           layoutedBranch.map((flowNode) => [flowNode.id, flowNode]),
         );
 
-        recordCurrentState(`laying out ${selectedNode.data.unit.shortName}`);
+        labelNextEdit(`laying out ${selectedNode.data.unit.shortName}`);
         setNodes((currentNodes) =>
           currentNodes.map((flowNode) => {
             const layouted = branchById.get(flowNode.id);
@@ -3220,14 +3727,16 @@ function StudioWorkspace() {
             };
           }),
         );
-        setNotice(`Branch layout completed for ${selectedNode.data.unit.shortName}.`);
+        setNotice(
+          `Branch layout completed for ${selectedNode.data.unit.shortName}.`,
+        );
       } else {
         const layouted = await runElkLayout(
           nodes,
           edges,
           layoutMode === "respect-pins",
         );
-        recordCurrentState("laying out the chart");
+        labelNextEdit("laying out the chart");
         setNodes(layouted);
         setNotice(
           layoutMode === "respect-pins"
@@ -3239,7 +3748,9 @@ function StudioWorkspace() {
         void fitView({ duration: 500, padding: 0.14 });
       });
     } catch {
-      setNotice("The layout service could not complete this request. Existing positions were preserved.");
+      setNotice(
+        "The layout service could not complete this request. Existing positions were preserved.",
+      );
     } finally {
       setIsLayoutRunning(false);
     }
@@ -3277,20 +3788,37 @@ function StudioWorkspace() {
     }
     const data = (await response.json()) as { chart: ChartDocument };
     setCharts((current) => [data.chart, ...current]);
-    setNotice(`${data.chart.name} was created without duplicating source files.`);
+    setNotice(
+      `${data.chart.name} was created without duplicating source files.`,
+    );
+  };
+
+  const acceptSupplementSave = (chart: ChartDocument) => {
+    const next = chartsRef.current.map((c) => (c.id === chart.id ? chart : c));
+    chartsRef.current = next;
+    setCharts(next);
+    setSaveState("saved");
+    setNotice(
+      `${chart.name} saved. Support content and comparison records retain their source notes.`,
+    );
   };
 
   const updateChartMetadata = async (
     chart: ChartDocument,
-    patch: Partial<Pick<ChartDocument, "name" | "description">>,
+    patch: Partial<
+      Pick<ChartDocument, "name" | "description" | "libraryParentId">
+    >,
   ) => {
     if (chart.status === "archived") {
-      setNotice("Archived charts are read-only. Restore this chart as a Draft before editing it.");
+      setNotice(
+        "Archived charts are read-only. Restore this chart as a Draft before editing it.",
+      );
       return;
     }
-    const currentStructure = chart.id === activeChartId
-      ? { nodes, edges }
-      : { nodes: chart.nodes, edges: chart.edges };
+    const currentStructure =
+      chart.id === activeChartId
+        ? { nodes, edges }
+        : { nodes: chart.nodes, edges: chart.edges };
     if (chart.id === activeChartId) {
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current);
@@ -3304,7 +3832,7 @@ function StudioWorkspace() {
         ...chart,
         ...patch,
         ...currentStructure,
-        status: returnedToDraft ? "draft" as const : chart.status,
+        status: returnedToDraft ? ("draft" as const) : chart.status,
       };
       const sendSave = (candidate: ChartDocument) =>
         fetch("/api/charts", {
@@ -3319,7 +3847,11 @@ function StudioWorkspace() {
         currentVersion?: number;
         currentUpdatedAt?: string;
       };
-      if (response.status === 409 && data.currentUpdatedAt && data.currentVersion) {
+      if (
+        response.status === 409 &&
+        data.currentUpdatedAt &&
+        data.currentVersion
+      ) {
         response = await sendSave({
           ...chartToSave,
           version: data.currentVersion,
@@ -3331,7 +3863,9 @@ function StudioWorkspace() {
         throw new Error(data.error ?? "Chart details could not be saved.");
       }
       setCharts((current) =>
-        current.map((candidate) => candidate.id === data.chart!.id ? data.chart! : candidate),
+        current.map((candidate) =>
+          candidate.id === data.chart!.id ? data.chart! : candidate,
+        ),
       );
       setNotice(
         returnedToDraft
@@ -3339,7 +3873,11 @@ function StudioWorkspace() {
           : `${data.chart.name} details were updated.`,
       );
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Chart details could not be saved.");
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Chart details could not be saved.",
+      );
     }
   };
 
@@ -3349,7 +3887,9 @@ function StudioWorkspace() {
   ) => {
     if (chart.status === targetStatus) return;
     if (chart.id === activeChartId && saveState !== "saved") {
-      setNotice("Wait for the active chart to show Saved before changing its lifecycle.");
+      setNotice(
+        "Wait for the active chart to show Saved before changing its lifecycle.",
+      );
       return;
     }
     setLifecycleError("");
@@ -3358,7 +3898,9 @@ function StudioWorkspace() {
 
   const submitLifecycleTransition = async (form: HTMLFormElement) => {
     if (!lifecycleDialog || lifecycleBusy) return;
-    const chart = charts.find((candidate) => candidate.id === lifecycleDialog.chartId);
+    const chart = charts.find(
+      (candidate) => candidate.id === lifecycleDialog.chartId,
+    );
     if (!chart) return;
     const formData = new FormData(form);
     setLifecycleBusy(true);
@@ -3375,6 +3917,7 @@ function StudioWorkspace() {
           expectedUpdatedAt: chart.updatedAt,
           currentBy: String(formData.get("currentBy") ?? "").trim(),
           approvalNote: String(formData.get("approvalNote") ?? "").trim(),
+          acknowledgeReview: formData.get("acknowledgeReview") === "on",
         }),
       });
       const data = (await response.json()) as {
@@ -3383,10 +3926,14 @@ function StudioWorkspace() {
         error?: string;
       };
       if (!response.ok || !data.chart) {
-        throw new Error(data.error ?? "The chart lifecycle could not be updated.");
+        throw new Error(
+          data.error ?? "The chart lifecycle could not be updated.",
+        );
       }
       setCharts((current) =>
-        current.map((candidate) => candidate.id === data.chart!.id ? data.chart! : candidate),
+        current.map((candidate) =>
+          candidate.id === data.chart!.id ? data.chart! : candidate,
+        ),
       );
       if (data.version && data.chart.id === activeChartId) {
         await loadVersions(data.chart.id);
@@ -3395,14 +3942,15 @@ function StudioWorkspace() {
       setLifecycleDialog(null);
       if (targetStatus === "archived" && chart.id === activeChartId) {
         const nextChart = charts.find(
-          (candidate) => candidate.id !== chart.id && candidate.status !== "archived",
+          (candidate) =>
+            candidate.id !== chart.id && candidate.status !== "archived",
         );
         if (nextChart) openChart(nextChart, "library");
         else setWorkspaceView("library");
       }
       setNotice(
         targetStatus === "current"
-          ? `${data.chart.name} is now Current. Version ${data.chart.version} is the approved checkpoint.`
+          ? `${data.chart.name} is now Current. Version ${data.chart.version} is the designated checkpoint; source notes remain visible.`
           : targetStatus === "archived"
             ? `${data.chart.name} is archived and read-only. It is hidden from the active library view.`
             : targetStatus === "in_review"
@@ -3411,7 +3959,9 @@ function StudioWorkspace() {
       );
     } catch (error) {
       setLifecycleError(
-        error instanceof Error ? error.message : "The chart lifecycle could not be updated.",
+        error instanceof Error
+          ? error.message
+          : "The chart lifecycle could not be updated.",
       );
     } finally {
       setLifecycleBusy(false);
@@ -3495,9 +4045,15 @@ function StudioWorkspace() {
       }
       setDeleteChartDialog(null);
       setDeleteChartConfirmation("");
-      setNotice(`${chart.name}, its saved versions, and its stored source files were deleted.`);
+      setNotice(
+        `${chart.name}, its saved versions, and its stored source files were deleted.`,
+      );
     } catch (error) {
-      setDeleteChartError(error instanceof Error ? error.message : "The chart could not be deleted.");
+      setDeleteChartError(
+        error instanceof Error
+          ? error.message
+          : "The chart could not be deleted.",
+      );
     } finally {
       setDeleteChartBusy(false);
     }
@@ -3507,10 +4063,14 @@ function StudioWorkspace() {
     if (!deleteChartDialog || deleteChartBusy) return;
     const confirmation = deleteChartConfirmation.trim();
     if (confirmation !== deleteChartDialog.chartName) {
-      setDeleteChartError("Type the complete chart name exactly to confirm permanent deletion.");
+      setDeleteChartError(
+        "Type the complete chart name exactly to confirm permanent deletion.",
+      );
       return;
     }
-    const chart = charts.find((candidate) => candidate.id === deleteChartDialog.chartId);
+    const chart = charts.find(
+      (candidate) => candidate.id === deleteChartDialog.chartId,
+    );
     if (!chart) return;
     setDeleteChartError("");
     void deleteChart(chart);
@@ -3518,7 +4078,9 @@ function StudioWorkspace() {
 
   const createImportIntake = async () => {
     if (!intakeName.trim() || !intakeFiles.length || intakeBusy) {
-      setNotice("Name the intake and choose at least one PowerPoint, Word, PDF, PNG, or JPEG source file.");
+      setNotice(
+        "Name the intake and choose at least one PowerPoint, Word, PDF, PNG, or JPEG source file.",
+      );
       return;
     }
     setIntakeBusy(true);
@@ -3526,10 +4088,18 @@ function StudioWorkspace() {
       const formData = new FormData();
       formData.set("name", intakeName.trim());
       intakeFiles.forEach((file) => formData.append("evidence", file));
-      const response = await fetch("/api/import-intakes", { method: "POST", body: formData });
-      const data = (await response.json()) as { intake?: ImportIntake; error?: string };
+      const response = await fetch("/api/import-intakes", {
+        method: "POST",
+        body: formData,
+      });
+      const data = (await response.json()) as {
+        intake?: ImportIntake;
+        error?: string;
+      };
       if (!response.ok || !data.intake) {
-        throw new Error(data.error ?? "The source intake could not be created.");
+        throw new Error(
+          data.error ?? "The source intake could not be created.",
+        );
       }
       setImportIntakes((current) => [data.intake!, ...current]);
       setImportIntakeId(data.intake.id);
@@ -3539,14 +4109,23 @@ function StudioWorkspace() {
         `${data.intake.name} is ready. Its ${data.intake.files.length} original source file${data.intake.files.length === 1 ? " is" : "s are"} retained locally and can be linked to an AI or manual import.`,
       );
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The source intake could not be created.");
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "The source intake could not be created.",
+      );
     } finally {
       setIntakeBusy(false);
     }
   };
 
   const discardImportIntake = async (intake: ImportIntake) => {
-    if (!window.confirm(`Discard the unused source intake “${intake.name}” and its retained files?`)) return;
+    if (
+      !window.confirm(
+        `Discard the unused source intake “${intake.name}” and its retained files?`,
+      )
+    )
+      return;
     setIntakeBusy(true);
     try {
       const response = await fetch("/api/import-intakes", {
@@ -3555,12 +4134,23 @@ function StudioWorkspace() {
         body: JSON.stringify({ action: "discard", intakeId: intake.id }),
       });
       const data = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(data.error ?? "The source intake could not be discarded.");
-      setImportIntakes((current) => current.filter((candidate) => candidate.id !== intake.id));
+      if (!response.ok)
+        throw new Error(
+          data.error ?? "The source intake could not be discarded.",
+        );
+      setImportIntakes((current) =>
+        current.filter((candidate) => candidate.id !== intake.id),
+      );
       setImportIntakeId((current) => (current === intake.id ? "" : current));
-      setNotice(`${intake.name} and its unused local source files were discarded.`);
+      setNotice(
+        `${intake.name} and its unused local source files were discarded.`,
+      );
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The source intake could not be discarded.");
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "The source intake could not be discarded.",
+      );
     } finally {
       setIntakeBusy(false);
     }
@@ -3578,7 +4168,7 @@ function StudioWorkspace() {
       paused: false,
       chartScope: "all" as const,
       allowedChartIds: [],
-      sourceAccessEnabled: false,
+      sourceAccessEnabled: true,
       revision: 0,
       events: [],
     };
@@ -3589,20 +4179,29 @@ function StudioWorkspace() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "configure", ...current, ...patch }),
       });
-      const data = (await response.json()) as McpControlResponse & { error?: string };
-      if (!response.ok) throw new Error(data.error ?? "Local AI controls could not be updated.");
+      const data = (await response.json()) as McpControlResponse & {
+        error?: string;
+      };
+      if (!response.ok)
+        throw new Error(
+          data.error ?? "Local AI controls could not be updated.",
+        );
       setMcpControl(data.control);
       setNotice(
         data.control.paused
           ? "Local AI access is paused. MCP reads and writes are blocked until you resume it."
           : data.control.sourceAccessEnabled
             ? "Local AI access is active, including explicitly requested extraction of retained source content for this app session."
-          : data.control.chartScope === "selected"
-            ? `Local AI access is limited to ${data.control.allowedChartIds.length} selected chart${data.control.allowedChartIds.length === 1 ? "" : "s"}.`
-            : "Local AI access is active for charts you explicitly ask the assistant to use.",
+            : data.control.chartScope === "selected"
+              ? `Local AI access is limited to ${data.control.allowedChartIds.length} selected chart${data.control.allowedChartIds.length === 1 ? "" : "s"}.`
+              : "Local AI access is active for charts you explicitly ask the assistant to use.",
       );
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Local AI controls could not be updated.");
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Local AI controls could not be updated.",
+      );
     } finally {
       setMcpControlBusy(false);
     }
@@ -3632,29 +4231,48 @@ function StudioWorkspace() {
   };
 
   const stageChartMerge = async () => {
-    if (!comparisonSource || !comparisonTarget || !chartComparison || comparisonBusy) return;
+    if (
+      !comparisonSource ||
+      !comparisonTarget ||
+      !chartComparison ||
+      comparisonBusy
+    )
+      return;
     if (!chartComparison.totalChanges) {
-      setNotice("These two charts have no structural, content, or layout differences to merge.");
+      setNotice(
+        "These two charts have no structural, content, or layout differences to merge.",
+      );
       return;
     }
     setComparisonBusy(true);
     try {
-      const proposed = mergeSourceIntoTarget(comparisonTarget, comparisonSource);
+      const proposed = mergeSourceIntoTarget(
+        comparisonTarget,
+        comparisonSource,
+      );
       const response = await fetch("/api/ai-proposals", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "stage", chart: proposed }),
       });
-      const data = (await response.json()) as AiProposalResponse & { error?: string };
+      const data = (await response.json()) as AiProposalResponse & {
+        error?: string;
+      };
       if (!response.ok || !data.proposal) {
-        throw new Error(data.error ?? "The chart merge proposal could not be staged.");
+        throw new Error(
+          data.error ?? "The chart merge proposal could not be staged.",
+        );
       }
       showAiProposal(data.proposal);
       setNotice(
         `Previewing ${comparisonSource.name} as a merge proposal for ${comparisonTarget.name}. The target is unchanged until Apply.`,
       );
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The chart merge proposal could not be staged.");
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "The chart merge proposal could not be staged.",
+      );
     } finally {
       setComparisonBusy(false);
     }
@@ -3706,8 +4324,15 @@ function StudioWorkspace() {
   };
 
   const importChart = async () => {
-    if (!importFile || !importName.trim() || !importPreview || !importReviewed) {
-      setNotice("Validate the files and confirm the normalized hierarchy before importing.");
+    if (
+      !importFile ||
+      !importName.trim() ||
+      !importPreview ||
+      !importReviewed
+    ) {
+      setNotice(
+        "Validate the files and confirm the normalized hierarchy before importing.",
+      );
       return;
     }
     setImportBusy(true);
@@ -3739,13 +4364,19 @@ function StudioWorkspace() {
       openChart(data.chart, "sources");
       await loadImportIntakes().catch(() => undefined);
     } catch {
-      setNotice("The import could not be completed. No partial chart was created.");
+      setNotice(
+        "The import could not be completed. No partial chart was created.",
+      );
     } finally {
       setImportBusy(false);
     }
   };
 
-  const downloadTextFile = (contents: string, fileName: string, type: string) => {
+  const downloadTextFile = (
+    contents: string,
+    fileName: string,
+    type: string,
+  ) => {
     const blob = new Blob([contents], { type });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -3783,7 +4414,8 @@ function StudioWorkspace() {
           id: edge.id,
           source: edge.source,
           target: edge.target,
-          relationshipType: edge.data?.relationshipType ?? "primary supervisory",
+          relationshipType:
+            edge.data?.relationshipType ?? "primary supervisory",
           sourceLocator: edge.data?.sourceLocator ?? "",
           sourceCertainty: edge.data?.sourceCertainty ?? "needs_review",
           reviewNote: edge.data?.reviewNote ?? "",
@@ -3812,7 +4444,9 @@ function StudioWorkspace() {
       }
     } catch (error) {
       setStorageMessage(
-        error instanceof Error ? error.message : "The live data folder could not be changed.",
+        error instanceof Error
+          ? error.message
+          : "The live data folder could not be changed.",
       );
     } finally {
       setStorageBusy(null);
@@ -3829,13 +4463,15 @@ function StudioWorkspace() {
       if (settings.backupDirectory) {
         setStorageMessage(
           settings.backupIsCloudSynced
-            ? "Cloud-synced backup folder set. Encrypted or explicitly confirmed unencrypted .orgchart-backup files can be saved here."
-            : "Backup folder set. Encrypted or explicitly confirmed unencrypted backups will be saved directly to this separate location.",
+            ? "Cloud-synced backup folder set. Encrypted or unencrypted .orgchart-backup files can be saved here."
+            : "Backup folder set. Encrypted or unencrypted backups will be saved directly to this separate location.",
         );
       }
     } catch (error) {
       setStorageMessage(
-        error instanceof Error ? error.message : "The backup folder could not be changed.",
+        error instanceof Error
+          ? error.message
+          : "The backup folder could not be changed.",
       );
     } finally {
       setStorageBusy(null);
@@ -3854,7 +4490,9 @@ function StudioWorkspace() {
       }
     } catch (error) {
       setStorageMessage(
-        error instanceof Error ? error.message : "The desktop app could not restart.",
+        error instanceof Error
+          ? error.message
+          : "The desktop app could not restart.",
       );
       setStorageBusy(null);
     }
@@ -3870,7 +4508,9 @@ function StudioWorkspace() {
     } catch (error) {
       setQuitBusy(false);
       setNotice(
-        error instanceof Error ? error.message : "The desktop app could not shut down.",
+        error instanceof Error
+          ? error.message
+          : "The desktop app could not shut down.",
       );
     }
   };
@@ -3894,7 +4534,9 @@ function StudioWorkspace() {
   const createBackup = async () => {
     setBackupMessage("");
     if (!charts.length) {
-      setBackupMessage("Add or import at least one chart before creating a backup.");
+      setBackupMessage(
+        "Add or import at least one chart before creating a backup.",
+      );
       return;
     }
     if (backupScope === "selected" && !selectedBackupCharts.length) {
@@ -3902,7 +4544,9 @@ function StudioWorkspace() {
       return;
     }
     if (desktopBackupDestinationMissing) {
-      setBackupMessage("Choose a backup folder before running a desktop backup.");
+      setBackupMessage(
+        "Choose a backup folder before running a desktop backup.",
+      );
       return;
     }
     if (backupProtection === "encrypted") {
@@ -3914,32 +4558,35 @@ function StudioWorkspace() {
         setBackupMessage("The backup passphrases do not match.");
         return;
       }
-    } else {
-      if (!unencryptedBackupConfirmed) {
-        setBackupMessage("Confirm that you understand the unencrypted backup will be readable.");
-        return;
-      }
     }
 
     setBackupBusy("export");
     try {
       const backupQuery = new URLSearchParams();
       if (backupScope === "selected") {
-        for (const chart of selectedBackupCharts) backupQuery.append("chartId", chart.id);
+        for (const chart of selectedBackupCharts)
+          backupQuery.append("chartId", chart.id);
       }
       const queryString = backupQuery.toString();
-      const response = await fetch(`/api/backups${queryString ? `?${queryString}` : ""}`, {
-        headers: { accept: "application/json" },
-        cache: "no-store",
-      });
-      const data = (await response.json()) as LibraryBackup & { error?: string };
-      if (!response.ok) throw new Error(data.error ?? "The backup could not be prepared.");
+      const response = await fetch(
+        `/api/backups${queryString ? `?${queryString}` : ""}`,
+        {
+          headers: { accept: "application/json" },
+          cache: "no-store",
+        },
+      );
+      const data = (await response.json()) as LibraryBackup & {
+        error?: string;
+      };
+      if (!response.ok)
+        throw new Error(data.error ?? "The backup could not be prepared.");
       const packageValue =
         backupProtection === "encrypted"
           ? await encryptLibraryBackup(data, backupPassphrase)
           : data;
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const scopeLabel = data.scope === "selected" ? `selected-${data.chartCount}` : "library";
+      const scopeLabel =
+        data.scope === "selected" ? `selected-${data.chartCount}` : "library";
       const fileName = `orgchart-studio-backup-${scopeLabel}-${backupProtection}-${stamp}.orgchart-backup`;
       const serialized = JSON.stringify(packageValue);
       const desktopBridge = window.orgChartDesktop;
@@ -3956,10 +4603,10 @@ function StudioWorkspace() {
       }
       setBackupPassphrase("");
       setBackupPassphraseConfirm("");
-      setUnencryptedBackupConfirmed(false);
-      const protectionLabel = backupProtection === "encrypted" ? "Encrypted" : "Unencrypted";
+      const protectionLabel =
+        backupProtection === "encrypted" ? "Encrypted" : "Unencrypted";
       setBackupMessage(
-        `${protectionLabel} backup created with ${data.chartCount} charts, ${data.versionCount ?? 0} saved versions, ${data.aiActivityCount ?? 0} AI review records, and ${data.sourceFileCount} stored source files.${savedBackup ? ` Saved to ${savedBackup.path}.` : " Downloaded through the browser."}`,
+        `${protectionLabel} backup created with ${data.chartCount} charts, ${data.versionCount ?? 0} saved versions, ${data.aiActivityCount ?? 0} AI review records, ${data.checkpoints?.length ?? 0} historical checkpoints, ${data.monthlyUpdates?.length ?? 0} monthly updates, and ${data.sourceFileCount} stored source files.${savedBackup ? ` Saved to ${savedBackup.path}.` : " Downloaded through the browser."}`,
       );
       saveBackupHealth({
         ...backupHealth,
@@ -3977,7 +4624,11 @@ function StudioWorkspace() {
             : "Unencrypted backup downloaded. Anyone with the file can read its contents.",
       );
     } catch (error) {
-      setBackupMessage(error instanceof Error ? error.message : "The backup could not be created.");
+      setBackupMessage(
+        error instanceof Error
+          ? error.message
+          : "The backup could not be created.",
+      );
     } finally {
       setBackupBusy(null);
     }
@@ -4011,13 +4662,16 @@ function StudioWorkspace() {
         restoredCharts?: ChartDocument[];
         error?: string;
       };
-      if (!response.ok) throw new Error(result.error ?? "The backup could not be restored.");
+      if (!response.ok)
+        throw new Error(result.error ?? "The backup could not be restored.");
 
       const libraryResponse = await fetch("/api/charts", { cache: "no-store" });
       const library = (await libraryResponse.json()) as ChartLibraryResponse;
       setCharts(library.charts);
       const firstRestoredId = result.restoredCharts?.[0]?.id;
-      const firstRestored = library.charts.find((chart) => chart.id === firstRestoredId);
+      const firstRestored = library.charts.find(
+        (chart) => chart.id === firstRestoredId,
+      );
       if (firstRestored) openChart(firstRestored, "library");
       setBackupFile(null);
       setRestorePassphrase("");
@@ -4028,7 +4682,11 @@ function StudioWorkspace() {
         `${opened.protection === "encrypted" ? "Encrypted" : "Unencrypted"} backup restored by merge. Existing charts were not changed or deleted.`,
       );
     } catch (error) {
-      setBackupMessage(error instanceof Error ? error.message : "The backup could not be restored.");
+      setBackupMessage(
+        error instanceof Error
+          ? error.message
+          : "The backup could not be restored.",
+      );
     } finally {
       setBackupBusy(null);
     }
@@ -4076,7 +4734,8 @@ function StudioWorkspace() {
       context.drawImage(image, 0, 0, outputWidth, outputHeight);
       const blob = await new Promise<Blob>((resolve, reject) => {
         canvas.toBlob(
-          (value) => (value ? resolve(value) : reject(new Error("PNG encoding failed."))),
+          (value) =>
+            value ? resolve(value) : reject(new Error("PNG encoding failed.")),
           "image/png",
         );
       });
@@ -4089,7 +4748,9 @@ function StudioWorkspace() {
   const exportChart = async (format: ExportFormat) => {
     if (!activeChart || exportBusy) return;
     if (blockingFindings.length) {
-      setNotice("Resolve blocking structural findings before exporting this chart.");
+      setNotice(
+        "Resolve blocking structural findings before exporting this chart.",
+      );
       return;
     }
     setExportBusy(format);
@@ -4101,6 +4762,7 @@ function StudioWorkspace() {
         connectorRoutingMode,
         presentationMode,
         compactLayoutOrientation,
+        chartAppearance,
       );
       const viewport = resolveExportViewport(scene, exportPreset);
       const presentationFileLabel =
@@ -4110,12 +4772,14 @@ function StudioWorkspace() {
       const fileStem = `${safeExportFileStem(activeChart.name)}-v${activeChart.version}-${activeChart.status}-${effectiveExportAudience}-${presentationFileLabel}-${exportPreset}`;
       if (format === "svg") {
         downloadBlob(
-          new Blob([buildChartSvg(scene, exportPreset)], { type: "image/svg+xml;charset=utf-8" }),
+          new Blob([buildChartSvg(scene, exportPreset, await loadChartFonts())], {
+            type: "image/svg+xml;charset=utf-8",
+          }),
           `${fileStem}.svg`,
         );
       } else if (format === "png") {
         const blob = await svgToPng(
-          buildChartSvg(scene, exportPreset),
+          buildChartSvg(scene, exportPreset, await loadChartFonts()),
           viewport.width,
           viewport.height,
           pngScale,
@@ -4123,9 +4787,11 @@ function StudioWorkspace() {
         downloadBlob(blob, `${fileStem}@${pngScale}x.png`);
       } else if (format === "pdf") {
         const { buildChartPdf } = await import("../lib/chart-export-pdf");
-        const bytes = await buildChartPdf(scene, exportPreset);
+        const bytes = await buildChartPdf(scene, exportPreset, await loadChartFonts());
         downloadBlob(
-          new Blob([bytes.slice().buffer as ArrayBuffer], { type: "application/pdf" }),
+          new Blob([bytes.slice().buffer as ArrayBuffer], {
+            type: "application/pdf",
+          }),
           `${fileStem}.pdf`,
         );
       } else {
@@ -4142,7 +4808,11 @@ function StudioWorkspace() {
         `${format.toUpperCase()} exported from version ${activeChart.version} using the ${effectiveExportAudience} audience, ${presentationMode === "compact" ? `Compact groups · ${compactLayoutOrientation === "vertical" ? "Vertical" : "Horizontal"}` : "Individual cards"} presentation, and ${EXPORT_PRESETS.find((preset) => preset.id === exportPreset)?.label ?? exportPreset} profile.`,
       );
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The chart export could not be created.");
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "The chart export could not be created.",
+      );
     } finally {
       setExportBusy(null);
     }
@@ -4151,7 +4821,9 @@ function StudioWorkspace() {
   const exportAccessibleTable = () => {
     if (!activeChart) return;
     if (blockingFindings.length) {
-      setNotice("Resolve blocking structural findings before exporting this chart.");
+      setNotice(
+        "Resolve blocking structural findings before exporting this chart.",
+      );
       return;
     }
     const fileStem = `${safeExportFileStem(activeChart.name)}-v${activeChart.version}-${activeChart.status}-${effectiveExportAudience}`;
@@ -4182,14 +4854,37 @@ function StudioWorkspace() {
         : "AI edit needs attention";
   const visibleAiChanges = pendingAiProposal
     ? pendingAiProposal.changes.filter(
-        (change) => aiReviewCategory === "all" || change.category === aiReviewCategory,
+        (change) =>
+          aiReviewCategory === "all" || change.category === aiReviewCategory,
       )
     : [];
-  const nextPendingAiProposal = pendingAiProposalSummaries[0];
+  const pendingUpdateReviews = pendingAiProposalSummaries.filter(
+    (item) => item.proposedStatus !== "archived",
+  );
+  const pendingArchiveReviews = pendingAiProposalSummaries.filter(
+    (item) => item.proposedStatus === "archived",
+  );
+  const effectivePendingReviewScope =
+    pendingReviewScope === "updates"
+      ? pendingUpdateReviews.length
+        ? "updates"
+        : "archives"
+      : pendingArchiveReviews.length
+        ? "archives"
+        : "updates";
+  const visiblePendingReviews =
+    effectivePendingReviewScope === "archives"
+      ? pendingArchiveReviews
+      : pendingUpdateReviews;
+  const nextPendingAiProposal =
+    visiblePendingReviews.find((item) => item.id === pendingReviewChoice) ??
+    visiblePendingReviews.find((item) => item.chartId === activeChart?.id) ??
+    visiblePendingReviews[0];
   const reviewNeedsAttention =
     pendingAiProposal !== null ||
     pendingAiImportProposal !== null ||
-    (mcpActivity.phase === "succeeded" && mcpActivity.completionKind === "review_ready");
+    (mcpActivity.phase === "succeeded" &&
+      mcpActivity.completionKind === "review_ready");
   const currentTourStep =
     onboardingStep === null || reviewNeedsAttention
       ? null
@@ -4204,12 +4899,13 @@ function StudioWorkspace() {
     (summary) => summary.chart.id !== activeChartId,
   );
   const lifecycleDialogChart = lifecycleDialog
-    ? charts.find((chart) => chart.id === lifecycleDialog.chartId) ?? null
+    ? (charts.find((chart) => chart.id === lifecycleDialog.chartId) ?? null)
     : null;
   const lifecycleReadiness = lifecycleDialogChart
     ? currentReadiness(lifecycleDialogChart)
     : null;
-  const detailPanelVisible = workspaceView === "canvas" && Boolean(selectedNode);
+  const detailPanelVisible =
+    workspaceView === "canvas" && Boolean(selectedNode);
 
   return (
     <div
@@ -4219,6 +4915,23 @@ function StudioWorkspace() {
         detailPanelVisible ? " studio-shell--detail-open" : ""
       }`}
     >
+      <DesktopRecovery
+        charts={charts}
+        activeChart={activeChart}
+        nodes={nodes}
+        edges={edges}
+        saveState={saveState}
+        onRecover={(draft, chart) => {
+          if (saveState !== "saved") return;
+          openChart(chart);
+          setNodes(draft.nodes);
+          setEdges(draft.edges);
+          setWorkspaceView("canvas");
+          setNotice(
+            "Editor recovery copy restored for review. Saving automatically…",
+          );
+        }}
+      />
       <div className="mcp-activity-frame" aria-hidden="true" />
       {mcpActivityVisible ? (
         <section
@@ -4244,7 +4957,8 @@ function StudioWorkspace() {
               {mcpActivity.chartName ? ` · ${mcpActivity.chartName}` : ""}
             </span>
           </span>
-          {mcpActivity.phase === "succeeded" && (mcpActivity.chartId || mcpActivity.proposalId) ? (
+          {mcpActivity.phase === "succeeded" &&
+          (mcpActivity.chartId || mcpActivity.proposalId) ? (
             <button
               type="button"
               className="mcp-activity-hud__review"
@@ -4280,19 +4994,122 @@ function StudioWorkspace() {
           </span>
         </div>
 
-        <label className="global-search">
+        <div className="global-search" role="search">
           <MagnifyingGlass size={18} aria-hidden="true" />
-          <span className="sr-only">Search units, positions, and assignments</span>
+          <span className="sr-only">
+            Search units, positions, and assignments
+          </span>
           <input
             ref={searchInputRef}
             type="search"
+            role="combobox"
+            aria-autocomplete="list"
             value={searchQuery}
             onChange={(event) => handleSearch(event.target.value)}
-            placeholder="Search units, positions, or assignments"
-            disabled={!activeChart}
+            aria-label="Search all organizations, people, or roles"
+            placeholder="Search all organizations, people, or roles"
+            onFocus={() => setSearchOpen(true)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setSearchOpen(false);
+            }}
+            aria-expanded={searchOpen && !!searchQuery.trim()}
+            aria-controls="library-search-results"
           />
           <kbd>/</kbd>
-        </label>
+          {searchOpen && searchQuery.trim() ? (
+            <div
+              className="global-search-results"
+              id="library-search-results"
+              role="region"
+              aria-label="Library search results"
+            >
+              <div>
+                <strong>{librarySearchResults.length} matching records</strong>
+                <button
+                  type="button"
+                  onClick={() => setSearchOpen(false)}
+                  aria-label="Close search results"
+                >
+                  ×
+                </button>
+              </div>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={searchArchives}
+                  onChange={(e) => setSearchArchives(e.target.checked)}
+                />
+                Include archived charts
+              </label>
+              <button
+                type="button"
+                className="button button--secondary"
+                onClick={() => {
+                  setSearchOpen(false);
+                  setWorkspaceView("history");
+                }}
+              >
+                Search historical checkpoints
+              </button>
+              <div className="global-search-list">
+                {librarySearchResults.map((r, i) => (
+                  <button
+                    type="button"
+                    key={r.chartId + ":" + r.nodeId + ":" + i}
+                    onClick={() => {
+                      const chart = charts.find((c) => c.id === r.chartId);
+                      if (!chart) return;
+                      if (saveState !== "saved") {
+                        setNotice(
+                          "Wait for Saved before opening a search result.",
+                        );
+                        return;
+                      }
+                      openChart(chart);
+                      setSearchOpen(false);
+                      setSearchQuery("");
+                      setSelectedId(r.nodeId ?? "");
+                      setCollapsedIds(new Set());
+                      if (r.nodeId) {
+                        const presentation = deriveCompactPresentation(
+                          chart.nodes,
+                          chart.edges,
+                        );
+                        const visibleId =
+                          presentationMode === "compact" &&
+                          presentation.listedNodeIds.has(r.nodeId)
+                            ? (presentation.parentById.get(r.nodeId) ??
+                              r.nodeId)
+                            : r.nodeId;
+                        window.requestAnimationFrame(() => {
+                          void fitView({
+                            nodes: [{ id: visibleId }],
+                            duration: 420,
+                            padding: 1.8,
+                          });
+                        });
+                      }
+                    }}
+                  >
+                    <strong>{r.person || r.organization}</strong>
+                    <span>
+                      {r.role}
+                      {r.person ? ` · ${r.organization}` : ""}
+                    </span>
+                    <small>
+                      {r.chartName} · {r.status.replace("_", " ")}
+                    </small>
+                  </button>
+                ))}
+              </div>
+              {!librarySearchResults.length ? (
+                <p>
+                  No active matches. Include archived charts or search history.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
 
         <button
           type="button"
@@ -4310,8 +5127,14 @@ function StudioWorkspace() {
             <select
               value={activeChart?.id ?? ""}
               onChange={(event) => {
-                const chart = charts.find((candidate) => candidate.id === event.target.value);
-                if (chart) openChart(chart, workspaceView === "review" ? "review" : "canvas");
+                const chart = charts.find(
+                  (candidate) => candidate.id === event.target.value,
+                );
+                if (chart)
+                  openChart(
+                    chart,
+                    workspaceView === "review" ? "review" : "canvas",
+                  );
               }}
               disabled={
                 libraryLoading ||
@@ -4322,11 +5145,24 @@ function StudioWorkspace() {
             >
               {!charts.length ? <option value="">No charts yet</option> : null}
               {switchableCharts.map((chart) => (
-                <option key={chart.id} value={chart.id}>{chart.name}</option>
+                <option key={chart.id} value={chart.id}>
+                  {chart.name}
+                </option>
               ))}
             </select>
           </label>
           <span className="version-chip">{version}</span>
+          {activeChart &&
+          activeChart.status !== "current" &&
+          activeChart.status !== "archived" ? (
+            <button
+              type="button"
+              className="save-retry-button"
+              onClick={() => requestLifecycleTransition(activeChart, "current")}
+            >
+              Mark Current
+            </button>
+          ) : null}
           <span className={`save-status save-status--${saveState}`}>
             {saveState === "saving"
               ? "Saving"
@@ -4356,8 +5192,8 @@ function StudioWorkspace() {
             {!activeChart
               ? "No chart loaded"
               : blockingFindings.length
-              ? `${blockingFindings.length} blocking`
-              : "Structure valid"}
+                ? `${blockingFindings.length} blocking`
+                : "Structure valid"}
           </span>
           {storageMode === "desktop" ? (
             <button
@@ -4372,7 +5208,7 @@ function StudioWorkspace() {
                   ? "Wait for the current save to finish before quitting"
                   : saveState === "error"
                     ? "A save issue needs attention before quitting"
-                  : "Quit OrgChart Studio"
+                    : "Quit OrgChart Studio"
               }
             >
               <X size={15} weight="bold" aria-hidden="true" />
@@ -4395,7 +5231,9 @@ function StudioWorkspace() {
           >
             <FolderOpen size={19} aria-hidden="true" />
             <span>Chart library</span>
-            <span className="nav-count nav-count--neutral">{charts.length}</span>
+            <span className="nav-count nav-count--neutral">
+              {charts.length}
+            </span>
           </button>
           <button
             type="button"
@@ -4429,11 +5267,33 @@ function StudioWorkspace() {
                 aria-label={`${portfolioSourceReviewCount} records need review across the library`}
                 title={`${portfolioSourceReviewCount} records need review across ${chartsNeedingSourceReview.length} chart${chartsNeedingSourceReview.length === 1 ? "" : "s"}`}
               >
-                {portfolioSourceReviewCount > 99 ? "99+" : portfolioSourceReviewCount}
+                {portfolioSourceReviewCount > 99
+                  ? "99+"
+                  : portfolioSourceReviewCount}
               </span>
             ) : (
               <span className="nav-count nav-count--neutral">0</span>
             )}
+          </button>
+          <SourceCheckProgress charts={charts} />
+          <button
+            type="button"
+            className={workspaceView === "monthly" ? "is-active" : ""}
+            onClick={() => setWorkspaceView("monthly")}
+          >
+            <ClockCounterClockwise size={19} aria-hidden="true" />
+            <span>Monthly updates</span>
+          </button>
+          <button
+            type="button"
+            className={workspaceView === "consistency" ? "is-active" : ""}
+            onClick={() => setWorkspaceView("consistency")}
+          >
+            <ShieldWarning size={19} aria-hidden="true" />
+            <span>Consistency & priorities</span>
+            <span className="nav-count nav-count--warning">
+              {portfolioIssues.length}
+            </span>
           </button>
           <button
             type="button"
@@ -4472,7 +5332,9 @@ function StudioWorkspace() {
           >
             <Robot size={19} aria-hidden="true" />
             <span>Local AI control</span>
-            <span className={`nav-count ${mcpControl?.paused ? "nav-count--warning" : "nav-count--neutral"}`}>
+            <span
+              className={`nav-count ${mcpControl?.paused ? "nav-count--warning" : "nav-count--neutral"}`}
+            >
               {mcpControl?.paused ? "Paused" : "On"}
             </span>
           </button>
@@ -4483,7 +5345,7 @@ function StudioWorkspace() {
             disabled={!activeChart}
           >
             <ClockCounterClockwise size={19} aria-hidden="true" />
-            <span>Version history</span>
+            <span>History / Timeline</span>
             <span className="nav-count nav-count--neutral">
               {versions.length || activeChart?.version || 0}
             </span>
@@ -4500,8 +5362,14 @@ function StudioWorkspace() {
         </div>
 
         <div className="sidebar__summary">
-          <p>Active chart · {activeChart ? chartStatusLabels[activeChart.status] : "None"}</p>
-          <strong>{activeChart?.name ?? (libraryLoading ? "Loading" : "No chart selected")}</strong>
+          <p>
+            Active chart ·{" "}
+            {activeChart ? chartStatusLabels[activeChart.status] : "None"}
+          </p>
+          <strong>
+            {activeChart?.name ??
+              (libraryLoading ? "Loading" : "No chart selected")}
+          </strong>
           <span>{charts.length} charts managed</span>
           <span>{nodes.length} units</span>
           <span>{edges.length} primary relationships</span>
@@ -4510,43 +5378,109 @@ function StudioWorkspace() {
 
       <main className="workspace">
         {nextPendingAiProposal && !pendingAiProposal ? (
-          <section className="pending-review-banner" role="status" aria-live="polite">
+          <section
+            className="pending-review-banner"
+            role="status"
+            aria-live="polite"
+          >
             <span className="pending-review-banner__icon" aria-hidden="true">
               <Robot size={19} />
             </span>
             <span className="pending-review-banner__copy">
               <strong>
                 {pendingAiProposalSummaries.length} AI proposal
-                {pendingAiProposalSummaries.length === 1 ? "" : "s"} awaiting review
+                {pendingAiProposalSummaries.length === 1 ? "" : "s"} awaiting
+                review
               </strong>
               <span>
-                Nothing has been applied. Review the Before and After fields to decide what
-                happens to the saved chart.
+                Saved locally until you decide. Nothing has been applied.
               </span>
             </span>
-            <button
-              type="button"
-              className="button button--primary"
-              onClick={() => void reviewPendingAiProposal(nextPendingAiProposal.id)}
-              disabled={aiProposalBusy !== null}
-            >
-              {aiProposalBusy === "load" ? "Opening…" : "Review proposal"}
-            </button>
+            <div className="pending-review-banner__actions">
+              <label className="pending-review-banner__chooser">
+                Review set
+                <select
+                  aria-label="Review set"
+                  value={effectivePendingReviewScope}
+                  onChange={(event) => {
+                    setPendingReviewScope(
+                      event.target.value as "updates" | "archives",
+                    );
+                    setPendingReviewChoice("");
+                  }}
+                >
+                  <option
+                    value="updates"
+                    disabled={!pendingUpdateReviews.length}
+                  >
+                    Chart updates ({pendingUpdateReviews.length})
+                  </option>
+                  <option
+                    value="archives"
+                    disabled={!pendingArchiveReviews.length}
+                  >
+                    Archive proposals ({pendingArchiveReviews.length})
+                  </option>
+                </select>
+              </label>
+              <label className="pending-review-banner__chooser">
+                Chart to review
+                <select
+                  aria-label="Chart to review"
+                  value={nextPendingAiProposal.id}
+                  onChange={(event) =>
+                    setPendingReviewChoice(event.target.value)
+                  }
+                >
+                  {visiblePendingReviews.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.chartName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="button button--primary"
+                onClick={() =>
+                  void reviewPendingAiProposal(nextPendingAiProposal.id)
+                }
+                disabled={aiProposalBusy !== null}
+              >
+                {aiProposalBusy === "load" ? "Opening…" : "Review proposal"}
+              </button>
+            </div>
           </section>
         ) : null}
         <section className="prototype-notice" aria-live="polite">
-          <span><Sparkle size={16} aria-hidden="true" /> Technical prototype</span>
+          <span>
+            <Sparkle size={16} aria-hidden="true" /> Technical prototype
+          </span>
           <p>{notice}</p>
-          <button type="button" onClick={() => setNotice("")} aria-label="Dismiss notice">
+          <button
+            type="button"
+            onClick={() => setNotice("")}
+            aria-label="Dismiss notice"
+          >
             <X size={16} aria-hidden="true" />
           </button>
         </section>
 
         {workspaceView === "canvas" ? (
-          <section className="canvas-panel" aria-label="Interactive organizational chart">
+          <section
+            className="canvas-panel"
+            aria-label="Interactive organizational chart"
+          >
+            <div className="chart-appearance-toolbar">
+              <label>Chart appearance <select aria-label="Chart appearance" value={chartAppearance} disabled={!libraryViewReady} onChange={e=>void chooseChartAppearance(e.target.value as ChartAppearance)}><option value="official">Official slide</option><option value="annotated">Editor annotations</option></select></label>
+              <span>{chartFontAvailable === false ? "Century Gothic unavailable; using the system fallback" : "Century Gothic"} · bold headings · regular names · thin gray borders. Saved positions stay unchanged.</span>
+            </div>
             <div className="canvas-toolbar">
               <div className="canvas-toolbar__mode">
-                <div className="presentation-control" data-tour-target="presentation">
+                <div
+                  className="presentation-control"
+                  data-tour-target="presentation"
+                >
                   <span>
                     <strong>
                       Presentation
@@ -4559,7 +5493,9 @@ function StudioWorkspace() {
                               : "Wide layout · hierarchy rows · top-entry connectors"
                           }
                         >
-                          {compactLayoutOrientation === "vertical" ? "Vertical" : "Horizontal"}
+                          {compactLayoutOrientation === "vertical"
+                            ? "Vertical"
+                            : "Horizontal"}
                         </span>
                       ) : null}
                     </strong>
@@ -4568,7 +5504,9 @@ function StudioWorkspace() {
                   <div role="group" aria-label="Chart presentation">
                     <button
                       type="button"
-                      className={presentationMode === "compact" ? "is-active" : ""}
+                      className={
+                        presentationMode === "compact" ? "is-active" : ""
+                      }
                       aria-pressed={presentationMode === "compact"}
                       onClick={() => changePresentationMode("compact")}
                     >
@@ -4577,7 +5515,9 @@ function StudioWorkspace() {
                     </button>
                     <button
                       type="button"
-                      className={presentationMode === "individual" ? "is-active" : ""}
+                      className={
+                        presentationMode === "individual" ? "is-active" : ""
+                      }
                       aria-pressed={presentationMode === "individual"}
                       onClick={() => changePresentationMode("individual")}
                     >
@@ -4600,7 +5540,11 @@ function StudioWorkspace() {
                   <div role="group" aria-label="Compact layout direction">
                     <button
                       type="button"
-                      className={compactLayoutOrientation === "vertical" ? "is-active" : ""}
+                      className={
+                        compactLayoutOrientation === "vertical"
+                          ? "is-active"
+                          : ""
+                      }
                       aria-pressed={compactLayoutOrientation === "vertical"}
                       onClick={() => changeCompactLayoutOrientation("vertical")}
                     >
@@ -4609,9 +5553,15 @@ function StudioWorkspace() {
                     </button>
                     <button
                       type="button"
-                      className={compactLayoutOrientation === "horizontal" ? "is-active" : ""}
+                      className={
+                        compactLayoutOrientation === "horizontal"
+                          ? "is-active"
+                          : ""
+                      }
                       aria-pressed={compactLayoutOrientation === "horizontal"}
-                      onClick={() => changeCompactLayoutOrientation("horizontal")}
+                      onClick={() =>
+                        changeCompactLayoutOrientation("horizontal")
+                      }
                     >
                       <Rows size={16} aria-hidden="true" />
                       Horizontal
@@ -4626,7 +5576,9 @@ function StudioWorkspace() {
                       id="layout-mode"
                       value={layoutMode}
                       disabled={activeChartReadOnly}
-                      onChange={(event) => setLayoutMode(event.target.value as LayoutMode)}
+                      onChange={(event) =>
+                        setLayoutMode(event.target.value as LayoutMode)
+                      }
                       title="Choose how individual card positions are recalculated"
                     >
                       <option value="preserve">Preserve layout</option>
@@ -4653,7 +5605,10 @@ function StudioWorkspace() {
                     <ArrowsOut size={17} aria-hidden="true" />
                     {isLayoutRunning ? "Laying out…" : "Run layout"}
                   </button>
-                  <span className="layout-control__divider" aria-hidden="true" />
+                  <span
+                    className="layout-control__divider"
+                    aria-hidden="true"
+                  />
                   <div className="layout-control__field">
                     <label htmlFor="connector-routing-mode">Connectors</label>
                     <select
@@ -4713,14 +5668,22 @@ function StudioWorkspace() {
                   </button>
                 </div>
               )}
-              <div className="toolbar-actions" role="toolbar" aria-label="Chart actions">
-                <div className="toolbar-actions__history" role="group" aria-label="Change history">
+              <div
+                className="toolbar-actions"
+                role="toolbar"
+                aria-label="Chart actions"
+              >
+                <div
+                  className="toolbar-actions__history"
+                  role="group"
+                  aria-label="Change history"
+                >
                   <button
                     type="button"
                     className="button button--secondary button--history"
                     onClick={undoChange}
-                    disabled={!undoStack.length || activeChartReadOnly}
-                    title="Undo organizational or presentation change"
+                    disabled={!durableHistory.state?.undo || historyUnavailable || durableHistory.busy}
+                    title={durableHistory.state?.undo ? `Undo: ${durableHistory.state.undo.label}` : "No saved edit to undo"}
                     aria-label="Undo organizational or presentation change"
                   >
                     <ArrowCounterClockwise size={17} aria-hidden="true" />
@@ -4730,8 +5693,8 @@ function StudioWorkspace() {
                     type="button"
                     className="button button--secondary button--history"
                     onClick={redoChange}
-                    disabled={!redoStack.length || activeChartReadOnly}
-                    title="Redo organizational or presentation change"
+                    disabled={!durableHistory.state?.redo || historyUnavailable || durableHistory.busy}
+                    title={durableHistory.state?.redo ? `Redo: ${durableHistory.state.redo.label}` : "No saved edit to redo"}
                     aria-label="Redo organizational or presentation change"
                   >
                     <ArrowClockwise size={17} aria-hidden="true" />
@@ -4764,13 +5727,27 @@ function StudioWorkspace() {
                 <Archive size={20} aria-hidden="true" />
                 <span>
                   <strong>Archived chart · read-only</strong>
-                  <small>Its versions, sources, and approval record are preserved. Restore it as a Draft to make changes.</small>
+                  <small>
+                    Its versions, sources, and approval record are preserved.
+                    Restore it as a Draft to make changes.
+                  </small>
                 </span>
-                <button type="button" className="button button--secondary" onClick={() => activeChart && requestLifecycleTransition(activeChart, "draft")}>Restore as draft</button>
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  onClick={() =>
+                    activeChart &&
+                    requestLifecycleTransition(activeChart, "draft")
+                  }
+                >
+                  Restore as draft
+                </button>
               </section>
             ) : null}
 
-            {presentationMode === "individual" && selectedCardCount > 1 && !activeChartReadOnly ? (
+            {presentationMode === "individual" &&
+            selectedCardCount > 1 &&
+            !activeChartReadOnly ? (
               <div
                 className="selection-arrange-toolbar"
                 role="toolbar"
@@ -4870,7 +5847,9 @@ function StudioWorkspace() {
               </div>
             ) : null}
 
-            {presentationMode === "individual" && selectedEdge && selectedEdgeRoute ? (
+            {presentationMode === "individual" &&
+            selectedEdge &&
+            selectedEdgeRoute ? (
               <div
                 className="route-editor-toolbar"
                 role="toolbar"
@@ -4896,7 +5875,11 @@ function StudioWorkspace() {
                   type="button"
                   className="button button--secondary"
                   onClick={pinSelectedConnector}
-                  disabled={activeChartReadOnly || selectedEdgeRoute.manual || !selectedEdgeRoute.controls.length}
+                  disabled={
+                    activeChartReadOnly ||
+                    selectedEdgeRoute.manual ||
+                    !selectedEdgeRoute.controls.length
+                  }
                   title="Keep the current orthogonal connector corners in their present locations"
                 >
                   <PushPin size={16} aria-hidden="true" />
@@ -4913,24 +5896,70 @@ function StudioWorkspace() {
                   Reset connector
                 </button>
                 <span className="route-editor-toolbar__hint">
-                  Drag a corner handle to move its lane. Corners never become diagonal.
+                  Drag a corner handle to move its lane. Corners never become
+                  diagonal.
                 </span>
               </div>
             ) : null}
 
+            {activeChart ? (
+              <SupportPanelsEditor
+                key={activeChart.id}
+                chart={{ ...(canvasChart ?? activeChart), nodes, edges }}
+                disabled={
+                  activeChartReadOnly ||
+                  saveState !== "saved" ||
+                  !!pendingAiProposal
+                }
+                onSaved={acceptSupplementSave}
+              />
+            ) : null}
+            {canvasChart?.sourceLayout ? (
+              <div className="source-layout-toolbar">
+                <strong>Official slide arrangement</strong>
+                <span>{canvasChart.sourceLayout.sourceLocator}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPresentationMode("individual");
+                    void fitBounds(
+                      {
+                        x: 0,
+                        y: 0,
+                        width: canvasChart.sourceLayout!.width,
+                        height: canvasChart.sourceLayout!.height,
+                      },
+                      { padding: 0.1 },
+                    );
+                  }}
+                >
+                  Show source arrangement
+                </button>
+                <small>
+                  Compact views rearrange presentation only. Saved source
+                  positions remain intact.
+                </small>
+              </div>
+            ) : null}
             <div
-              className={`flow-surface ${marqueeSelectionEnabled ? "is-marquee-active" : ""} ${pendingAiProposal ? "is-ai-preview" : ""} ${activeChartReadOnly ? "is-read-only" : ""}`}
+              className={`flow-surface ${chartAppearance === "official" ? "is-official-appearance" : ""} ${marqueeSelectionEnabled ? "is-marquee-active" : ""} ${pendingAiProposal ? "is-ai-preview" : ""} ${activeChartReadOnly ? "is-read-only" : ""}`}
             >
               <p id="canvas-selection-help" className="sr-only">
                 {presentationMode === "compact"
                   ? `Compact groups is a presentation-only view. Terminal assignments are listed inside their parent cards. ${compactLayoutOrientation === "vertical" ? "The Vertical layout stacks lower cards in aligned columns with level 3 connectors entering from the left." : "The Horizontal layout spreads lower cards across hierarchy rows with connectors entering from the top."} Switch to Individual cards to move cards or edit connector routes.`
                   : marqueeSelectionEnabled
-                  ? "Area selection is on. Drag on empty canvas to draw a selection rectangle. Cards touched by the rectangle become a movable group. Control-click or Command-click adds individual cards. Hold Space while dragging to pan."
-                  : "Area selection is off. Control-click or Command-click adds individual cards to a selection. Turn on Select area to draw a selection rectangle around multiple cards."}
+                    ? "Area selection is on. Drag on empty canvas to draw a selection rectangle. Cards touched by the rectangle become a movable group. Control-click or Command-click adds individual cards. Hold Space while dragging to pan."
+                    : "Area selection is off. Control-click or Command-click adds individual cards to a selection. Turn on Select area to draw a selection rectangle around multiple cards."}
               </p>
               <ReactFlow<OrgFlowNode>
                 nodes={displayNodes}
                 edges={displayEdges}
+                onInit={(flow) => {
+                  if (canvasChart?.sourceLayout && presentationMode === "individual") {
+                    const {width,height}=canvasChart.sourceLayout;
+                    window.requestAnimationFrame(() => void flow.fitBounds({x:0,y:0,width,height},{padding:0.1}));
+                  }
+                }}
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
                 onNodesChange={(changes) =>
@@ -4957,12 +5986,15 @@ function StudioWorkspace() {
                     return;
                   }
                   const currentSelectedNodes = selectedNodes.filter(
-                    (candidate) => !dismissedSelectionIdsRef.current.has(candidate.id),
+                    (candidate) =>
+                      !dismissedSelectionIdsRef.current.has(candidate.id),
                   );
                   if (!currentSelectedNodes.length) return;
                   dismissedSelectionIdsRef.current.clear();
                   setSelectedId((current) =>
-                    currentSelectedNodes.some((candidate) => candidate.id === current)
+                    currentSelectedNodes.some(
+                      (candidate) => candidate.id === current,
+                    )
                       ? current
                       : currentSelectedNodes[0].id,
                   );
@@ -4994,7 +6026,9 @@ function StudioWorkspace() {
                       movementNodeIds,
                       startingPositions: new Map(
                         nodes
-                          .filter((candidate) => movementNodeIds.has(candidate.id))
+                          .filter((candidate) =>
+                            movementNodeIds.has(candidate.id),
+                          )
                           .map((candidate) => [
                             candidate.id,
                             candidate.id === flowNode.id
@@ -5045,7 +6079,7 @@ function StudioWorkspace() {
                   if (movedGroup) positionDraggedGroup(flowNode);
                   else positionDraggedBranch(flowNode);
                   if (dragStartSnapshotRef.current) {
-                    pushUndoSnapshot(dragStartSnapshotRef.current);
+                    labelCompletedGesture(dragStartSnapshotRef.current);
                     dragStartSnapshotRef.current = null;
                   }
                   const movedBranchIds = movedGroup
@@ -5080,8 +6114,8 @@ function StudioWorkspace() {
                     movedGroup
                       ? `${movedGroup.selectedNodeIds.size} selected cards${movedGroup.movementNodeIds.size > movedGroup.selectedNodeIds.size ? ` and ${movedGroup.movementNodeIds.size - movedGroup.selectedNodeIds.size} cards below them` : ""} were moved together and pinned. Reporting lines did not change.`
                       : movedDescendantCount > 0
-                      ? `${flowNode.data.unit.shortName} and ${movedDescendantCount} ${movedDescendantCount === 1 ? "card below it were" : "cards below it were"} moved together and pinned. Reporting lines did not change.`
-                      : `${flowNode.data.unit.shortName} was moved and pinned. Its semantic parent did not change.`,
+                        ? `${flowNode.data.unit.shortName} and ${movedDescendantCount} ${movedDescendantCount === 1 ? "card below it were" : "cards below it were"} moved together and pinned. Reporting lines did not change.`
+                        : `${flowNode.data.unit.shortName} was moved and pinned. Its semantic parent did not change.`,
                   );
                 }}
                 fitView
@@ -5089,32 +6123,59 @@ function StudioWorkspace() {
                 minZoom={presentationMode === "compact" ? 0.08 : 0.22}
                 maxZoom={1.6}
                 nodesConnectable={false}
-                nodesDraggable={presentationMode === "individual" && !pendingAiProposal && !activeChartReadOnly}
+                nodesDraggable={
+                  presentationMode === "individual" &&
+                  !pendingAiProposal &&
+                  !activeChartReadOnly
+                }
                 deleteKeyCode={null}
                 selectionKeyCode={null}
-                selectionOnDrag={presentationMode === "individual" && marqueeSelectionEnabled && !activeChartReadOnly}
+                selectionOnDrag={
+                  presentationMode === "individual" &&
+                  marqueeSelectionEnabled &&
+                  !activeChartReadOnly
+                }
                 selectionMode={SelectionMode.Partial}
                 multiSelectionKeyCode={["Control", "Meta"]}
-                panOnDrag={presentationMode === "compact" || !marqueeSelectionEnabled}
+                panOnDrag={
+                  presentationMode === "compact" || !marqueeSelectionEnabled
+                }
                 aria-describedby="canvas-selection-help"
                 defaultEdgeOptions={{
                   type: "orgRelationship",
-                  style: { stroke: "#00454d", strokeWidth: 1.5 },
+                  style: { stroke: chartAppearance === "official" ? "#595959" : "#00454d", strokeWidth: chartAppearance === "official" ? (canvasChart?.sourceLayout?.width ?? 960)/960*1.5 : 1.5 },
                 }}
                 proOptions={{ hideAttribution: true }}
               >
                 <Background
                   variant={BackgroundVariant.Dots}
-                  color="#dbdcdb"
+                  color={chartAppearance === "official" ? "#ffffff" : "#dbdcdb"}
                   gap={22}
                   size={1}
                 />
+                {activeChart ? (
+                  <ViewportPortal>
+                    <SupportPanelsCanvas
+                      chart={{
+                        ...(pendingAiProposal?.proposed ?? activeChart),
+                        nodes:
+                          presentationMode === "compact"
+                            ? presentationNodes
+                            : nodes,
+                      }}
+                      appearance={chartAppearance}
+                      compact={presentationMode === "compact"}
+                    />
+                  </ViewportPortal>
+                ) : null}
                 <Controls showInteractive={false} />
                 <MiniMap
                   nodeColor={(flowNode) => {
                     const typedNode = flowNode as OrgFlowNode;
-                    if (typedNode.data.unit.type === "laboratory") return "#00662c";
-                    if (typedNode.data.unit.type === "directorate") return "#00454d";
+                    if (typedNode.data.unit.type === "laboratory")
+                      return "#00662c";
+                    if (typedNode.data.unit.type === "directorate")
+                      return "#00454d";
                     return "#dbdcdb";
                   }}
                   maskColor="rgba(0, 69, 77, 0.08)"
@@ -5125,24 +6186,47 @@ function StudioWorkspace() {
             </div>
 
             <div className="canvas-legend" aria-label="Chart legend">
-              <span><i className="legend-dot legend-dot--filled" />Filled</span>
-              <span><i className="legend-dot legend-dot--acting" />Acting</span>
-              <span><i className="legend-dot legend-dot--vacant" />Vacant</span>
+              {chartAppearance === "official" ? <span>Official slide appearance · Select a card for source and review details</span> : <>
+              <span>
+                <i className="legend-dot legend-dot--filled" />
+                Filled
+              </span>
+              <span>
+                <i className="legend-dot legend-dot--acting" />
+                Acting
+              </span>
+              <span>
+                <i className="legend-dot legend-dot--vacant" />
+                Vacant
+              </span>
+              </>}
               {presentationMode === "compact" ? (
                 <>
-                  <span><Rows size={14} aria-hidden="true" /> Terminal assignments are listed inside their parent card</span>
+                  <span>
+                    <Rows size={14} aria-hidden="true" /> Terminal assignments
+                    are listed inside their parent card
+                  </span>
                   <span>
                     <TreeStructure size={14} aria-hidden="true" />
                     {compactLayoutOrientation === "vertical"
                       ? " Lower cards use aligned columns and shared left-entry rails"
                       : " Lower cards use wide hierarchy rows and top-entry connectors"}
                   </span>
-                  <span><SquaresFour size={14} aria-hidden="true" /> Switch to Individual cards to move cards or edit lines</span>
+                  <span>
+                    <SquaresFour size={14} aria-hidden="true" /> Switch to
+                    Individual cards to move cards or edit lines
+                  </span>
                 </>
               ) : (
                 <>
-                  <span><MapPin size={14} weight="fill" aria-hidden="true" /> Dragging pins presentation only</span>
-                  <span><PushPin size={14} aria-hidden="true" /> Click a connector to pin or reset its corners</span>
+                  <span>
+                    <MapPin size={14} weight="fill" aria-hidden="true" />{" "}
+                    Dragging pins presentation only
+                  </span>
+                  <span>
+                    <PushPin size={14} aria-hidden="true" /> Click a connector
+                    to pin or reset its corners
+                  </span>
                   <span>
                     <Selection size={14} aria-hidden="true" />
                     {selectedCardCount > 1
@@ -5162,14 +6246,42 @@ function StudioWorkspace() {
             </div>
           </section>
         ) : workspaceView === "review" ? (
-          <section className="source-review-page" aria-labelledby="source-review-title">
+          <section
+            className="source-review-page"
+            aria-labelledby="source-review-title"
+          >
+            {activeChart ? (
+              <>
+                <SourceChecks
+                  chart={activeChart}
+                  disabled={
+                    activeChartReadOnly ||
+                    saveState !== "saved" ||
+                    !!pendingAiProposal
+                  }
+                  onSaved={acceptSupplementSave}
+                />
+                <SupportPanelsEditor
+                  key={activeChart.id}
+                  chart={activeChart}
+                  disabled={
+                    activeChartReadOnly ||
+                    saveState !== "saved" ||
+                    !!pendingAiProposal
+                  }
+                  onSaved={acceptSupplementSave}
+                />
+              </>
+            ) : null}
             <div className="source-review-heading">
               <div>
                 <span className="eyebrow">Imported data verification</span>
                 <h1 id="source-review-title">Source review queue</h1>
+                {activeChart&&supportReviewCount(activeChart)>0?<p>{supportReviewCount(activeChart)} support-panel review items also remain. Review each role and its source under Edit support panels.</p>:null}
                 <p>
-                  Resolve records marked Needs review in {activeChart?.name ?? "the active chart"}.
-                  Confirm means the record matches the original source; Keep inferred means it is
+                  Resolve records marked Needs review in{" "}
+                  {activeChart?.name ?? "the active chart"}. Confirm means the
+                  record matches the original source; Keep inferred means it is
                   reasonable but not explicit in that source.
                 </p>
               </div>
@@ -5196,7 +6308,10 @@ function StudioWorkspace() {
               </div>
             </div>
 
-            <div className="source-review-metrics" aria-label="Source review progress">
+            <div
+              className="source-review-metrics"
+              aria-label="Source review progress"
+            >
               <div>
                 <span>Cards in this chart</span>
                 <strong>{sourceReviewNodes.length}</strong>
@@ -5215,7 +6330,10 @@ function StudioWorkspace() {
               </div>
             </div>
 
-            <div className={`source-review-save source-review-save--${saveState}`} role="status">
+            <div
+              className={`source-review-save source-review-save--${saveState}`}
+              role="status"
+            >
               <FloppyDisk size={20} aria-hidden="true" />
               <span>
                 <strong>
@@ -5246,11 +6364,13 @@ function StudioWorkspace() {
 
             <div className="source-review-toolbar">
               <div role="group" aria-label="Filter source review queue">
-                {([
-                  ["all", "All"],
-                  ["cards", "Cards"],
-                  ["relationships", "Reporting lines"],
-                ] as const).map(([value, label]) => (
+                {(
+                  [
+                    ["all", "All"],
+                    ["cards", "Cards"],
+                    ["relationships", "Reporting lines"],
+                  ] as const
+                ).map(([value, label]) => (
                   <button
                     key={value}
                     type="button"
@@ -5263,8 +6383,8 @@ function StudioWorkspace() {
                 ))}
               </div>
               <p>
-                Each decision is individual—there is no blanket Confirm all—so imported facts are
-                not approved without being checked.
+                Each decision is individual—there is no blanket Confirm all—so
+                imported facts are not approved without being checked.
               </p>
             </div>
 
@@ -5273,15 +6393,17 @@ function StudioWorkspace() {
                 <ShieldCheck size={32} weight="fill" aria-hidden="true" />
                 <h2>This chart’s review queue is clear</h2>
                 <p>
-                  No cards or reporting lines in {activeChart?.name ?? "this chart"} are marked
-                  Needs review.
+                  No cards or reporting lines in{" "}
+                  {activeChart?.name ?? "this chart"} are marked Needs review.
                 </p>
                 <div className="source-review-empty__actions">
                   {activeChart?.status === "draft" ? (
                     <button
                       type="button"
                       className="button button--primary"
-                      onClick={() => requestLifecycleTransition(activeChart, "in_review")}
+                      onClick={() =>
+                        requestLifecycleTransition(activeChart, "in_review")
+                      }
                       disabled={saveState !== "saved"}
                     >
                       Submit chart for review
@@ -5290,15 +6412,22 @@ function StudioWorkspace() {
                     <button
                       type="button"
                       className="button button--primary"
-                      onClick={() => requestLifecycleTransition(activeChart, "current")}
-                      disabled={saveState !== "saved" || Boolean(blockingFindings.length)}
+                      onClick={() =>
+                        requestLifecycleTransition(activeChart, "current")
+                      }
+                      disabled={
+                        saveState !== "saved" ||
+                        Boolean(blockingFindings.length)
+                      }
                     >
                       Mark chart Current
                     </button>
                   ) : activeChart?.status === "current" ? (
                     <strong>
-                      Current v{activeChart.lifecycle.lastCurrentVersion ?? activeChart.version} is
-                      the approved checkpoint.
+                      Current v
+                      {activeChart.lifecycle.lastCurrentVersion ??
+                        activeChart.version}{" "}
+                      is the Current checkpoint.
                     </strong>
                   ) : null}
                   {hasAnotherChartForSourceReview ? (
@@ -5314,28 +6443,44 @@ function StudioWorkspace() {
                   ) : null}
                 </div>
               </div>
-            ) : visibleSourceReviewNodes.length || visibleSourceReviewEdges.length ? (
+            ) : visibleSourceReviewNodes.length ||
+              visibleSourceReviewEdges.length ? (
               <div className="source-review-list">
                 {visibleSourceReviewNodes.map((flowNode) => {
-                  const parentEdge = edges.find((edge) => edge.target === flowNode.id);
+                  const parentEdge = edges.find(
+                    (edge) => edge.target === flowNode.id,
+                  );
                   return (
-                    <article key={flowNode.id} className="source-review-item">
+                    <article
+                      id={`source-review-${flowNode.id}`}
+                      key={flowNode.id}
+                      className="source-review-item"
+                    >
                       <header>
                         <span className="source-review-item__kind">Card</span>
-                        <span className="source-review-item__status">Needs review</span>
+                        <span className="source-review-item__status">
+                          Needs review
+                        </span>
                         <h2>{flowNode.data.unit.name}</h2>
                         <p>
-                          {flowNode.data.unit.positionTitle} · {flowNode.data.unit.assignmentLabel}
+                          {flowNode.data.unit.positionTitle} ·{" "}
+                          {flowNode.data.unit.assignmentLabel}
                         </p>
                       </header>
                       <dl>
                         <div>
                           <dt>Source note</dt>
-                          <dd>{flowNode.data.unit.source || "No source note supplied"}</dd>
+                          <dd>
+                            {flowNode.data.unit.source ||
+                              "No source note supplied"}
+                          </dd>
                         </div>
                         <div>
                           <dt>Source location</dt>
-                          <dd>{flowNode.data.unit.sourceLocator || "No page, slide, or row supplied"}</dd>
+                          <dd>
+                            {flowNode.data.unit.sourceLocator ||
+                              "No page, slide, or row supplied"}
+                          </dd>
                         </div>
                         {flowNode.data.unit.reviewNote ? (
                           <div>
@@ -5348,7 +6493,9 @@ function StudioWorkspace() {
                         <button
                           type="button"
                           className="button button--primary"
-                          onClick={() => resolveCardSourceReview(flowNode.id, "confirmed")}
+                          onClick={() =>
+                            resolveCardSourceReview(flowNode.id, "confirmed")
+                          }
                         >
                           <Check size={16} weight="bold" aria-hidden="true" />
                           Confirm
@@ -5356,7 +6503,9 @@ function StudioWorkspace() {
                         <button
                           type="button"
                           className="button button--secondary"
-                          onClick={() => resolveCardSourceReview(flowNode.id, "inferred")}
+                          onClick={() =>
+                            resolveCardSourceReview(flowNode.id, "inferred")
+                          }
                         >
                           Keep inferred
                         </button>
@@ -5388,38 +6537,61 @@ function StudioWorkspace() {
                 })}
 
                 {visibleSourceReviewEdges.map((edge) => {
-                  const parent = nodes.find((flowNode) => flowNode.id === edge.source);
-                  const child = nodes.find((flowNode) => flowNode.id === edge.target);
+                  const parent = nodes.find(
+                    (flowNode) => flowNode.id === edge.source,
+                  );
+                  const child = nodes.find(
+                    (flowNode) => flowNode.id === edge.target,
+                  );
                   const sourceNote =
-                    typeof edge.data?.source === "string" ? edge.data.source : "";
+                    typeof edge.data?.source === "string"
+                      ? edge.data.source
+                      : "";
                   const sourceLocator =
                     typeof edge.data?.sourceLocator === "string"
                       ? edge.data.sourceLocator
                       : "";
                   const reviewNote =
-                    typeof edge.data?.reviewNote === "string" ? edge.data.reviewNote : "";
+                    typeof edge.data?.reviewNote === "string"
+                      ? edge.data.reviewNote
+                      : "";
                   return (
-                    <article key={edge.id} className="source-review-item source-review-item--relationship">
+                    <article
+                      key={edge.id}
+                      className="source-review-item source-review-item--relationship"
+                    >
                       <header>
-                        <span className="source-review-item__kind">Reporting line</span>
-                        <span className="source-review-item__status">Needs review</span>
+                        <span className="source-review-item__kind">
+                          Reporting line
+                        </span>
+                        <span className="source-review-item__status">
+                          Needs review
+                        </span>
                         <h2>
                           {parent?.data.unit.shortName ?? edge.source}
                           <span aria-hidden="true"> → </span>
                           {child?.data.unit.shortName ?? edge.target}
                         </h2>
                         <p>
-                          {String(edge.data?.relationshipType ?? "Primary supervisory relationship")}
+                          {String(
+                            edge.data?.relationshipType ??
+                              "Primary supervisory relationship",
+                          )}
                         </p>
                       </header>
                       <dl>
                         <div>
                           <dt>Source note</dt>
-                          <dd>{sourceNote || "No separate relationship source note supplied"}</dd>
+                          <dd>
+                            {sourceNote ||
+                              "No separate relationship source note supplied"}
+                          </dd>
                         </div>
                         <div>
                           <dt>Source location</dt>
-                          <dd>{sourceLocator || "No page, slide, or row supplied"}</dd>
+                          <dd>
+                            {sourceLocator || "No page, slide, or row supplied"}
+                          </dd>
                         </div>
                         {reviewNote ? (
                           <div>
@@ -5432,7 +6604,12 @@ function StudioWorkspace() {
                         <button
                           type="button"
                           className="button button--primary"
-                          onClick={() => resolveRelationshipSourceReview(edge.id, "confirmed")}
+                          onClick={() =>
+                            resolveRelationshipSourceReview(
+                              edge.id,
+                              "confirmed",
+                            )
+                          }
                         >
                           <Check size={16} weight="bold" aria-hidden="true" />
                           Confirm line
@@ -5440,7 +6617,9 @@ function StudioWorkspace() {
                         <button
                           type="button"
                           className="button button--secondary"
-                          onClick={() => resolveRelationshipSourceReview(edge.id, "inferred")}
+                          onClick={() =>
+                            resolveRelationshipSourceReview(edge.id, "inferred")
+                          }
                         >
                           Keep inferred
                         </button>
@@ -5460,7 +6639,10 @@ function StudioWorkspace() {
             ) : (
               <div className="source-review-empty source-review-empty--filtered">
                 <h2>No matching review items</h2>
-                <p>Choose another filter to see the remaining records in this chart.</p>
+                <p>
+                  Choose another filter to see the remaining records in this
+                  chart.
+                </p>
               </div>
             )}
           </section>
@@ -5471,8 +6653,9 @@ function StudioWorkspace() {
                 <span className="eyebrow">Parallel accessible output</span>
                 <h1 id="table-title">Organizational hierarchy table</h1>
                 <p>
-                  A searchable, keyboard-friendly view of the same records. Use it to audit
-                  status, hierarchy, dates, and source confidence, then open a unit in the editor.
+                  A searchable, keyboard-friendly view of the same records. Use
+                  it to audit status, hierarchy, dates, and source confidence,
+                  then open a unit in the editor.
                 </p>
               </div>
               <div className="table-panel__actions">
@@ -5488,17 +6671,23 @@ function StudioWorkspace() {
             </div>
 
             {tableImportWarningCount > 0 ? (
-              <aside className="table-audit-notice" role="note" aria-label="Import review notice">
+              <aside
+                className="table-audit-notice"
+                role="note"
+                aria-label="Import review notice"
+              >
                 <WarningDiamond size={24} weight="fill" aria-hidden="true" />
                 <div>
                   <strong>
-                    {tableImportWarningCount} warning{tableImportWarningCount === 1 ? " was" : "s were"}
+                    {tableImportWarningCount} warning
+                    {tableImportWarningCount === 1 ? " was" : "s were"}
                     {" recorded during import."}
                   </strong>
                   <p>
-                    “Recorded vacant” means the saved chart data says vacant; it is not an HR
-                    vacancy confirmation. Review the current records against their source. Rows
-                    marked Likely import placeholder used fallback text because the import did not
+                    “Recorded vacant” means the saved chart data says vacant; it
+                    is not an HR vacancy confirmation. Review the current
+                    records against their source. Rows marked Likely import
+                    placeholder used fallback text because the import did not
                     separate the unit, position, and person reliably.
                   </p>
                 </div>
@@ -5544,10 +6733,16 @@ function StudioWorkspace() {
               </button>
               <button
                 type="button"
-                className={tableQualityFilter === "import_placeholder" ? "is-active" : ""}
-                onClick={() => setTableQualityFilter(
-                  tableQualityFilter === "import_placeholder" ? "all" : "import_placeholder",
-                )}
+                className={
+                  tableQualityFilter === "import_placeholder" ? "is-active" : ""
+                }
+                onClick={() =>
+                  setTableQualityFilter(
+                    tableQualityFilter === "import_placeholder"
+                      ? "all"
+                      : "import_placeholder",
+                  )
+                }
                 aria-pressed={tableQualityFilter === "import_placeholder"}
               >
                 <strong>{tableCounts.importPlaceholders}</strong>
@@ -5555,7 +6750,11 @@ function StudioWorkspace() {
               </button>
             </div>
 
-            <div className="table-filters" role="group" aria-label="Filter organizational records">
+            <div
+              className="table-filters"
+              role="group"
+              aria-label="Filter organizational records"
+            >
               <label className="table-filters__search">
                 <span>Search records</span>
                 <span className="table-search-input">
@@ -5563,7 +6762,9 @@ function StudioWorkspace() {
                   <input
                     type="search"
                     value={tableSearchQuery}
-                    onChange={(event) => setTableSearchQuery(event.target.value)}
+                    onChange={(event) =>
+                      setTableSearchQuery(event.target.value)
+                    }
                     placeholder="Unit, person, position, parent, or source"
                   />
                 </span>
@@ -5572,27 +6773,34 @@ function StudioWorkspace() {
                 <span>Position status</span>
                 <select
                   value={tablePositionFilter}
-                  onChange={(event) => setTablePositionFilter(
-                    event.target.value as TablePositionFilter,
-                  )}
+                  onChange={(event) =>
+                    setTablePositionFilter(
+                      event.target.value as TablePositionFilter,
+                    )
+                  }
                 >
                   <option value="all">All position statuses</option>
                   <option value="filled">Filled</option>
                   <option value="acting">Acting</option>
                   <option value="vacant">Recorded vacant</option>
+                  <option value="not_specified">Not specified in source</option>
                 </select>
               </label>
               <label>
                 <span>Unit type</span>
                 <select
                   value={tableUnitTypeFilter}
-                  onChange={(event) => setTableUnitTypeFilter(
-                    event.target.value as TableUnitTypeFilter,
-                  )}
+                  onChange={(event) =>
+                    setTableUnitTypeFilter(
+                      event.target.value as TableUnitTypeFilter,
+                    )
+                  }
                 >
                   <option value="all">All unit types</option>
                   {tableUnitTypes.map((unitType) => (
-                    <option key={unitType} value={unitType}>{formatUnitType(unitType)}</option>
+                    <option key={unitType} value={unitType}>
+                      {formatUnitType(unitType)}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -5600,7 +6808,9 @@ function StudioWorkspace() {
                 <span>Effective state</span>
                 <select
                   value={planningFilter}
-                  onChange={(event) => setPlanningFilter(event.target.value as PlanningFilter)}
+                  onChange={(event) =>
+                    setPlanningFilter(event.target.value as PlanningFilter)
+                  }
                 >
                   <option value="all">In effect and planned</option>
                   <option value="current">In effect now</option>
@@ -5611,9 +6821,11 @@ function StudioWorkspace() {
                 <span>Source confidence</span>
                 <select
                   value={tableSourceFilter}
-                  onChange={(event) => setTableSourceFilter(
-                    event.target.value as TableSourceFilter,
-                  )}
+                  onChange={(event) =>
+                    setTableSourceFilter(
+                      event.target.value as TableSourceFilter,
+                    )
+                  }
                 >
                   <option value="all">All source confidence</option>
                   <option value="confirmed">Source label confirmed</option>
@@ -5625,12 +6837,16 @@ function StudioWorkspace() {
                 <span>Data quality</span>
                 <select
                   value={tableQualityFilter}
-                  onChange={(event) => setTableQualityFilter(
-                    event.target.value as TableQualityFilter,
-                  )}
+                  onChange={(event) =>
+                    setTableQualityFilter(
+                      event.target.value as TableQualityFilter,
+                    )
+                  }
                 >
                   <option value="all">All records</option>
-                  <option value="import_placeholder">Likely import placeholders</option>
+                  <option value="import_placeholder">
+                    Likely import placeholders
+                  </option>
                   <option value="missing_date">Source date not supplied</option>
                 </select>
               </label>
@@ -5644,15 +6860,20 @@ function StudioWorkspace() {
               </button>
             </div>
 
-            <div className="table-results-summary" role="status" aria-live="polite">
-              <strong>{accessibleTableNodes.length}</strong> of {nodes.length} records shown
+            <div
+              className="table-results-summary"
+              role="status"
+              aria-live="polite"
+            >
+              <strong>{accessibleTableNodes.length}</strong> of {nodes.length}{" "}
+              records shown
               {hasActiveTableFilters ? " with the current filters" : ""}.
             </div>
             <div className="data-table-wrap">
               <table>
                 <caption className="sr-only">
-                  {activeChart?.name ?? "Current chart"} organizational units, semantic parents,
-                  positions, assignments, and statuses
+                  {activeChart?.name ?? "Current chart"} organizational units,
+                  semantic parents, positions, assignments, and statuses
                 </caption>
                 <thead>
                   <tr>
@@ -5671,10 +6892,15 @@ function StudioWorkspace() {
                 <tbody>
                   {accessibleTableNodes.map((flowNode) => {
                     const parentId = tableParentByNodeId.get(flowNode.id);
-                    const parent = parentId ? tableNodeById.get(parentId) : undefined;
+                    const parent = parentId
+                      ? tableNodeById.get(parentId)
+                      : undefined;
                     const placeholder = isLikelyImportPlaceholder(flowNode);
                     return (
-                      <tr key={flowNode.id} className={placeholder ? "has-import-placeholder" : ""}>
+                      <tr
+                        key={flowNode.id}
+                        className={placeholder ? "has-import-placeholder" : ""}
+                      >
                         <th scope="row">
                           <button
                             type="button"
@@ -5690,7 +6916,9 @@ function StudioWorkspace() {
                         <td>{flowNode.data.unit.positionTitle}</td>
                         <td>{flowNode.data.unit.assignmentLabel}</td>
                         <td>
-                          <span className={`table-status status--${flowNode.data.unit.positionStatus}`}>
+                          <span
+                            className={`table-status status--${flowNode.data.unit.positionStatus}`}
+                          >
                             <i className="status-marker" aria-hidden="true" />
                             {flowNode.data.unit.positionStatus === "vacant"
                               ? "Recorded vacant"
@@ -5698,12 +6926,18 @@ function StudioWorkspace() {
                           </span>
                         </td>
                         <td>
-                          <span className={`table-review-cue ${placeholder ? "is-warning" : ""}`}>
+                          <span
+                            className={`table-review-cue ${placeholder ? "is-warning" : ""}`}
+                          >
                             {tableReviewCue(flowNode)}
                           </span>
                         </td>
                         <td>{flowNode.data.unit.effectiveDate}</td>
-                        <td>{planningStateForNode(flowNode) === "planned" ? "Planned" : "In effect"}</td>
+                        <td>
+                          {planningStateForNode(flowNode) === "planned"
+                            ? "Planned"
+                            : "In effect"}
+                        </td>
                         <td>
                           {tableSourceCertainty(flowNode) === "needs_review"
                             ? "Needs review"
@@ -5721,21 +6955,118 @@ function StudioWorkspace() {
                     <tr>
                       <td colSpan={10} className="table-empty-state">
                         <strong>No records match these filters.</strong>
-                        <button type="button" onClick={clearTableFilters}>Clear filters</button>
+                        <button type="button" onClick={clearTableFilters}>
+                          Clear filters
+                        </button>
                       </td>
                     </tr>
                   ) : null}
                 </tbody>
               </table>
             </div>
+            {activeChart?.supportPanels?.length ? (
+              <section
+                className="support-accessible-table"
+                aria-label="Support assignments"
+              >
+                <h2>Support assignments</h2>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Panel / supported organization</th>
+                      <th>Role</th>
+                      <th>Person</th>
+                      <th>Source / review</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeChart.supportPanels.flatMap((p) =>
+                      p.entries.map((e) => (
+                        <tr key={e.id}>
+                          <td>
+                            {p.title} ·{" "}
+                            {
+                              nodes.find((n) => n.id === p.anchorUnitId)?.data
+                                .unit.name
+                            }
+                          </td>
+                          <td>{e.role}</td>
+                          <td>{e.person || "Not specified"}</td>
+                          <td>
+                            {e.sourceLocator || p.sourceLocator} ·{" "}
+                            {e.sourceCertainty.replaceAll("_", " ")}
+                          </td>
+                        </tr>
+                      )),
+                    )}
+                  </tbody>
+                </table>
+              </section>
+            ) : null}
           </section>
+        ) : workspaceView === "monthly" ? (
+          <MonthlyWorkspace
+            charts={charts}
+            saveState={saveState}
+            onOpen={(id) => {
+              const chart = charts.find((c) => c.id === id);
+              if (chart) openChart(chart);
+            }}
+            onMarkCurrent={(chart) =>
+              requestLifecycleTransition(chart, "current")
+            }
+            onRefresh={async () => {
+              const response = await fetch("/api/charts", {
+                cache: "no-store",
+              });
+              if (!response.ok)
+                throw Error("The library could not be refreshed.");
+              const data = (await response.json()) as ChartLibraryResponse;
+              hydratedChartRef.current = null;
+              setCharts(data.charts);
+              const updated = data.charts.find((c) => c.id === activeChartId);
+              if (updated) {
+                setNodes(updated.nodes);
+                setEdges(updated.edges);
+                setSaveState("saved");
+                window.requestAnimationFrame(() => {
+                  hydratedChartRef.current = updated.id;
+                });
+              }
+            }}
+          />
+        ) : workspaceView === "consistency" ? (
+          <PortfolioReview
+            charts={charts}
+            onOpen={(id, nodeId, view) => {
+              const chart = charts.find((c) => c.id === id);
+              if (!chart) return;
+              if (saveState !== "saved") {
+                setNotice("Wait for Saved before opening another review.");
+                return;
+              }
+              openChart(chart, view ?? "review");
+              if (nodeId) {
+                setSelectedId(nodeId);
+                if (view === "review")
+                  window.requestAnimationFrame(() =>
+                    document
+                      .getElementById(`source-review-${nodeId}`)
+                      ?.scrollIntoView({ block: "center" }),
+                  );
+              }
+            }}
+          />
         ) : workspaceView === "library" ? (
           <section className="library-panel" aria-labelledby="library-title">
             <div className="library-heading">
               <div>
                 <span className="eyebrow">Governed chart portfolio</span>
                 <h1 id="library-title">Organizational chart library</h1>
-                <p>Manage each chart as a separate versioned data document with its own sources and layout.</p>
+                <p>
+                  Manage each chart as a separate versioned data document with
+                  its own sources and layout.
+                </p>
               </div>
               <div className="library-heading__actions">
                 <button
@@ -5746,7 +7077,11 @@ function StudioWorkspace() {
                   <FileArrowUp size={17} aria-hidden="true" />
                   Import chart
                 </button>
-                <button type="button" className="button button--primary" onClick={requestCreateChart}>
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={requestCreateChart}
+                >
                   <Plus size={17} weight="bold" aria-hidden="true" />
                   New chart
                 </button>
@@ -5754,22 +7089,54 @@ function StudioWorkspace() {
             </div>
 
             <div className="library-metrics" aria-label="Chart library summary">
-              <div><span>Total charts</span><strong>{charts.length}</strong></div>
-              <div><span>Drafts</span><strong>{charts.filter((chart) => chart.status === "draft").length}</strong></div>
-              <div><span>In review</span><strong>{charts.filter((chart) => chart.status === "in_review").length}</strong></div>
-              <div><span>Current</span><strong>{charts.filter((chart) => chart.status === "current").length}</strong></div>
-              <div><span>Archived</span><strong>{charts.filter((chart) => chart.status === "archived").length}</strong></div>
+              <div>
+                <span>Total charts</span>
+                <strong>{charts.length}</strong>
+              </div>
+              <div>
+                <span>Drafts</span>
+                <strong>
+                  {charts.filter((chart) => chart.status === "draft").length}
+                </strong>
+              </div>
+              <div>
+                <span>In review</span>
+                <strong>
+                  {
+                    charts.filter((chart) => chart.status === "in_review")
+                      .length
+                  }
+                </strong>
+              </div>
+              <div>
+                <span>Current</span>
+                <strong>
+                  {charts.filter((chart) => chart.status === "current").length}
+                </strong>
+              </div>
+              <div>
+                <span>Archived</span>
+                <strong>
+                  {charts.filter((chart) => chart.status === "archived").length}
+                </strong>
+              </div>
             </div>
 
-            <div className="library-status-filter" role="group" aria-label="Filter chart lifecycle">
-              {([
-                ["active", "Active"],
-                ["draft", "Draft"],
-                ["in_review", "In review"],
-                ["current", "Current"],
-                ["archived", "Archived"],
-                ["all", "All"],
-              ] as const).map(([value, label]) => (
+            <div
+              className="library-status-filter"
+              role="group"
+              aria-label="Filter chart lifecycle"
+            >
+              {(
+                [
+                  ["active", "Active"],
+                  ["draft", "Draft"],
+                  ["in_review", "In review"],
+                  ["current", "Current"],
+                  ["archived", "Archived"],
+                  ["all", "All"],
+                ] as const
+              ).map(([value, label]) => (
                 <button
                   key={value}
                   type="button"
@@ -5780,11 +7147,47 @@ function StudioWorkspace() {
                   {label}
                 </button>
               ))}
-              <p>Chart lifecycle is authoritative; names and descriptions do not determine whether a chart is Current.</p>
+              <p>
+                Chart lifecycle is authoritative; names and descriptions do not
+                determine whether a chart is Current.
+              </p>
             </div>
 
+            <div
+              className="library-view-controls"
+              role="group"
+              aria-label="Chart library view"
+            >
+              <button
+                type="button"
+                aria-pressed={libraryView === "flat"}
+                disabled={!libraryViewReady}
+                onClick={() => void chooseLibraryView("flat")}
+              >
+                Flat list
+              </button>
+              <button
+                type="button"
+                aria-pressed={libraryView === "tree"}
+                disabled={!libraryViewReady}
+                onClick={() => void chooseLibraryView("tree")}
+              >
+                Organization tree
+              </button>
+            </div>
             {libraryLoading ? (
-              <div className="library-empty" role="status">Loading chart library…</div>
+              <div className="library-empty" role="status">
+                Loading chart library…
+              </div>
+            ) : libraryView === "tree" ? (
+              <LibraryTree
+                charts={treeCharts}
+                query={searchQuery}
+                onOpen={openChart}
+                onPlace={(chart, parent) =>
+                  void updateChartMetadata(chart, { libraryParentId: parent })
+                }
+              />
             ) : visibleLibraryCharts.length ? (
               <div className="chart-card-grid">
                 {visibleLibraryCharts.map((chart) => (
@@ -5794,7 +7197,9 @@ function StudioWorkspace() {
                   >
                     <div className="chart-card__top">
                       <label className="chart-status-control">
-                        <span className="sr-only">Chart lifecycle for {chart.name}</span>
+                        <span className="sr-only">
+                          Chart lifecycle for {chart.name}
+                        </span>
                         <select
                           value={chart.status}
                           onChange={(event) =>
@@ -5806,8 +7211,21 @@ function StudioWorkspace() {
                           aria-label={`Chart lifecycle for ${chart.name}`}
                         >
                           <option value="draft">Draft</option>
-                          <option value="in_review" disabled={chart.status !== "draft" && chart.status !== "in_review"}>In review</option>
-                          <option value="current" disabled={chart.status !== "in_review" && chart.status !== "current"}>Current</option>
+                          <option
+                            value="in_review"
+                            disabled={
+                              chart.status !== "draft" &&
+                              chart.status !== "in_review"
+                            }
+                          >
+                            In review
+                          </option>
+                          <option
+                            value="current"
+                            disabled={chart.status === "archived"}
+                          >
+                            Current
+                          </option>
                           <option value="archived">Archived</option>
                         </select>
                       </label>
@@ -5816,22 +7234,46 @@ function StudioWorkspace() {
                     <h2>{chart.name}</h2>
                     <p>{chart.description}</p>
                     <dl>
-                      <div><dt>Units</dt><dd>{chart.nodes.length}</dd></div>
-                      <div><dt>Relationships</dt><dd>{chart.edges.length}</dd></div>
-                      <div><dt>Sources</dt><dd>{chart.sources.length}</dd></div>
+                      <div>
+                        <dt>Units</dt>
+                        <dd>{chart.nodes.length}</dd>
+                      </div>
+                      <div>
+                        <dt>Relationships</dt>
+                        <dd>{chart.edges.length}</dd>
+                      </div>
+                      <div>
+                        <dt>Sources</dt>
+                        <dd>{chart.sources.length}</dd>
+                      </div>
                     </dl>
                     <div className="chart-card__updated">
-                      <span>Updated {new Date(chart.updatedAt).toLocaleDateString()}</span>
-                      <span>Lifecycle changed {new Date(chart.lifecycle.statusChangedAt).toLocaleDateString()}</span>
+                      <span>
+                        Updated {new Date(chart.updatedAt).toLocaleDateString()}
+                      </span>
+                      <span>
+                        Lifecycle changed{" "}
+                        {new Date(
+                          chart.lifecycle.statusChangedAt,
+                        ).toLocaleDateString()}
+                      </span>
                       <span>{chartStatusDescriptions[chart.status]}</span>
                       {chart.lifecycle.lastCurrentAt ? (
                         <>
                           <span>
-                            Last Current checkpoint: v{chart.lifecycle.lastCurrentVersion ?? chart.version}
-                            {chart.lifecycle.lastCurrentBy ? ` · ${chart.lifecycle.lastCurrentBy}` : ""}
+                            Last Current checkpoint: v
+                            {chart.lifecycle.lastCurrentVersion ??
+                              chart.version}
+                            {chart.lifecycle.lastCurrentBy
+                              ? ` · ${chart.lifecycle.lastCurrentBy}`
+                              : ""}
                             {` · ${new Date(chart.lifecycle.lastCurrentAt).toLocaleDateString()}`}
                           </span>
-                          {chart.lifecycle.lastCurrentNote ? <span>Approval note: {chart.lifecycle.lastCurrentNote}</span> : null}
+                          {chart.lifecycle.lastCurrentNote ? (
+                            <span>
+                              Approval note: {chart.lifecycle.lastCurrentNote}
+                            </span>
+                          ) : null}
                         </>
                       ) : null}
                     </div>
@@ -5841,7 +7283,8 @@ function StudioWorkspace() {
                         className="button button--primary"
                         onClick={() => openChart(chart)}
                       >
-                        <FolderOpen size={16} aria-hidden="true" />{chart.status === "archived" ? "View" : "Open"}
+                        <FolderOpen size={16} aria-hidden="true" />
+                        {chart.status === "archived" ? "View" : "Open"}
                       </button>
                       <button
                         type="button"
@@ -5867,7 +7310,9 @@ function StudioWorkspace() {
                           <button
                             type="button"
                             className="button button--secondary"
-                            onClick={() => requestLifecycleTransition(chart, "draft")}
+                            onClick={() =>
+                              requestLifecycleTransition(chart, "draft")
+                            }
                           >
                             Restore as draft
                           </button>
@@ -5877,7 +7322,10 @@ function StudioWorkspace() {
                             onClick={() => {
                               setDeleteChartError("");
                               setDeleteChartConfirmation("");
-                              setDeleteChartDialog({ chartId: chart.id, chartName: chart.name });
+                              setDeleteChartDialog({
+                                chartId: chart.id,
+                                chartName: chart.name,
+                              });
                             }}
                             aria-label={`Permanently delete ${chart.name}`}
                             title="Permanently delete archived chart, versions, and stored sources"
@@ -5893,8 +7341,16 @@ function StudioWorkspace() {
             ) : (
               <div className="library-empty">
                 <FolderOpen size={30} aria-hidden="true" />
-                <h2>{charts.length ? "No charts match this lifecycle filter" : "No organizational charts yet"}</h2>
-                <p>{charts.length ? "Choose another lifecycle filter to see more charts." : "Create a blank chart or import a structured source file."}</p>
+                <h2>
+                  {charts.length
+                    ? "No charts match this lifecycle filter"
+                    : "No organizational charts yet"}
+                </h2>
+                <p>
+                  {charts.length
+                    ? "Choose another lifecycle filter to see more charts."
+                    : "Create a blank chart or import a structured source file."}
+                </p>
               </div>
             )}
           </section>
@@ -5905,8 +7361,8 @@ function StudioWorkspace() {
                 <span className="eyebrow">Versioned publication output</span>
                 <h1 id="export-title">Publish and export</h1>
                 <p>
-                  Choose the intended audience, then create every format from the same
-                  chart data, layout, and version metadata.
+                  Choose the intended audience, then create every format from
+                  the same chart data, layout, and version metadata.
                 </p>
               </div>
               <button
@@ -5914,7 +7370,8 @@ function StudioWorkspace() {
                 className="button button--secondary"
                 onClick={() => setWorkspaceView("canvas")}
               >
-                <SquaresFour size={17} aria-hidden="true" />Return to editor
+                <SquaresFour size={17} aria-hidden="true" />
+                Return to editor
               </button>
             </div>
 
@@ -5923,10 +7380,24 @@ function StudioWorkspace() {
                 <span>Active chart</span>
                 <strong>{activeChart?.name ?? "No chart selected"}</strong>
               </div>
-              <div><span>Saved version</span><strong>v{activeChart?.version ?? 0}</strong></div>
-              <div><span>Chart lifecycle</span><strong>{activeChart ? chartStatusLabels[activeChart.status] : "None"}</strong></div>
-              <div><span>All units</span><strong>{nodes.length}</strong></div>
-              <div><span>Public units</span><strong>{publicUnitCount}</strong></div>
+              <div>
+                <span>Saved version</span>
+                <strong>v{activeChart?.version ?? 0}</strong>
+              </div>
+              <div>
+                <span>Chart lifecycle</span>
+                <strong>
+                  {activeChart ? chartStatusLabels[activeChart.status] : "None"}
+                </strong>
+              </div>
+              <div>
+                <span>All units</span>
+                <strong>{nodes.length}</strong>
+              </div>
+              <div>
+                <span>Public units</span>
+                <strong>{publicUnitCount}</strong>
+              </div>
               <div>
                 <span>Presentation</span>
                 <strong>
@@ -5939,7 +7410,11 @@ function StudioWorkspace() {
 
             <fieldset className="audience-profiles">
               <legend>Audience profile</legend>
-              <label className={effectiveExportAudience === "internal" ? "is-selected" : ""}>
+              <label
+                className={
+                  effectiveExportAudience === "internal" ? "is-selected" : ""
+                }
+              >
                 <input
                   type="radio"
                   name="export-audience"
@@ -5949,12 +7424,22 @@ function StudioWorkspace() {
                 />
                 <ShieldCheck size={22} aria-hidden="true" />
                 <span>
-                  <strong>{activeChart?.status === "current" ? "Internal current record" : "Internal working copy"}</strong>
-                  <small>Includes every unit and the current assignment labels.</small>
+                  <strong>
+                    {activeChart?.status === "current"
+                      ? "Internal current record"
+                      : "Internal working copy"}
+                  </strong>
+                  <small>
+                    Includes every unit and the current assignment labels.
+                  </small>
                 </span>
                 <b>{nodes.length} units</b>
               </label>
-              <label className={effectiveExportAudience === "public" ? "is-selected" : ""}>
+              <label
+                className={
+                  effectiveExportAudience === "public" ? "is-selected" : ""
+                }
+              >
                 <input
                   type="radio"
                   name="export-audience"
@@ -5967,8 +7452,8 @@ function StudioWorkspace() {
                 <span>
                   <strong>Public-safe draft</strong>
                   <small>
-                    Includes only public-marked units and replaces assignment labels with
-                    position status.
+                    Includes only public-marked units and replaces assignment
+                    labels with position status.
                   </small>
                 </span>
                 <b>{publicUnitCount} units</b>
@@ -6000,9 +7485,15 @@ function StudioWorkspace() {
             </fieldset>
 
             {exportProfileError ? (
-              <div className="publication-warning publication-warning--blocking" role="alert">
+              <div
+                className="publication-warning publication-warning--blocking"
+                role="alert"
+              >
                 <WarningDiamond size={20} aria-hidden="true" />
-                <p><strong>Audience profile needs attention.</strong> {exportProfileError}</p>
+                <p>
+                  <strong>Audience profile needs attention.</strong>{" "}
+                  {exportProfileError}
+                </p>
               </div>
             ) : null}
 
@@ -6010,27 +7501,52 @@ function StudioWorkspace() {
               <div className="publication-warning" role="status">
                 <WarningDiamond size={20} aria-hidden="true" />
                 <p>
-                  <strong>{chartStatusLabels[activeChart.status]} chart.</strong> Export remains available, but every visual file and table will be marked {chartStatusLabels[activeChart.status]}. Only Current means approved and authoritative.
+                  <strong>
+                    {chartStatusLabels[activeChart.status]} chart.
+                  </strong>{" "}
+                  Export remains available, but every visual file and table will
+                  be marked {chartStatusLabels[activeChart.status]}. Current
+                  identifies the designated working version; source review notes
+                  can remain.
                 </p>
               </div>
             ) : activeChart?.lifecycle.lastCurrentAt ? (
-              <div className="publication-warning publication-warning--current" role="status">
+              <div
+                className="publication-warning publication-warning--current"
+                role="status"
+              >
                 <ShieldCheck size={20} aria-hidden="true" />
                 <p>
-                  <strong>Current checkpoint v{activeChart.lifecycle.lastCurrentVersion ?? activeChart.version}.</strong> Marked Current by {activeChart.lifecycle.lastCurrentBy || "the accountable reviewer"} on {new Date(activeChart.lifecycle.lastCurrentAt).toLocaleDateString()}.
+                  <strong>
+                    Current checkpoint v
+                    {activeChart.lifecycle.lastCurrentVersion ??
+                      activeChart.version}
+                    .
+                  </strong>{" "}
+                  Marked Current by{" "}
+                  {activeChart.lifecycle.lastCurrentBy ||
+                    "the accountable reviewer"}{" "}
+                  on{" "}
+                  {new Date(
+                    activeChart.lifecycle.lastCurrentAt,
+                  ).toLocaleDateString()}
+                  .
                 </p>
               </div>
             ) : null}
 
-            {exportPreset !== "natural" && exportCardWidth > 0 && exportCardWidth < 110 ? (
+            {exportPreset !== "natural" &&
+            exportCardWidth > 0 &&
+            exportCardWidth < 110 ? (
               <div className="publication-warning" role="status">
                 <WarningDiamond size={20} aria-hidden="true" />
                 <p>
-                  <strong>Small-card warning.</strong> Fitting the whole hierarchy to this
-                  profile reduces cards to about {Math.round(exportCardWidth)} pixels wide.
-                  Visual exports preserve the editor&apos;s card and text proportions, so use
-                  natural bounds, a larger profile, or export a smaller branch for readable
-                  detail.
+                  <strong>Small-card warning.</strong> Fitting the whole
+                  hierarchy to this profile reduces cards to about{" "}
+                  {Math.round(exportCardWidth)} pixels wide. Visual exports
+                  preserve the editor&apos;s card and text proportions, so use
+                  natural bounds, a larger profile, or export a smaller branch
+                  for readable detail.
                 </p>
               </div>
             ) : null}
@@ -6039,9 +7555,11 @@ function StudioWorkspace() {
               <div className="publication-warning" role="status">
                 <ShieldWarning size={20} aria-hidden="true" />
                 <p>
-                  <strong>Approval still required.</strong> This filter is a technical aid,
-                  not a publication clearance. {nodes.length - publicUnitCount} unit
-                  {nodes.length - publicUnitCount === 1 ? " is" : "s are"} excluded.
+                  <strong>Approval still required.</strong> This filter is a
+                  technical aid, not a publication clearance.{" "}
+                  {nodes.length - publicUnitCount} unit
+                  {nodes.length - publicUnitCount === 1 ? " is" : "s are"}{" "}
+                  excluded.
                 </p>
               </div>
             ) : null}
@@ -6049,24 +7567,38 @@ function StudioWorkspace() {
             <div className="export-format-grid">
               <article>
                 <DownloadSimple size={26} aria-hidden="true" />
-                <div><span>Scalable vector</span><h2>SVG</h2><p>Best for web, design tools, and lossless resizing.</p></div>
+                <div>
+                  <span>Scalable vector</span>
+                  <h2>SVG</h2>
+                  <p>Best for web, design tools, and lossless resizing.</p>
+                </div>
                 <button
                   type="button"
                   className="button button--primary"
                   onClick={() => void exportChart("svg")}
-                  disabled={exportBusy !== null || blockingFindings.length > 0 || Boolean(exportProfileError)}
+                  disabled={
+                    exportBusy !== null ||
+                    blockingFindings.length > 0 ||
+                    Boolean(exportProfileError)
+                  }
                 >
                   {exportBusy === "svg" ? "Creating…" : "Download SVG"}
                 </button>
               </article>
               <article>
                 <DownloadSimple size={26} aria-hidden="true" />
-                <div><span>High-resolution image</span><h2>PNG</h2><p>Convenient for email, documents, and previews.</p></div>
+                <div>
+                  <span>High-resolution image</span>
+                  <h2>PNG</h2>
+                  <p>Convenient for email, documents, and previews.</p>
+                </div>
                 <div className="export-format-actions">
                   <label aria-label="PNG resolution scale">
                     <select
                       value={pngScale}
-                      onChange={(event) => setPngScale(Number(event.target.value) as 1 | 2 | 4)}
+                      onChange={(event) =>
+                        setPngScale(Number(event.target.value) as 1 | 2 | 4)
+                      }
                       aria-label="PNG resolution scale"
                     >
                       <option value={1}>1× web</option>
@@ -6078,7 +7610,11 @@ function StudioWorkspace() {
                     type="button"
                     className="button button--primary"
                     onClick={() => void exportChart("png")}
-                    disabled={exportBusy !== null || blockingFindings.length > 0 || Boolean(exportProfileError)}
+                    disabled={
+                      exportBusy !== null ||
+                      blockingFindings.length > 0 ||
+                      Boolean(exportProfileError)
+                    }
                   >
                     {exportBusy === "png" ? "Creating…" : "Download PNG"}
                   </button>
@@ -6086,36 +7622,66 @@ function StudioWorkspace() {
               </article>
               <article>
                 <FilePdf size={26} aria-hidden="true" />
-                <div><span>Vector document</span><h2>PDF</h2><p>Preserves searchable text and chart metadata.</p></div>
+                <div>
+                  <span>Vector document</span>
+                  <h2>PDF</h2>
+                  <p>Preserves searchable text and chart metadata.</p>
+                </div>
                 <button
                   type="button"
                   className="button button--primary"
                   onClick={() => void exportChart("pdf")}
-                  disabled={exportBusy !== null || blockingFindings.length > 0 || Boolean(exportProfileError)}
+                  disabled={
+                    exportBusy !== null ||
+                    blockingFindings.length > 0 ||
+                    Boolean(exportProfileError)
+                  }
                 >
                   {exportBusy === "pdf" ? "Creating…" : "Download PDF"}
                 </button>
               </article>
               <article>
                 <FilePpt size={26} aria-hidden="true" />
-                <div><span>Editable presentation</span><h2>PowerPoint</h2><p>Matches editor proportions; each card, connector, and text block remains editable.</p></div>
+                <div>
+                  <span>Editable presentation</span>
+                  <h2>PowerPoint</h2>
+                  <p>
+                    Matches editor proportions; each card, connector, and text
+                    block remains editable.
+                  </p>
+                </div>
                 <button
                   type="button"
                   className="button button--primary"
                   onClick={() => void exportChart("pptx")}
-                  disabled={exportBusy !== null || blockingFindings.length > 0 || Boolean(exportProfileError)}
+                  disabled={
+                    exportBusy !== null ||
+                    blockingFindings.length > 0 ||
+                    Boolean(exportProfileError)
+                  }
                 >
                   {exportBusy === "pptx" ? "Creating…" : "Download PPTX"}
                 </button>
               </article>
               <article>
                 <Table size={26} aria-hidden="true" />
-                <div><span>Parallel accessible output</span><h2>CSV table</h2><p>Provides the same hierarchy as a structured, screen-reader-friendly table.</p></div>
+                <div>
+                  <span>Parallel accessible output</span>
+                  <h2>CSV table</h2>
+                  <p>
+                    Provides the same hierarchy as a structured,
+                    screen-reader-friendly table.
+                  </p>
+                </div>
                 <button
                   type="button"
                   className="button button--primary"
                   onClick={exportAccessibleTable}
-                  disabled={exportBusy !== null || blockingFindings.length > 0 || Boolean(exportProfileError)}
+                  disabled={
+                    exportBusy !== null ||
+                    blockingFindings.length > 0 ||
+                    Boolean(exportProfileError)
+                  }
                 >
                   Download table
                 </button>
@@ -6123,21 +7689,29 @@ function StudioWorkspace() {
             </div>
 
             {blockingFindings.length ? (
-              <div className="publication-warning publication-warning--blocking" role="alert">
+              <div
+                className="publication-warning publication-warning--blocking"
+                role="alert"
+              >
                 <WarningDiamond size={20} aria-hidden="true" />
-                <p><strong>Export paused.</strong> Resolve the blocking hierarchy findings in the editor first.</p>
+                <p>
+                  <strong>Export paused.</strong> Resolve the blocking hierarchy
+                  findings in the editor first.
+                </p>
               </div>
             ) : null}
           </section>
         ) : workspaceView === "history" ? (
           <section className="history-panel" aria-labelledby="history-title">
+            <EditHistoryPanel history={durableHistory} disabled={historyUnavailable} onNotice={setNotice} />
+            <HistoryTimeline charts={charts} initialQuery={searchQuery} />
             <div className="history-heading">
               <div>
                 <span className="eyebrow">Immutable working checkpoints</span>
                 <h1 id="history-title">Version and change history</h1>
                 <p>
-                  Save a named checkpoint, compare it with the working draft, or restore it
-                  as a new version without deleting history.
+                  Save a named checkpoint, compare it with the working draft, or
+                  restore it as a new version without deleting history.
                 </p>
               </div>
               <button
@@ -6152,11 +7726,15 @@ function StudioWorkspace() {
 
             <div className="version-save-card">
               <div>
-                <span className="eyebrow">{activeChart ? `${chartStatusLabels[activeChart.status]} working record` : "No working record"}</span>
+                <span className="eyebrow">
+                  {activeChart
+                    ? `${chartStatusLabels[activeChart.status]} working record`
+                    : "No working record"}
+                </span>
                 <h2>{activeChart?.name ?? "No active chart"}</h2>
                 <p>
                   {activeChart?.status === "current"
-                    ? "This Current chart already points to its approved immutable checkpoint. Editing it will begin a Draft."
+                    ? "This Current chart already points to its designated immutable checkpoint. Editing it will begin a Draft."
                     : activeChart?.status === "archived"
                       ? "Archived charts are read-only. Restore a saved version to begin a new Draft without deleting history."
                       : "Autosave protects the open working chart. A named version creates an immutable comparison and recovery point."}
@@ -6166,7 +7744,10 @@ function StudioWorkspace() {
                 <span>Change summary</span>
                 <input
                   value={versionSummary}
-                  disabled={activeChart?.status === "current" || activeChart?.status === "archived"}
+                  disabled={
+                    activeChart?.status === "current" ||
+                    activeChart?.status === "archived"
+                  }
                   maxLength={160}
                   onChange={(event) => setVersionSummary(event.target.value)}
                   placeholder="Example: Updated division leadership and reporting lines"
@@ -6176,15 +7757,25 @@ function StudioWorkspace() {
                 type="button"
                 className="button button--primary"
                 onClick={() => void saveVersionSnapshot()}
-                disabled={historyBusy !== null || !activeChart || blockingFindings.length > 0 || activeChart.status === "current" || activeChart.status === "archived"}
+                disabled={
+                  historyBusy !== null ||
+                  !activeChart ||
+                  blockingFindings.length > 0 ||
+                  activeChart.status === "current" ||
+                  activeChart.status === "archived"
+                }
               >
                 <FloppyDisk size={17} aria-hidden="true" />
-                {historyBusy === "save" ? "Saving version…" : "Save named version"}
+                {historyBusy === "save"
+                  ? "Saving version…"
+                  : "Save named version"}
               </button>
             </div>
 
             {historyBusy === "load" && !versions.length ? (
-              <div className="history-empty" role="status">Loading saved versions…</div>
+              <div className="history-empty" role="status">
+                Loading saved versions…
+              </div>
             ) : versions.length ? (
               <div className="history-layout">
                 <div className="version-list" aria-label="Saved chart versions">
@@ -6206,7 +7797,9 @@ function StudioWorkspace() {
                         />
                         <span>
                           <strong>Version {versionItem.version}</strong>
-                          <small>{new Date(versionItem.createdAt).toLocaleString()}</small>
+                          <small>
+                            {new Date(versionItem.createdAt).toLocaleString()}
+                          </small>
                         </span>
                       </label>
                       <p>{versionItem.label}</p>
@@ -6231,13 +7824,29 @@ function StudioWorkspace() {
                 <div className="version-comparison" aria-live="polite">
                   {compareVersion && versionComparison ? (
                     <>
-                      <span className="eyebrow">Working chart compared with saved version</span>
-                      <h2>{activeChart ? chartStatusLabels[activeChart.status] : "Working chart"} vs. version {compareVersion.version}</h2>
+                      <span className="eyebrow">
+                        Working chart compared with saved version
+                      </span>
+                      <h2>
+                        {activeChart
+                          ? chartStatusLabels[activeChart.status]
+                          : "Working chart"}{" "}
+                        vs. version {compareVersion.version}
+                      </h2>
                       <p>{compareVersion.label}</p>
                       <div className="comparison-metrics">
-                        <div><span>Added</span><strong>{versionComparison.added.length}</strong></div>
-                        <div><span>Changed</span><strong>{versionComparison.changed.length}</strong></div>
-                        <div><span>Removed</span><strong>{versionComparison.removed.length}</strong></div>
+                        <div>
+                          <span>Added</span>
+                          <strong>{versionComparison.added.length}</strong>
+                        </div>
+                        <div>
+                          <span>Changed</span>
+                          <strong>{versionComparison.changed.length}</strong>
+                        </div>
+                        <div>
+                          <span>Removed</span>
+                          <strong>{versionComparison.removed.length}</strong>
+                        </div>
                       </div>
                       <ul>
                         {[
@@ -6256,13 +7865,19 @@ function StudioWorkspace() {
                             type: "Removed",
                             name: flowNode.data.unit.shortName,
                           })),
-                        ].slice(0, 20).map((item) => (
-                          <li key={item.id}>
-                            <span>{item.type}</span><strong>{item.name}</strong>
-                          </li>
-                        ))}
+                        ]
+                          .slice(0, 20)
+                          .map((item) => (
+                            <li key={item.id}>
+                              <span>{item.type}</span>
+                              <strong>{item.name}</strong>
+                            </li>
+                          ))}
                       </ul>
-                      {!versionComparison.added.length &&
+                      {versionComparison.supportChanged?<p>Support panels or assignments differ from this version.</p>:null}
+                      {versionComparison.layoutChanged?<p>Captured source arrangement or connectors differ from this version.</p>:null}
+                      {activeChart?<SupplementHistoryDetails chart={{...activeChart,...compareVersion,id:activeChart.id,supportPanels:compareVersion.supportPanels??[],sourceChecks:compareVersion.sourceChecks??[],sourceLayout:compareVersion.sourceLayout}}/>:null}
+                      {!versionComparison.supportChanged&&!versionComparison.layoutChanged&&!versionComparison.added.length &&
                       !versionComparison.changed.length &&
                       !versionComparison.removed.length ? (
                         <div className="comparison-empty">
@@ -6272,7 +7887,8 @@ function StudioWorkspace() {
                     </>
                   ) : (
                     <div className="comparison-empty">
-                      Select a saved version to compare it with the working draft.
+                      Select a saved version to compare it with the working
+                      draft.
                     </div>
                   )}
                 </div>
@@ -6283,27 +7899,48 @@ function StudioWorkspace() {
               </div>
             )}
 
-            <section className="ai-activity-timeline" aria-labelledby="ai-activity-history-title">
+            <section
+              className="ai-activity-timeline"
+              aria-labelledby="ai-activity-history-title"
+            >
               <div className="ai-activity-timeline__heading">
                 <div>
-                  <span className="eyebrow">Human-reviewed local AI activity</span>
-                  <h2 id="ai-activity-history-title">AI-assisted change timeline</h2>
+                  <span className="eyebrow">
+                    Human-reviewed local AI activity
+                  </span>
+                  <h2 id="ai-activity-history-title">
+                    AI-assisted change timeline
+                  </h2>
                 </div>
                 <p>
-                  Records Apply or Reject decisions. Accepted activity links to the next
-                  named version saved for this chart.
+                  Records Apply or Reject decisions. Accepted activity links to
+                  the next named version saved for this chart.
                 </p>
               </div>
               {aiActivities.length ? (
                 <ol>
                   {aiActivities.map((activity) => (
-                    <li key={activity.id} className={`ai-activity-event is-${activity.status}`}>
-                      <span className="ai-activity-event__marker" aria-hidden="true">
-                        {activity.status === "accepted" ? <Check size={15} weight="bold" /> : <X size={15} weight="bold" />}
+                    <li
+                      key={activity.id}
+                      className={`ai-activity-event is-${activity.status}`}
+                    >
+                      <span
+                        className="ai-activity-event__marker"
+                        aria-hidden="true"
+                      >
+                        {activity.status === "accepted" ? (
+                          <Check size={15} weight="bold" />
+                        ) : (
+                          <X size={15} weight="bold" />
+                        )}
                       </span>
                       <div>
                         <div className="ai-activity-event__meta">
-                          <strong>{activity.status === "accepted" ? "Applied" : "Rejected"}</strong>
+                          <strong>
+                            {activity.status === "accepted"
+                              ? "Applied"
+                              : "Rejected"}
+                          </strong>
                           <time dateTime={activity.createdAt}>
                             {new Date(activity.createdAt).toLocaleString()}
                           </time>
@@ -6322,45 +7959,63 @@ function StudioWorkspace() {
                 </ol>
               ) : (
                 <div className="history-empty">
-                  No AI-assisted proposals have been applied or rejected for this chart.
+                  No AI-assisted proposals have been applied or rejected for
+                  this chart.
                 </div>
               )}
             </section>
           </section>
         ) : workspaceView === "ai" ? (
-          <section className="ai-control-panel" aria-labelledby="ai-control-title">
+          <section
+            className="ai-control-panel"
+            aria-labelledby="ai-control-title"
+          >
             <div className="ai-control-heading">
               <div>
                 <span className="eyebrow">Local MCP governance</span>
                 <h1 id="ai-control-title">Local AI control center</h1>
                 <p>
-                  Pause tool access, limit complete chart reads and writes to selected
-                  charts, and review the bounded local access receipt. Prompts are not stored.
+                  Pause tool access, limit complete chart reads and writes to
+                  selected charts, and review the bounded local access receipt.
+                  Prompts are not stored.
                 </p>
               </div>
               <button
                 type="button"
-                className={mcpControl?.paused ? "button button--primary" : "button button--danger"}
-                onClick={() => void updateMcpControl({ paused: !mcpControl?.paused })}
+                className={
+                  mcpControl?.paused
+                    ? "button button--primary"
+                    : "button button--danger"
+                }
+                onClick={() =>
+                  void updateMcpControl({ paused: !mcpControl?.paused })
+                }
                 disabled={mcpControlBusy}
               >
                 <Robot size={17} aria-hidden="true" />
-                {mcpControl?.paused ? "Resume local AI access" : "Pause local AI access"}
+                {mcpControl?.paused
+                  ? "Resume local AI access"
+                  : "Pause local AI access"}
               </button>
             </div>
 
             {storageMode === "desktop" ? (
-              <section className="ai-integration-card" aria-labelledby="ai-integration-title">
+              <section
+                className="ai-integration-card"
+                aria-labelledby="ai-integration-title"
+              >
                 <div>
                   <span className="eyebrow">Desktop connection</span>
                   <h2 id="ai-integration-title">ChatGPT Desktop and Codex</h2>
                   <p>
-                    Install this private local connection once, then restart your AI app.
-                    OrgChart Studio must be open before you ask AI to read or propose a change.
+                    Install this private local connection once, then restart
+                    your AI app. OrgChart Studio must be open before you ask AI
+                    to read or propose a change.
                   </p>
                   <p className="ai-integration-card__privacy">
-                    Chart data stays in the storage folder you chose. Source extraction remains
-                    off unless you enable it for the running session.
+                    Chart data stays in the storage folder you chose. Source
+                    extraction is enabled by default; your access preferences
+                    are remembered.
                   </p>
                 </div>
                 <div className="ai-integration-card__actions">
@@ -6412,11 +8067,19 @@ function StudioWorkspace() {
               </div>
               <div>
                 <span>Chart scope</span>
-                <strong>{mcpControl?.chartScope === "selected" ? "Selected charts" : "All on request"}</strong>
+                <strong>
+                  {mcpControl?.chartScope === "selected"
+                    ? "Selected charts"
+                    : "All on request"}
+                </strong>
               </div>
               <div>
                 <span>Allowed charts</span>
-                <strong>{mcpControl?.chartScope === "selected" ? mcpControl.allowedChartIds.length : charts.length}</strong>
+                <strong>
+                  {mcpControl?.chartScope === "selected"
+                    ? mcpControl.allowedChartIds.length
+                    : charts.length}
+                </strong>
               </div>
               <div>
                 <span>Session receipts</span>
@@ -6424,23 +8087,30 @@ function StudioWorkspace() {
               </div>
               <div>
                 <span>Retained sources</span>
-                <strong>{mcpControl?.sourceAccessEnabled ? "Enabled" : "Off"}</strong>
+                <strong>
+                  {mcpControl?.sourceAccessEnabled ? "Enabled" : "Off"}
+                </strong>
               </div>
             </div>
 
             <div className="ai-control-layout">
               <fieldset className="ai-control-scope">
-                <legend>Chart access for this running app session</legend>
+                <legend>Chart access</legend>
                 <label>
                   <input
                     type="radio"
                     name="mcp-chart-scope"
                     checked={(mcpControl?.chartScope ?? "all") === "all"}
-                    onChange={() => void updateMcpControl({ chartScope: "all" })}
+                    onChange={() =>
+                      void updateMcpControl({ chartScope: "all" })
+                    }
                   />
                   <span>
                     <strong>All charts when explicitly requested</strong>
-                    <small>Chart contents still enter the AI conversation only when a read tool is called.</small>
+                    <small>
+                      Chart contents still enter the AI conversation only when a
+                      read tool is called.
+                    </small>
                   </span>
                 </label>
                 <label>
@@ -6448,11 +8118,16 @@ function StudioWorkspace() {
                     type="radio"
                     name="mcp-chart-scope"
                     checked={mcpControl?.chartScope === "selected"}
-                    onChange={() => void updateMcpControl({ chartScope: "selected" })}
+                    onChange={() =>
+                      void updateMcpControl({ chartScope: "selected" })
+                    }
                   />
                   <span>
                     <strong>Selected charts only</strong>
-                    <small>Other complete chart reads and chart-specific writes are blocked locally.</small>
+                    <small>
+                      Other complete chart reads and chart-specific writes are
+                      blocked locally.
+                    </small>
                   </span>
                 </label>
                 {mcpControl?.chartScope === "selected" ? (
@@ -6461,11 +8136,15 @@ function StudioWorkspace() {
                       <label key={chart.id}>
                         <input
                           type="checkbox"
-                          checked={mcpControl.allowedChartIds.includes(chart.id)}
+                          checked={mcpControl.allowedChartIds.includes(
+                            chart.id,
+                          )}
                           onChange={(event) => {
                             const allowedChartIds = event.target.checked
                               ? [...mcpControl.allowedChartIds, chart.id]
-                              : mcpControl.allowedChartIds.filter((id) => id !== chart.id);
+                              : mcpControl.allowedChartIds.filter(
+                                  (id) => id !== chart.id,
+                                );
                             void updateMcpControl({ allowedChartIds });
                           }}
                         />
@@ -6477,31 +8156,43 @@ function StudioWorkspace() {
                 <label>
                   <input
                     type="checkbox"
-                    checked={mcpControl?.sourceAccessEnabled ?? false}
+                    checked={mcpControl?.sourceAccessEnabled ?? true}
                     onChange={(event) =>
-                      void updateMcpControl({ sourceAccessEnabled: event.target.checked })
+                      void updateMcpControl({
+                        sourceAccessEnabled: event.target.checked,
+                      })
                     }
                   />
                   <span>
-                    <strong>Allow retained-source extraction for this session</strong>
+                    <strong>Allow retained-source extraction</strong>
                     <small>
-                      Off by default. When enabled and explicitly requested, MCP may return
-                      locally extracted text, spreadsheet cells, PowerPoint shape geometry,
-                      and connector metadata to the AI conversation. Raw files are never returned.
+                      Enabled by default. Your preference is remembered. When
+                      explicitly requested, MCP may return locally extracted
+                      text, spreadsheet cells, PowerPoint shape geometry, and
+                      connector metadata to the AI conversation. Raw files are
+                      never returned.
                     </small>
                   </span>
                 </label>
               </fieldset>
 
-              <section className="ai-control-receipts" aria-labelledby="ai-control-receipts-title">
+              <section
+                className="ai-control-receipts"
+                aria-labelledby="ai-control-receipts-title"
+              >
                 <div>
                   <div>
                     <span className="eyebrow">This app session</span>
                     <h2 id="ai-control-receipts-title">MCP access receipts</h2>
                   </div>
                   <div className="ai-control-receipt-actions">
-                    <button type="button" className="button button--secondary" onClick={() => void loadMcpControl()}>
-                      <ArrowClockwise size={16} aria-hidden="true" />Refresh
+                    <button
+                      type="button"
+                      className="button button--secondary"
+                      onClick={() => void loadMcpControl()}
+                    >
+                      <ArrowClockwise size={16} aria-hidden="true" />
+                      Refresh
                     </button>
                     <button
                       type="button"
@@ -6514,7 +8205,8 @@ function StudioWorkspace() {
                           body: JSON.stringify({ action: "clear_events" }),
                         });
                         if (response.ok) {
-                          const data = (await response.json()) as McpControlResponse;
+                          const data =
+                            (await response.json()) as McpControlResponse;
                           setMcpControl(data.control);
                         }
                       }}
@@ -6527,415 +8219,673 @@ function StudioWorkspace() {
                   <div className="data-table-wrap">
                     <table>
                       <thead>
-                        <tr><th scope="col">Tool</th><th scope="col">Mode</th><th scope="col">Chart</th><th scope="col">Result</th><th scope="col">Time</th></tr>
+                        <tr>
+                          <th scope="col">Tool</th>
+                          <th scope="col">Mode</th>
+                          <th scope="col">Chart</th>
+                          <th scope="col">Result</th>
+                          <th scope="col">Time</th>
+                        </tr>
                       </thead>
                       <tbody>
                         {mcpControl.events.map((event) => (
                           <tr key={event.id}>
-                            <th scope="row"><code>{event.toolName}</code></th>
+                            <th scope="row">
+                              <code>{event.toolName}</code>
+                            </th>
                             <td>{event.mode}</td>
-                            <td>{charts.find((chart) => chart.id === event.chartId)?.name ?? event.chartId ?? "Library"}</td>
+                            <td>
+                              {charts.find(
+                                (chart) => chart.id === event.chartId,
+                              )?.name ??
+                                event.chartId ??
+                                "Library"}
+                            </td>
                             <td>{event.allowed ? "Allowed" : "Blocked"}</td>
-                            <td>{new Date(event.createdAt).toLocaleTimeString()}</td>
+                            <td>
+                              {new Date(event.createdAt).toLocaleTimeString()}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
                 ) : (
-                  <div className="history-empty">No MCP tools have requested access during this app session.</div>
+                  <div className="history-empty">
+                    No MCP tools have requested access during this app session.
+                  </div>
                 )}
               </section>
             </div>
           </section>
         ) : (
           <section
-            className={workspaceView === "backups" ? "backup-panel" : "sources-panel"}
-            aria-labelledby={workspaceView === "backups" ? "backup-title" : "sources-title"}
+            className={
+              workspaceView === "backups" ? "backup-panel" : "sources-panel"
+            }
+            aria-labelledby={
+              workspaceView === "backups" ? "backup-title" : "sources-title"
+            }
           >
             {workspaceView === "sources" ? (
               <>
-            <div className="sources-heading">
-              <div>
-                <span className="eyebrow">Source-controlled intake</span>
-                <h1 id="sources-title">Sources and imports</h1>
-                <p>Preserve the original, normalize its data, validate the hierarchy, and keep the mapping reviewable.</p>
-              </div>
-              <div className="sources-heading__actions">
-                <button
-                  type="button"
-                  className="button button--secondary"
-                  onClick={() =>
-                    downloadTextFile(
-                      aiIntakeBrief(),
-                      "orgchart-studio-ai-normalization-brief.md",
-                      "text/markdown",
-                    )
-                  }
-                >
-                  <Robot size={17} aria-hidden="true" />AI normalization brief
-                </button>
-                <button
-                  type="button"
-                  className="button button--secondary"
-                  onClick={() =>
-                    downloadTextFile(importTemplateCsv(), "orgchart-import-template.csv", "text/csv")
-                  }
-                >
-                  <DownloadSimple size={17} aria-hidden="true" />CSV template
-                </button>
-                <button
-                  type="button"
-                  className="button button--secondary"
-                  onClick={downloadSourceManifest}
-                  disabled={!activeChart}
-                >
-                  <DownloadSimple size={17} aria-hidden="true" />Source manifest
-                </button>
-              </div>
-            </div>
-
-            <section className="source-intake-card" aria-labelledby="source-intake-title">
-              <div className="source-intake-card__heading">
-                <div>
-                  <span className="eyebrow">Local evidence first</span>
-                  <h2 id="source-intake-title">Source intake bundles</h2>
-                  <p>
-                    Retain unchanged originals locally before normalization. ChatGPT receives
-                    a file only when you separately attach that cleared file to its conversation;
-                    MCP sees intake names, checksums, and file metadata—not file bytes.
-                  </p>
-                </div>
-                <span>{importIntakes.filter((intake) => intake.status === "pending").length} pending</span>
-              </div>
-              <div className="source-intake-create">
-                <label className="field-stack">
-                  <span>Intake name</span>
-                  <input
-                    value={intakeName}
-                    onChange={(event) => setIntakeName(event.target.value)}
-                    placeholder="Example: Communications Division legacy sources"
-                  />
-                </label>
-                <label className="evidence-picker">
-                  <FilePpt size={22} aria-hidden="true" />
-                  <span>
-                    <strong>{intakeFiles.length ? `${intakeFiles.length} original file${intakeFiles.length === 1 ? "" : "s"}` : "Choose original source files"}</strong>
-                    <small>{intakeFiles.length ? intakeFiles.map((file) => file.name).join(" · ") : "PowerPoint, Word, PDF, image, CSV, or Excel · retained locally"}</small>
-                  </span>
-                  <input
-                    key={intakeFiles.map((file) => file.name).join("|") || "empty-intake"}
-                    type="file"
-                    multiple
-                    accept=".pptx,.docx,.pdf,.png,.jpg,.jpeg,.csv,.xlsx"
-                    onChange={(event) => setIntakeFiles(Array.from(event.target.files ?? []).slice(0, 10))}
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="button button--primary"
-                  disabled={intakeBusy || !intakeName.trim() || !intakeFiles.length}
-                  onClick={() => void createImportIntake()}
-                >
-                  <FileLock size={17} aria-hidden="true" />
-                  {intakeBusy ? "Retaining sources…" : "Create local intake"}
-                </button>
-              </div>
-              {importIntakes.length ? (
-                <div className="source-intake-list">
-                  {importIntakes.map((intake) => (
-                    <article key={intake.id} className={intake.status === "pending" ? "is-pending" : "is-imported"}>
-                      <div>
-                        <strong>{intake.name}</strong>
-                        <span>{intake.files.map((file) => file.fileName).join(" · ")}</span>
-                      </div>
-                      <span>{intake.status === "pending" ? "Ready for AI or manual import" : "Linked to imported chart"}</span>
-                      {intake.status === "pending" ? (
-                        <button
-                          type="button"
-                          className="icon-button icon-button--danger"
-                          onClick={() => void discardImportIntake(intake)}
-                          aria-label={`Discard source intake ${intake.name}`}
-                        >
-                          <Trash size={16} aria-hidden="true" />
-                        </button>
-                      ) : null}
-                    </article>
-                  ))}
-                </div>
-              ) : null}
-            </section>
-
-            <div className="sources-layout">
-              <div className="import-card">
-                <div className="import-card__heading">
-                  <FileArrowUp size={24} aria-hidden="true" />
-                  <div><h2>Import a structured chart</h2><p>Creates a new draft chart; it does not overwrite the active chart.</p></div>
-                </div>
-                <label className="field-stack">
-                  <span>Chart name</span>
-                  <input
-                    type="text"
-                    value={importName}
-                    onChange={(event) => {
-                      setImportName(event.target.value);
-                      setImportPreview(null);
-                      setImportReviewed(false);
-                    }}
-                    placeholder="Example Directorate — Current"
-                  />
-                </label>
-                <label className="field-stack">
-                  <span>Retained source intake <small>(optional)</small></span>
-                  <select
-                    value={importIntakeId}
-                    onChange={(event) => {
-                      setImportIntakeId(event.target.value);
-                      setImportPreview(null);
-                      setImportReviewed(false);
-                    }}
-                  >
-                    <option value="">No pre-staged intake</option>
-                    {importIntakes
-                      .filter((intake) => intake.status === "pending")
-                      .map((intake) => (
-                        <option key={intake.id} value={intake.id}>
-                          {intake.name} · {intake.files.length} file{intake.files.length === 1 ? "" : "s"}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                <label className="file-drop">
-                  <FileCsv size={30} aria-hidden="true" />
-                  <strong>{importFile?.name ?? "Choose normalized CSV, staff roster, JSON, or Excel data"}</strong>
-                  <span>Maximum 5 MB · roster CSVs map Full Name to Supervisor Full Name · original stored with SHA-256 checksum</span>
-                  <input
-                    key={importFile?.name ?? "empty-file"}
-                    type="file"
-                    accept=".csv,.json,.xlsx,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    onChange={(event) => {
-                      setImportFile(event.target.files?.[0] ?? null);
-                      setImportPreview(null);
-                      setImportReviewed(false);
-                    }}
-                  />
-                </label>
-                <label className="evidence-picker">
-                  <FilePpt size={22} aria-hidden="true" />
-                  <span>
-                    <strong>
-                      {importEvidenceFiles.length
-                        ? `${importEvidenceFiles.length} reference file${importEvidenceFiles.length === 1 ? "" : "s"} selected`
-                        : "Attach original PowerPoint, Word, PDF, image, CSV, or Excel references (optional)"}
-                    </strong>
-                    <small>
-                      {importEvidenceFiles.length
-                        ? importEvidenceFiles.map((file) => file.name).join(" · ")
-                        : "Up to 10 files · 20 MB each · 25 MB combined intake · retained beside the structured data"}
-                    </small>
-                  </span>
-                  <input
-                    key={importEvidenceFiles.map((file) => file.name).join("|") || "empty-evidence"}
-                    type="file"
-                    multiple
-                    accept=".pptx,.docx,.pdf,.png,.jpg,.jpeg,.csv,.xlsx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    onChange={(event) => {
-                      setImportEvidenceFiles(Array.from(event.target.files ?? []).slice(0, 10));
-                      setImportPreview(null);
-                      setImportReviewed(false);
-                    }}
-                  />
-                </label>
-                <div className="import-actions">
-                  <span>Required: name and one hierarchy root. Staff rosters and Excel files can generate stable IDs and map common columns.</span>
-                  <button
-                    type="button"
-                    className="button button--primary"
-                    disabled={importBusy || !importFile || !importName.trim()}
-                    onClick={() => void validateImport()}
-                  >
-                    <FileArrowUp size={17} aria-hidden="true" />
-                    {importBusy ? "Validating…" : "Validate for review"}
-                  </button>
-                </div>
-
-                {importFindings.length ? (
-                  <div className="import-findings" aria-live="polite">
-                    <h3>Validation findings</h3>
-                    <ul>
-                      {importFindings.map((finding, index) => (
-                        <li key={`${finding.code}-${index}`} className={`finding--${finding.severity}`}>
-                          <WarningDiamond size={16} aria-hidden="true" />
-                          <span><strong>{finding.code}</strong>{finding.message}</span>
-                        </li>
-                      ))}
-                    </ul>
+                <div className="sources-heading">
+                  <div>
+                    <span className="eyebrow">Source-controlled intake</span>
+                    <h1 id="sources-title">Sources and imports</h1>
+                    <p>
+                      Preserve the original, normalize its data, validate the
+                      hierarchy, and keep the mapping reviewable.
+                    </p>
                   </div>
-                ) : null}
+                  <div className="sources-heading__actions">
+                    <button
+                      type="button"
+                      className="button button--secondary"
+                      onClick={() =>
+                        downloadTextFile(
+                          aiIntakeBrief(),
+                          "orgchart-studio-ai-normalization-brief.md",
+                          "text/markdown",
+                        )
+                      }
+                    >
+                      <Robot size={17} aria-hidden="true" />
+                      AI normalization brief
+                    </button>
+                    <button
+                      type="button"
+                      className="button button--secondary"
+                      onClick={() =>
+                        downloadTextFile(
+                          importTemplateCsv(),
+                          "orgchart-import-template.csv",
+                          "text/csv",
+                        )
+                      }
+                    >
+                      <DownloadSimple size={17} aria-hidden="true" />
+                      CSV template
+                    </button>
+                    <button
+                      type="button"
+                      className="button button--secondary"
+                      onClick={downloadSourceManifest}
+                      disabled={!activeChart}
+                    >
+                      <DownloadSimple size={17} aria-hidden="true" />
+                      Source manifest
+                    </button>
+                  </div>
+                </div>
 
-                {importPreview ? (
-                  <div className="import-review" aria-live="polite">
-                    <div className="import-review__heading">
-                      <div>
-                        <span className="eyebrow">Human confirmation required</span>
-                        <h3>Review normalized hierarchy</h3>
-                        <p>
-                          {importPreview.rowCount} units and {importPreview.edges.length} primary relationships will create a new draft.
-                        </p>
-                      </div>
-                      <ShieldCheck size={24} aria-hidden="true" />
-                    </div>
-                    <div className="import-review__table">
-                      <table>
-                        <thead>
-                          <tr><th scope="col">Unit</th><th scope="col">Parent</th><th scope="col">Status</th></tr>
-                        </thead>
-                        <tbody>
-                          {importPreview.nodes.slice(0, 16).map((flowNode) => {
-                            const parentEdge = importPreview.edges.find(
-                              (edge) => edge.target === flowNode.id,
-                            );
-                            const parent = importPreview.nodes.find(
-                              (candidate) => candidate.id === parentEdge?.source,
-                            );
-                            return (
-                              <tr key={flowNode.id}>
-                                <th scope="row">{flowNode.data.unit.name}</th>
-                                <td>{parent?.data.unit.shortName ?? "Root"}</td>
-                                <td>{statusLabels[flowNode.data.unit.positionStatus]}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                    {importPreview.nodes.length > 16 ? (
-                      <p className="import-review__remainder">
-                        {importPreview.nodes.length - 16} additional units passed the same validation.
+                <section
+                  className="source-intake-card"
+                  aria-labelledby="source-intake-title"
+                >
+                  <div className="source-intake-card__heading">
+                    <div>
+                      <span className="eyebrow">Local evidence first</span>
+                      <h2 id="source-intake-title">Source intake bundles</h2>
+                      <p>
+                        Retain unchanged originals locally before normalization.
+                        ChatGPT receives a file only when you separately attach
+                        that cleared file to its conversation; MCP sees intake
+                        names, checksums, and file metadata—not file bytes.
                       </p>
-                    ) : null}
-                    <label className="review-confirmation">
+                    </div>
+                    <span>
+                      {
+                        importIntakes.filter(
+                          (intake) => intake.status === "pending",
+                        ).length
+                      }{" "}
+                      pending
+                    </span>
+                  </div>
+                  <div className="source-intake-create">
+                    <label className="field-stack">
+                      <span>Intake name</span>
                       <input
-                        type="checkbox"
-                        checked={importReviewed}
-                        onChange={(event) => setImportReviewed(event.target.checked)}
+                        value={intakeName}
+                        onChange={(event) => setIntakeName(event.target.value)}
+                        placeholder="Example: Communications Division legacy sources"
                       />
-                      <span>I reviewed the unit names, primary parents, statuses, and attached source evidence.</span>
+                    </label>
+                    <label className="evidence-picker">
+                      <FilePpt size={22} aria-hidden="true" />
+                      <span>
+                        <strong>
+                          {intakeFiles.length
+                            ? `${intakeFiles.length} original file${intakeFiles.length === 1 ? "" : "s"}`
+                            : "Choose original source files"}
+                        </strong>
+                        <small>
+                          {intakeFiles.length
+                            ? intakeFiles.map((file) => file.name).join(" · ")
+                            : "PowerPoint, Word, PDF, image, CSV, or Excel · retained locally"}
+                        </small>
+                      </span>
+                      <input
+                        key={
+                          intakeFiles.map((file) => file.name).join("|") ||
+                          "empty-intake"
+                        }
+                        type="file"
+                        multiple
+                        accept=".pptx,.docx,.pdf,.png,.jpg,.jpeg,.csv,.xlsx"
+                        onChange={(event) =>
+                          setIntakeFiles(
+                            Array.from(event.target.files ?? []).slice(0, 10),
+                          )
+                        }
+                      />
                     </label>
                     <button
                       type="button"
-                      className="button button--primary button--full"
-                      disabled={importBusy || !importReviewed}
-                      onClick={() => void importChart()}
+                      className="button button--primary"
+                      disabled={
+                        intakeBusy || !intakeName.trim() || !intakeFiles.length
+                      }
+                      onClick={() => void createImportIntake()}
                     >
-                      <Check size={17} aria-hidden="true" />
-                      {importBusy ? "Creating draft…" : "Confirm and create draft chart"}
+                      <FileLock size={17} aria-hidden="true" />
+                      {intakeBusy
+                        ? "Retaining sources…"
+                        : "Create local intake"}
                     </button>
                   </div>
-                ) : null}
-              </div>
+                  {importIntakes.length ? (
+                    <div className="source-intake-list">
+                      {importIntakes.map((intake) => (
+                        <article
+                          key={intake.id}
+                          className={
+                            intake.status === "pending"
+                              ? "is-pending"
+                              : "is-imported"
+                          }
+                        >
+                          <div>
+                            <strong>{intake.name}</strong>
+                            <span>
+                              {intake.files
+                                .map((file) => file.fileName)
+                                .join(" · ")}
+                            </span>
+                          </div>
+                          <span>
+                            {intake.status === "pending"
+                              ? "Ready for AI or manual import"
+                              : "Linked to imported chart"}
+                          </span>
+                          {intake.status === "pending" ? (
+                            <button
+                              type="button"
+                              className="icon-button icon-button--danger"
+                              onClick={() => void discardImportIntake(intake)}
+                              aria-label={`Discard source intake ${intake.name}`}
+                            >
+                              <Trash size={16} aria-hidden="true" />
+                            </button>
+                          ) : null}
+                        </article>
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
 
-              <div className="source-methods">
-                <h2>Existing-chart intake path</h2>
-                <p>Different source formats need different confidence and review controls.</p>
-                <article className="source-method source-method--ready">
-                  <FileCsv size={24} aria-hidden="true" />
-                  <div><span>Direct structured import</span><h3>Canonical CSV, staff roster, or JSON</h3><p>Map unit fields or staff supervisors, validate the hierarchy, then create a draft.</p></div>
-                  <strong>Ready</strong>
-                </article>
-                <article className="source-method source-method--ready">
-                  <Table size={24} aria-hidden="true" />
-                  <div><span>Mapped structured import</span><h3>Excel workbook</h3><p>Reads the first worksheet, maps common headers, generates missing stable IDs, and validates the hierarchy.</p></div>
-                  <strong>Ready</strong>
-                </article>
-                <article className="source-method source-method--ready">
-                  <FilePpt size={24} aria-hidden="true" />
-                  <div><span>Mixed-source evidence set</span><h3>PowerPoint and Word</h3><p>Attach several original references beside one reviewed roster, CSV, Excel file, or canonical JSON import.</p></div>
-                  <strong>Ready</strong>
-                </article>
-                <article className="source-method source-method--ready">
-                  <FilePdf size={24} aria-hidden="true" />
-                  <div><span>AI-assisted guided extraction</span><h3>PDF or image</h3><p>Normalize only in an approved AI environment, validate the JSON, and require human confirmation before import.</p></div>
-                  <strong>Ready</strong>
-                </article>
-              </div>
-            </div>
+                <div className="sources-layout">
+                  <div className="import-card">
+                    <div className="import-card__heading">
+                      <FileArrowUp size={24} aria-hidden="true" />
+                      <div>
+                        <h2>Import a structured chart</h2>
+                        <p>
+                          Creates a new draft chart; it does not overwrite the
+                          active chart.
+                        </p>
+                      </div>
+                    </div>
+                    <label className="field-stack">
+                      <span>Chart name</span>
+                      <input
+                        type="text"
+                        value={importName}
+                        onChange={(event) => {
+                          setImportName(event.target.value);
+                          setImportPreview(null);
+                          setImportReviewed(false);
+                        }}
+                        placeholder="Example Directorate — Current"
+                      />
+                    </label>
+                    <label className="field-stack">
+                      <span>
+                        Retained source intake <small>(optional)</small>
+                      </span>
+                      <select
+                        value={importIntakeId}
+                        onChange={(event) => {
+                          setImportIntakeId(event.target.value);
+                          setImportPreview(null);
+                          setImportReviewed(false);
+                        }}
+                      >
+                        <option value="">No pre-staged intake</option>
+                        {importIntakes
+                          .filter((intake) => intake.status === "pending")
+                          .map((intake) => (
+                            <option key={intake.id} value={intake.id}>
+                              {intake.name} · {intake.files.length} file
+                              {intake.files.length === 1 ? "" : "s"}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label className="file-drop">
+                      <FileCsv size={30} aria-hidden="true" />
+                      <strong>
+                        {importFile?.name ??
+                          "Choose normalized CSV, staff roster, JSON, or Excel data"}
+                      </strong>
+                      <span>
+                        Maximum 5 MB · roster CSVs map Full Name to Supervisor
+                        Full Name · original stored with SHA-256 checksum
+                      </span>
+                      <input
+                        key={importFile?.name ?? "empty-file"}
+                        type="file"
+                        accept=".csv,.json,.xlsx,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        onChange={(event) => {
+                          setImportFile(event.target.files?.[0] ?? null);
+                          setImportPreview(null);
+                          setImportReviewed(false);
+                        }}
+                      />
+                    </label>
+                    <label className="evidence-picker">
+                      <FilePpt size={22} aria-hidden="true" />
+                      <span>
+                        <strong>
+                          {importEvidenceFiles.length
+                            ? `${importEvidenceFiles.length} reference file${importEvidenceFiles.length === 1 ? "" : "s"} selected`
+                            : "Attach original PowerPoint, Word, PDF, image, CSV, or Excel references (optional)"}
+                        </strong>
+                        <small>
+                          {importEvidenceFiles.length
+                            ? importEvidenceFiles
+                                .map((file) => file.name)
+                                .join(" · ")
+                            : "Up to 10 files · 20 MB each · 25 MB combined intake · retained beside the structured data"}
+                        </small>
+                      </span>
+                      <input
+                        key={
+                          importEvidenceFiles
+                            .map((file) => file.name)
+                            .join("|") || "empty-evidence"
+                        }
+                        type="file"
+                        multiple
+                        accept=".pptx,.docx,.pdf,.png,.jpg,.jpeg,.csv,.xlsx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        onChange={(event) => {
+                          setImportEvidenceFiles(
+                            Array.from(event.target.files ?? []).slice(0, 10),
+                          );
+                          setImportPreview(null);
+                          setImportReviewed(false);
+                        }}
+                      />
+                    </label>
+                    <div className="import-actions">
+                      <span>
+                        Required: name and one hierarchy root. Staff rosters and
+                        Excel files can generate stable IDs and map common
+                        columns.
+                      </span>
+                      <button
+                        type="button"
+                        className="button button--primary"
+                        disabled={
+                          importBusy || !importFile || !importName.trim()
+                        }
+                        onClick={() => void validateImport()}
+                      >
+                        <FileArrowUp size={17} aria-hidden="true" />
+                        {importBusy ? "Validating…" : "Validate for review"}
+                      </button>
+                    </div>
 
-            <div className="governance-grid">
-              <section className="quality-report" aria-labelledby="quality-report-title">
-                <div className="quality-report__heading">
-                  <div>
-                    <span className="eyebrow">Import and maintenance audit</span>
-                    <h2 id="quality-report-title">Chart quality report</h2>
+                    {importFindings.length ? (
+                      <div className="import-findings" aria-live="polite">
+                        <h3>Validation findings</h3>
+                        <ul>
+                          {importFindings.map((finding, index) => (
+                            <li
+                              key={`${finding.code}-${index}`}
+                              className={`finding--${finding.severity}`}
+                            >
+                              <WarningDiamond size={16} aria-hidden="true" />
+                              <span>
+                                <strong>{finding.code}</strong>
+                                {finding.message}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
+                    {importPreview ? (
+                      <div className="import-review" aria-live="polite">
+                        <div className="import-review__heading">
+                          <div>
+                            <span className="eyebrow">
+                              Human confirmation required
+                            </span>
+                            <h3>Review normalized hierarchy</h3>
+                            <p>
+                              {importPreview.rowCount} units and{" "}
+                              {importPreview.edges.length} primary relationships
+                              will create a new draft.
+                            </p>
+                          </div>
+                          <ShieldCheck size={24} aria-hidden="true" />
+                        </div>
+                        <div className="import-review__table">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th scope="col">Unit</th>
+                                <th scope="col">Parent</th>
+                                <th scope="col">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {importPreview.nodes
+                                .slice(0, 16)
+                                .map((flowNode) => {
+                                  const parentEdge = importPreview.edges.find(
+                                    (edge) => edge.target === flowNode.id,
+                                  );
+                                  const parent = importPreview.nodes.find(
+                                    (candidate) =>
+                                      candidate.id === parentEdge?.source,
+                                  );
+                                  return (
+                                    <tr key={flowNode.id}>
+                                      <th scope="row">
+                                        {flowNode.data.unit.name}
+                                      </th>
+                                      <td>
+                                        {parent?.data.unit.shortName ?? "Root"}
+                                      </td>
+                                      <td>
+                                        {
+                                          statusLabels[
+                                            flowNode.data.unit.positionStatus
+                                          ]
+                                        }
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                            </tbody>
+                          </table>
+                        </div>
+                        {importPreview.nodes.length > 16 ? (
+                          <p className="import-review__remainder">
+                            {importPreview.nodes.length - 16} additional units
+                            passed the same validation.
+                          </p>
+                        ) : null}
+                        <label className="review-confirmation">
+                          <input
+                            type="checkbox"
+                            checked={importReviewed}
+                            onChange={(event) =>
+                              setImportReviewed(event.target.checked)
+                            }
+                          />
+                          <span>
+                            I reviewed the unit names, primary parents,
+                            statuses, and attached source evidence.
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          className="button button--primary button--full"
+                          disabled={importBusy || !importReviewed}
+                          onClick={() => void importChart()}
+                        >
+                          <Check size={17} aria-hidden="true" />
+                          {importBusy
+                            ? "Creating draft…"
+                            : "Confirm and create draft chart"}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
-                  <strong>{activeQualityReport?.score ?? 0}/100</strong>
-                </div>
-                {activeChart && activeQualityReport ? (
-                  <>
+
+                  <div className="source-methods">
+                    <h2>Existing-chart intake path</h2>
                     <p>
-                      {activeChart.name}: {activeQualityReport.blockingCount} blocking and {activeQualityReport.warningCount} review finding{activeQualityReport.warningCount === 1 ? "" : "s"}.
+                      Different source formats need different confidence and
+                      review controls.
                     </p>
-                    {activeQualityReport.findings.length ? (
-                      <ul>
-                        {activeQualityReport.findings.slice(0, 12).map((finding, index) => (
-                          <li key={`${finding.code}-${index}`} className={`finding--${finding.severity}`}>
-                            <WarningDiamond size={16} aria-hidden="true" />
-                            <span><strong>{finding.code}</strong>{finding.message}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <div className="quality-report__clear"><ShieldCheck size={20} aria-hidden="true" />No additional quality warnings found.</div>
-                    )}
-                  </>
-                ) : (
-                  <div className="history-empty">Open a chart to run its local quality audit.</div>
-                )}
-              </section>
-
-              <section className="chart-compare" aria-labelledby="chart-compare-title">
-                <div>
-                  <span className="eyebrow">Reviewable chart-to-chart merge</span>
-                  <h2 id="chart-compare-title">Compare and propose merge</h2>
-                  <p>Use one chart as the proposed structure for another. The target remains unchanged until you apply the normal Before/After proposal.</p>
-                </div>
-                <div className="chart-compare__selectors">
-                  <label className="field-stack">
-                    <span>Source chart</span>
-                    <select value={effectiveComparisonSourceId} onChange={(event) => setComparisonSourceId(event.target.value)}>
-                      <option value="">Choose source</option>
-                      {comparisonCharts.map((chart) => <option key={chart.id} value={chart.id}>{chart.name}</option>)}
-                    </select>
-                  </label>
-                  <label className="field-stack">
-                    <span>Target chart</span>
-                    <select value={effectiveComparisonTargetId} onChange={(event) => setComparisonTargetId(event.target.value)}>
-                      <option value="">Choose target</option>
-                      {comparisonCharts.map((chart) => <option key={chart.id} value={chart.id}>{chart.name}</option>)}
-                    </select>
-                  </label>
-                </div>
-                {effectiveComparisonSourceId && effectiveComparisonSourceId === effectiveComparisonTargetId ? (
-                  <div className="publication-warning" role="status">Choose two different charts.</div>
-                ) : chartComparison ? (
-                  <div className="chart-compare__summary">
-                    <span><strong>{chartComparison.addedNodeIds.length}</strong> units added</span>
-                    <span><strong>{chartComparison.changedNodeIds.length}</strong> units changed</span>
-                    <span><strong>{chartComparison.removedNodeIds.length}</strong> units removed</span>
-                    <span><strong>{chartComparison.addedEdgeIds.length + chartComparison.changedEdgeIds.length + chartComparison.removedEdgeIds.length}</strong> relationships changed</span>
+                    <article className="source-method source-method--ready">
+                      <FileCsv size={24} aria-hidden="true" />
+                      <div>
+                        <span>Direct structured import</span>
+                        <h3>Canonical CSV, staff roster, or JSON</h3>
+                        <p>
+                          Map unit fields or staff supervisors, validate the
+                          hierarchy, then create a draft.
+                        </p>
+                      </div>
+                      <strong>Ready</strong>
+                    </article>
+                    <article className="source-method source-method--ready">
+                      <Table size={24} aria-hidden="true" />
+                      <div>
+                        <span>Mapped structured import</span>
+                        <h3>Excel workbook</h3>
+                        <p>
+                          Reads the first worksheet, maps common headers,
+                          generates missing stable IDs, and validates the
+                          hierarchy.
+                        </p>
+                      </div>
+                      <strong>Ready</strong>
+                    </article>
+                    <article className="source-method source-method--ready">
+                      <FilePpt size={24} aria-hidden="true" />
+                      <div>
+                        <span>Mixed-source evidence set</span>
+                        <h3>PowerPoint and Word</h3>
+                        <p>
+                          Attach several original references beside one reviewed
+                          roster, CSV, Excel file, or canonical JSON import.
+                        </p>
+                      </div>
+                      <strong>Ready</strong>
+                    </article>
+                    <article className="source-method source-method--ready">
+                      <FilePdf size={24} aria-hidden="true" />
+                      <div>
+                        <span>AI-assisted guided extraction</span>
+                        <h3>PDF or image</h3>
+                        <p>
+                          Normalize only in an approved AI environment, validate
+                          the JSON, and require human confirmation before
+                          import.
+                        </p>
+                      </div>
+                      <strong>Ready</strong>
+                    </article>
                   </div>
-                ) : null}
-                <button
-                  type="button"
-                  className="button button--primary button--full"
-                  disabled={!chartComparison?.totalChanges || comparisonBusy || effectiveComparisonSourceId === effectiveComparisonTargetId}
-                  onClick={() => void stageChartMerge()}
-                >
-                  <Columns size={17} aria-hidden="true" />
-                  {comparisonBusy ? "Preparing comparison…" : "Stage merge for Apply/Reject review"}
-                </button>
-              </section>
-            </div>
+                </div>
+
+                <div className="governance-grid">
+                  <section
+                    className="quality-report"
+                    aria-labelledby="quality-report-title"
+                  >
+                    <div className="quality-report__heading">
+                      <div>
+                        <span className="eyebrow">
+                          Import and maintenance audit
+                        </span>
+                        <h2 id="quality-report-title">Chart quality report</h2>
+                      </div>
+                      <strong>{activeQualityReport?.score ?? 0}/100</strong>
+                    </div>
+                    {activeChart && activeQualityReport ? (
+                      <>
+                        <p>
+                          {activeChart.name}:{" "}
+                          {activeQualityReport.blockingCount} blocking and{" "}
+                          {activeQualityReport.warningCount} review finding
+                          {activeQualityReport.warningCount === 1 ? "" : "s"}.
+                        </p>
+                        {activeQualityReport.findings.length ? (
+                          <ul>
+                            {activeQualityReport.findings
+                              .slice(0, 12)
+                              .map((finding, index) => (
+                                <li
+                                  key={`${finding.code}-${index}`}
+                                  className={`finding--${finding.severity}`}
+                                >
+                                  <WarningDiamond
+                                    size={16}
+                                    aria-hidden="true"
+                                  />
+                                  <span>
+                                    <strong>{finding.code}</strong>
+                                    {finding.message}
+                                  </span>
+                                </li>
+                              ))}
+                          </ul>
+                        ) : (
+                          <div className="quality-report__clear">
+                            <ShieldCheck size={20} aria-hidden="true" />
+                            No additional quality warnings found.
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="history-empty">
+                        Open a chart to run its local quality audit.
+                      </div>
+                    )}
+                  </section>
+
+                  <section
+                    className="chart-compare"
+                    aria-labelledby="chart-compare-title"
+                  >
+                    <div>
+                      <span className="eyebrow">
+                        Reviewable chart-to-chart merge
+                      </span>
+                      <h2 id="chart-compare-title">
+                        Compare and propose merge
+                      </h2>
+                      <p>
+                        Use one chart as the proposed structure for another. The
+                        target remains unchanged until you apply the normal
+                        Before/After proposal.
+                      </p>
+                    </div>
+                    <div className="chart-compare__selectors">
+                      <label className="field-stack">
+                        <span>Source chart</span>
+                        <select
+                          value={effectiveComparisonSourceId}
+                          onChange={(event) =>
+                            setComparisonSourceId(event.target.value)
+                          }
+                        >
+                          <option value="">Choose source</option>
+                          {comparisonCharts.map((chart) => (
+                            <option key={chart.id} value={chart.id}>
+                              {chart.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field-stack">
+                        <span>Target chart</span>
+                        <select
+                          value={effectiveComparisonTargetId}
+                          onChange={(event) =>
+                            setComparisonTargetId(event.target.value)
+                          }
+                        >
+                          <option value="">Choose target</option>
+                          {comparisonCharts.map((chart) => (
+                            <option key={chart.id} value={chart.id}>
+                              {chart.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    {effectiveComparisonSourceId &&
+                    effectiveComparisonSourceId ===
+                      effectiveComparisonTargetId ? (
+                      <div className="publication-warning" role="status">
+                        Choose two different charts.
+                      </div>
+                    ) : chartComparison ? (
+                      <div className="chart-compare__summary">
+                        <span>
+                          <strong>{chartComparison.addedNodeIds.length}</strong>{" "}
+                          units added
+                        </span>
+                        <span>
+                          <strong>
+                            {chartComparison.changedNodeIds.length}
+                          </strong>{" "}
+                          units changed
+                        </span>
+                        <span>
+                          <strong>
+                            {chartComparison.removedNodeIds.length}
+                          </strong>{" "}
+                          units removed
+                        </span>
+                        <span>
+                          <strong>
+                            {chartComparison.addedEdgeIds.length +
+                              chartComparison.changedEdgeIds.length +
+                              chartComparison.removedEdgeIds.length}
+                          </strong>{" "}
+                          relationships changed
+                        </span>
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="button button--primary button--full"
+                      disabled={
+                        !chartComparison?.totalChanges ||
+                        comparisonBusy ||
+                        effectiveComparisonSourceId ===
+                          effectiveComparisonTargetId
+                      }
+                      onClick={() => void stageChartMerge()}
+                    >
+                      <Columns size={17} aria-hidden="true" />
+                      {comparisonBusy
+                        ? "Preparing comparison…"
+                        : "Stage merge for Apply/Reject review"}
+                    </button>
+                  </section>
+                </div>
               </>
             ) : null}
 
@@ -6943,11 +8893,14 @@ function StudioWorkspace() {
               <>
                 <div className="backup-heading">
                   <div>
-                    <span className="eyebrow">Independent recovery workspace</span>
+                    <span className="eyebrow">
+                      Independent recovery workspace
+                    </span>
                     <h1 id="backup-title">Backup and restore</h1>
                     <p>
-                      Create one recovery file for the entire chart library or only the charts
-                      you choose. Encryption is optional and separate from source intake and publication.
+                      Create one recovery file for the entire chart library or
+                      only the charts you choose. Encryption is optional and
+                      separate from source intake and publication.
                     </p>
                   </div>
                   <div className="backup-heading__summary">
@@ -6956,7 +8909,10 @@ function StudioWorkspace() {
                   </div>
                 </div>
 
-                <section className={`backup-health ${backupIsDue ? "is-due" : "is-current"}`} aria-labelledby="backup-health-title">
+                <section
+                  className={`backup-health ${backupIsDue ? "is-due" : "is-current"}`}
+                  aria-labelledby="backup-health-title"
+                >
                   <div>
                     <span className="eyebrow">Local recovery readiness</span>
                     <h2 id="backup-health-title">Backup health</h2>
@@ -6967,13 +8923,41 @@ function StudioWorkspace() {
                     </p>
                   </div>
                   <div className="backup-health__status">
-                    {backupIsDue ? <ShieldWarning size={24} aria-hidden="true" /> : <ShieldCheck size={24} aria-hidden="true" />}
-                    <strong>{backupIsDue ? "Backup due" : "Backup current"}</strong>
-                    <span>{backupAgeDays === null ? "Create the first recovery package" : `${backupAgeDays} day${backupAgeDays === 1 ? "" : "s"} since backup`}</span>
+                    {backupIsDue ? (
+                      <ShieldWarning size={24} aria-hidden="true" />
+                    ) : (
+                      <ShieldCheck size={24} aria-hidden="true" />
+                    )}
+                    <strong>
+                      {backupIsDue ? "Backup due" : "Backup current"}
+                    </strong>
+                    <span>
+                      {backupAgeDays === null
+                        ? "Create the first recovery package"
+                        : `${backupAgeDays} day${backupAgeDays === 1 ? "" : "s"} since backup`}
+                    </span>
                   </div>
                   <dl>
-                    <div><dt>Protection</dt><dd>{backupHealth.lastBackupAt ? (backupHealth.lastBackupEncrypted ? "Encrypted" : "Unencrypted") : "Not recorded"}</dd></div>
-                    <div><dt>Last verified restore</dt><dd>{backupHealth.lastRestoreVerifiedAt ? new Date(backupHealth.lastRestoreVerifiedAt).toLocaleDateString() : "Not yet"}</dd></div>
+                    <div>
+                      <dt>Protection</dt>
+                      <dd>
+                        {backupHealth.lastBackupAt
+                          ? backupHealth.lastBackupEncrypted
+                            ? "Encrypted"
+                            : "Unencrypted"
+                          : "Not recorded"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Last verified restore</dt>
+                      <dd>
+                        {backupHealth.lastRestoreVerifiedAt
+                          ? new Date(
+                              backupHealth.lastRestoreVerifiedAt,
+                            ).toLocaleDateString()
+                          : "Not yet"}
+                      </dd>
+                    </div>
                   </dl>
                   <label className="field-stack">
                     <span>Remind me after</span>
@@ -6982,7 +8966,9 @@ function StudioWorkspace() {
                       onChange={(event) =>
                         saveBackupHealth({
                           ...backupHealth,
-                          reminderDays: Number(event.target.value) as BackupHealthState["reminderDays"],
+                          reminderDays: Number(
+                            event.target.value,
+                          ) as BackupHealthState["reminderDays"],
                         })
                       }
                     >
@@ -6994,391 +8980,557 @@ function StudioWorkspace() {
                   </label>
                 </section>
 
-            <section className="backup-card" aria-labelledby="backup-package-title">
-              <div className="backup-card__heading">
-                <FileLock size={26} aria-hidden="true" />
-                <div>
-                  <span className="eyebrow">Portable recovery copy</span>
-                  <h2 id="backup-package-title">Portable database backup</h2>
-                  <p>Every package is one file containing the chosen charts and their related application data. Encryption is recommended but optional.</p>
-                </div>
-              </div>
-
-              <div className="storage-locations" aria-labelledby="storage-locations-title">
-                <div className="storage-locations__heading">
-                  <div>
-                    <HardDrives size={22} aria-hidden="true" />
+                <section
+                  className="backup-card"
+                  aria-labelledby="backup-package-title"
+                >
+                  <div className="backup-card__heading">
+                    <FileLock size={26} aria-hidden="true" />
                     <div>
-                      <span className="eyebrow">Desktop file locations</span>
-                      <h3 id="storage-locations-title">Separate live data from recovery copies</h3>
-                    </div>
-                  </div>
-                  <span className="storage-badge">
-                    {storageMode === "desktop" ? "Desktop controls active" : "Desktop app only"}
-                  </span>
-                </div>
-
-                {desktopStorage ? (
-                  <div className="storage-location-grid">
-                    <article className="storage-location">
-                      <div className="storage-location__label">
-                        <HardDrives size={18} aria-hidden="true" />
-                        <div><span>Live chart library</span><strong>Local only</strong></div>
-                      </div>
-                      <code title={desktopStorage.dataDirectory}>{desktopStorage.dataDirectory}</code>
-                      <p>Contains the working database and imported source files. Cloud-sync and repository folders are blocked.</p>
-                      {desktopStorage.pendingDataDirectory ? (
-                        <div className="storage-location__pending">
-                          Pending after restart: <code>{desktopStorage.pendingDataDirectory}</code>
-                        </div>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="button button--secondary"
-                        disabled={storageBusy !== null}
-                        onClick={() => void chooseDesktopDataDirectory()}
-                      >
-                        <FolderOpen size={17} aria-hidden="true" />
-                        {storageBusy === "data" ? "Choosing folder…" : "Choose empty local folder"}
-                      </button>
-                    </article>
-
-                    <article className="storage-location">
-                      <div className="storage-location__label">
-                        <CloudArrowUp size={18} aria-hidden="true" />
-                        <div>
-                          <span>Backup destination</span>
-                          <strong>
-                            {desktopStorage.backupIsCloudSynced ? "Cloud-synced folder" : "Separate local folder"}
-                          </strong>
-                        </div>
-                      </div>
-                      <code title={desktopStorage.backupDirectory ?? undefined}>
-                        {desktopStorage.backupDirectory ?? "No backup folder selected"}
-                      </code>
+                      <span className="eyebrow">Portable recovery copy</span>
+                      <h2 id="backup-package-title">
+                        Portable database backup
+                      </h2>
                       <p>
-                        {desktopStorage.backupIsCloudSynced
-                          ? "Encrypted or explicitly confirmed unencrypted .orgchart-backup packages may be saved here. Choose protection each time you run a backup."
-                          : "Encrypted or explicitly confirmed unencrypted .orgchart-backup packages may be saved here."}
+                        Every package is one file containing the chosen charts
+                        and their related application data. Encryption is
+                        recommended but optional.
                       </p>
-                      <button
-                        type="button"
-                        className="button button--secondary"
-                        disabled={storageBusy !== null}
-                        onClick={() => void chooseDesktopBackupDirectory()}
-                      >
-                        <FolderOpen size={17} aria-hidden="true" />
-                        {storageBusy === "backup" ? "Choosing folder…" : "Choose backup folder"}
-                      </button>
-                    </article>
-                  </div>
-                ) : (
-                  <p className="storage-locations__browser-note">
-                    {storageMode === "loading"
-                      ? "Checking desktop storage controls…"
-                      : "Open the installed Electron app to choose protected live-data and backup folders. This browser session continues to use its configured development storage."}
-                  </p>
-                )}
-
-                {desktopStorage?.restartRequired ? (
-                  <div className="storage-restart">
-                    <div>
-                      <strong>Restart required to switch live data folders</strong>
-                      <span>The app will copy, checksum-verify, and switch only after verification succeeds. The old folder remains as a recovery copy.</span>
                     </div>
-                    <button
-                      type="button"
-                      className="button button--primary"
-                      disabled={storageBusy !== null}
-                      onClick={() => void restartForStorageChange()}
-                    >
-                      <ArrowClockwise size={17} aria-hidden="true" />
-                      {storageBusy === "restart" ? "Restarting…" : "Restart and move safely"}
-                    </button>
                   </div>
-                ) : null}
 
-                {storageMessage ? (
-                  <div className="storage-message" role="status">{storageMessage}</div>
-                ) : null}
-              </div>
-
-              <div className="security-boundary">
-                <ShieldWarning size={20} aria-hidden="true" />
-                <p><strong>Prototype boundary:</strong> authentication and production access controls are not connected. Use only synthetic or approved sanitized data. Encrypted passphrases cannot be recovered; unencrypted backup contents are readable by anyone who obtains the file.</p>
-              </div>
-
-              <div className="backup-actions-grid">
-                <div className="backup-action">
-                  <div><span>01</span><h3>Create backup</h3></div>
-                  <p>Choose the contents and whether the single backup file should be encrypted.</p>
-                  <fieldset className="backup-scope">
-                    <legend>Backup contents</legend>
-                    <div className="backup-scope__options">
-                      <label className={backupScope === "all" ? "is-selected" : ""}>
-                        <input
-                          type="radio"
-                          name="backup-scope"
-                          checked={backupScope === "all"}
-                          onChange={() => chooseBackupScope("all")}
-                        />
-                        <span>
-                          <strong>Entire library</strong>
-                          <small>All charts, layouts, versions, sources, and retained files</small>
-                        </span>
-                      </label>
-                      <label className={backupScope === "selected" ? "is-selected" : ""}>
-                        <input
-                          type="radio"
-                          name="backup-scope"
-                          checked={backupScope === "selected"}
-                          onChange={() => chooseBackupScope("selected")}
-                        />
-                        <span>
-                          <strong>Selected charts</strong>
-                          <small>Only chosen charts and their related application data</small>
-                        </span>
-                      </label>
+                  <div
+                    className="storage-locations"
+                    aria-labelledby="storage-locations-title"
+                  >
+                    <div className="storage-locations__heading">
+                      <div>
+                        <HardDrives size={22} aria-hidden="true" />
+                        <div>
+                          <span className="eyebrow">
+                            Desktop file locations
+                          </span>
+                          <h3 id="storage-locations-title">
+                            Separate live data from recovery copies
+                          </h3>
+                        </div>
+                      </div>
+                      <span className="storage-badge">
+                        {storageMode === "desktop"
+                          ? "Desktop controls active"
+                          : "Desktop app only"}
+                      </span>
                     </div>
-                    {backupScope === "selected" ? (
-                      <div className="backup-chart-selection">
-                        <div className="backup-chart-selection__heading">
-                          <span>{selectedBackupCharts.length} of {charts.length} charts selected</span>
-                          <div>
-                            <button
-                              type="button"
-                              onClick={() => setBackupSelectedChartIds(new Set(charts.map((chart) => chart.id)))}
-                              disabled={!charts.length || selectedBackupCharts.length === charts.length}
-                            >
-                              Select all
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setBackupSelectedChartIds(new Set())}
-                              disabled={!selectedBackupCharts.length}
-                            >
-                              Clear
-                            </button>
+
+                    {desktopStorage ? (
+                      <div className="storage-location-grid">
+                        <article className="storage-location">
+                          <div className="storage-location__label">
+                            <HardDrives size={18} aria-hidden="true" />
+                            <div>
+                              <span>Live chart library</span>
+                              <strong>Local only</strong>
+                            </div>
                           </div>
+                          <code title={desktopStorage.dataDirectory}>
+                            {desktopStorage.dataDirectory}
+                          </code>
+                          <p>
+                            Contains the working database and imported source
+                            files. Cloud-sync and repository folders are
+                            blocked.
+                          </p>
+                          {desktopStorage.pendingDataDirectory ? (
+                            <div className="storage-location__pending">
+                              Pending after restart:{" "}
+                              <code>{desktopStorage.pendingDataDirectory}</code>
+                            </div>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="button button--secondary"
+                            disabled={storageBusy !== null}
+                            onClick={() => void chooseDesktopDataDirectory()}
+                          >
+                            <FolderOpen size={17} aria-hidden="true" />
+                            {storageBusy === "data"
+                              ? "Choosing folder…"
+                              : "Choose empty local folder"}
+                          </button>
+                        </article>
+
+                        <article className="storage-location">
+                          <div className="storage-location__label">
+                            <CloudArrowUp size={18} aria-hidden="true" />
+                            <div>
+                              <span>Backup destination</span>
+                              <strong>
+                                {desktopStorage.backupIsCloudSynced
+                                  ? "Cloud-synced folder"
+                                  : "Separate local folder"}
+                              </strong>
+                            </div>
+                          </div>
+                          <code
+                            title={desktopStorage.backupDirectory ?? undefined}
+                          >
+                            {desktopStorage.backupDirectory ??
+                              "No backup folder selected"}
+                          </code>
+                          <p>
+                            {desktopStorage.backupIsCloudSynced
+                              ? "Encrypted or unencrypted .orgchart-backup packages may be saved here. Choose protection each time you run a backup."
+                              : "Encrypted or unencrypted .orgchart-backup packages may be saved here."}
+                          </p>
+                          <button
+                            type="button"
+                            className="button button--secondary"
+                            disabled={storageBusy !== null}
+                            onClick={() => void chooseDesktopBackupDirectory()}
+                          >
+                            <FolderOpen size={17} aria-hidden="true" />
+                            {storageBusy === "backup"
+                              ? "Choosing folder…"
+                              : "Choose backup folder"}
+                          </button>
+                        </article>
+                      </div>
+                    ) : (
+                      <p className="storage-locations__browser-note">
+                        {storageMode === "loading"
+                          ? "Checking desktop storage controls…"
+                          : "Open the installed Electron app to choose protected live-data and backup folders. This browser session continues to use its configured development storage."}
+                      </p>
+                    )}
+
+                    {desktopStorage?.restartRequired ? (
+                      <div className="storage-restart">
+                        <div>
+                          <strong>
+                            Restart required to switch live data folders
+                          </strong>
+                          <span>
+                            The app will copy, checksum-verify, and switch only
+                            after verification succeeds. The old folder remains
+                            as a recovery copy.
+                          </span>
                         </div>
-                        <div className="backup-chart-selection__list" role="group" aria-label="Charts included in backup">
-                          {charts.map((chart) => (
-                            <label key={chart.id}>
-                              <input
-                                type="checkbox"
-                                checked={backupSelectedChartIds.has(chart.id)}
-                                onChange={(event) => setBackupChartSelected(chart.id, event.target.checked)}
-                              />
-                              <span>
-                                <strong>{chart.name}</strong>
-                                <small>{chart.nodes.length} units · {chart.sources.length} sources · {chart.status.replace("_", " ")}</small>
-                              </span>
-                            </label>
-                          ))}
-                        </div>
+                        <button
+                          type="button"
+                          className="button button--primary"
+                          disabled={storageBusy !== null}
+                          onClick={() => void restartForStorageChange()}
+                        >
+                          <ArrowClockwise size={17} aria-hidden="true" />
+                          {storageBusy === "restart"
+                            ? "Restarting…"
+                            : "Restart and move safely"}
+                        </button>
                       </div>
                     ) : null}
-                  </fieldset>
-                  <fieldset className="backup-scope backup-protection">
-                    <legend>File protection</legend>
-                    <div className="backup-scope__options">
-                      <label className={backupProtection === "encrypted" ? "is-selected" : ""}>
-                        <input
-                          type="radio"
-                          name="backup-protection"
-                          checked={backupProtection === "encrypted"}
-                          onChange={() => {
-                            setBackupProtection("encrypted");
-                            setUnencryptedBackupConfirmed(false);
-                          }}
-                        />
-                        <span>
-                          <strong>Encrypted (recommended)</strong>
-                          <small>Requires a passphrase to read or restore the backup</small>
-                        </span>
-                      </label>
-                      <label className={backupProtection === "unencrypted" ? "is-selected" : ""}>
-                        <input
-                          type="radio"
-                          name="backup-protection"
-                          checked={backupProtection === "unencrypted"}
-                          onChange={() => {
-                            setBackupProtection("unencrypted");
-                            setUnencryptedBackupConfirmed(false);
-                          }}
-                        />
-                        <span>
-                          <strong>Unencrypted</strong>
-                          <small>Readable JSON package with no passphrase</small>
-                        </span>
-                      </label>
-                    </div>
-                  </fieldset>
-                  {backupProtection === "encrypted" ? (
-                    <>
-                      <div className="backup-encryption-note">
-                        <FileLock size={16} aria-hidden="true" />
-                        <span>AES-256-GCM encryption happens on this device before the file is saved.</span>
+
+                    {storageMessage ? (
+                      <div className="storage-message" role="status">
+                        {storageMessage}
                       </div>
-                      <label className="field-stack">
-                        <span>Backup passphrase</span>
-                        <input
-                          type="password"
-                          autoComplete="new-password"
-                          value={backupPassphrase}
-                          onChange={(event) => setBackupPassphrase(event.target.value)}
-                          placeholder="At least 12 characters"
-                        />
-                      </label>
-                      <label className="field-stack">
-                        <span>Confirm passphrase</span>
-                        <input
-                          type="password"
-                          autoComplete="new-password"
-                          value={backupPassphraseConfirm}
-                          onChange={(event) => setBackupPassphraseConfirm(event.target.value)}
-                          placeholder="Enter it again"
-                        />
-                      </label>
-                    </>
-                  ) : (
-                    <div className="backup-unencrypted-warning">
-                      <ShieldWarning size={18} aria-hidden="true" />
+                    ) : null}
+                  </div>
+
+                  <div className="security-boundary">
+                    <ShieldWarning size={20} aria-hidden="true" />
+                    <p>
+                      <strong>Prototype boundary:</strong> authentication and
+                      production access controls are not connected. Use only
+                      synthetic or approved sanitized data. Encrypted
+                      passphrases cannot be recovered; unencrypted backup
+                      contents are readable by anyone who obtains the file.
+                    </p>
+                  </div>
+
+                  <div className="backup-actions-grid">
+                    <div className="backup-action">
                       <div>
-                        <strong>No encryption will be applied</strong>
-                        <p>Anyone with this file can read its chart data, source records, and retained source files.</p>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={unencryptedBackupConfirmed}
-                            onChange={(event) => setUnencryptedBackupConfirmed(event.target.checked)}
-                          />
-                          <span>I understand this backup will not be protected by a passphrase.</span>
-                        </label>
+                        <span>01</span>
+                        <h3>Create backup</h3>
                       </div>
+                      <p>
+                        Choose the contents and whether the single backup file
+                        should be encrypted.
+                      </p>
+                      <fieldset className="backup-scope">
+                        <legend>Backup contents</legend>
+                        <div className="backup-scope__options">
+                          <label
+                            className={
+                              backupScope === "all" ? "is-selected" : ""
+                            }
+                          >
+                            <input
+                              type="radio"
+                              name="backup-scope"
+                              checked={backupScope === "all"}
+                              onChange={() => chooseBackupScope("all")}
+                            />
+                            <span>
+                              <strong>Entire library</strong>
+                              <small>
+                                All charts, layouts, versions, sources, and
+                                retained files
+                              </small>
+                            </span>
+                          </label>
+                          <label
+                            className={
+                              backupScope === "selected" ? "is-selected" : ""
+                            }
+                          >
+                            <input
+                              type="radio"
+                              name="backup-scope"
+                              checked={backupScope === "selected"}
+                              onChange={() => chooseBackupScope("selected")}
+                            />
+                            <span>
+                              <strong>Selected charts</strong>
+                              <small>
+                                Only chosen charts and their related application
+                                data
+                              </small>
+                            </span>
+                          </label>
+                        </div>
+                        {backupScope === "selected" ? (
+                          <div className="backup-chart-selection">
+                            <div className="backup-chart-selection__heading">
+                              <span>
+                                {selectedBackupCharts.length} of {charts.length}{" "}
+                                charts selected
+                              </span>
+                              <div>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setBackupSelectedChartIds(
+                                      new Set(charts.map((chart) => chart.id)),
+                                    )
+                                  }
+                                  disabled={
+                                    !charts.length ||
+                                    selectedBackupCharts.length ===
+                                      charts.length
+                                  }
+                                >
+                                  Select all
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setBackupSelectedChartIds(new Set())
+                                  }
+                                  disabled={!selectedBackupCharts.length}
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            </div>
+                            <div
+                              className="backup-chart-selection__list"
+                              role="group"
+                              aria-label="Charts included in backup"
+                            >
+                              {charts.map((chart) => (
+                                <label key={chart.id}>
+                                  <input
+                                    type="checkbox"
+                                    checked={backupSelectedChartIds.has(
+                                      chart.id,
+                                    )}
+                                    onChange={(event) =>
+                                      setBackupChartSelected(
+                                        chart.id,
+                                        event.target.checked,
+                                      )
+                                    }
+                                  />
+                                  <span>
+                                    <strong>{chart.name}</strong>
+                                    <small>
+                                      {chart.nodes.length} units ·{" "}
+                                      {chart.sources.length} sources ·{" "}
+                                      {chart.status.replace("_", " ")}
+                                    </small>
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </fieldset>
+                      <fieldset className="backup-scope backup-protection">
+                        <legend>File protection</legend>
+                        <div className="backup-scope__options">
+                          <label
+                            className={
+                              backupProtection === "encrypted"
+                                ? "is-selected"
+                                : ""
+                            }
+                          >
+                            <input
+                              type="radio"
+                              name="backup-protection"
+                              checked={backupProtection === "encrypted"}
+                              onChange={() => {
+                                setBackupProtection("encrypted");
+                              }}
+                            />
+                            <span>
+                              <strong>Encrypted (optional)</strong>
+                              <small>
+                                Requires a passphrase to read or restore the
+                                backup
+                              </small>
+                            </span>
+                          </label>
+                          <label
+                            className={
+                              backupProtection === "unencrypted"
+                                ? "is-selected"
+                                : ""
+                            }
+                          >
+                            <input
+                              type="radio"
+                              name="backup-protection"
+                              checked={backupProtection === "unencrypted"}
+                              onChange={() => {
+                                setBackupProtection("unencrypted");
+                              }}
+                            />
+                            <span>
+                              <strong>Unencrypted (default)</strong>
+                              <small>
+                                Readable JSON package with no passphrase
+                              </small>
+                            </span>
+                          </label>
+                        </div>
+                      </fieldset>
+                      {backupProtection === "encrypted" ? (
+                        <>
+                          <div className="backup-encryption-note">
+                            <FileLock size={16} aria-hidden="true" />
+                            <span>
+                              AES-256-GCM encryption happens on this device
+                              before the file is saved.
+                            </span>
+                          </div>
+                          <label className="field-stack">
+                            <span>Backup passphrase</span>
+                            <input
+                              type="password"
+                              autoComplete="new-password"
+                              value={backupPassphrase}
+                              onChange={(event) =>
+                                setBackupPassphrase(event.target.value)
+                              }
+                              placeholder="At least 12 characters"
+                            />
+                          </label>
+                          <label className="field-stack">
+                            <span>Confirm passphrase</span>
+                            <input
+                              type="password"
+                              autoComplete="new-password"
+                              value={backupPassphraseConfirm}
+                              onChange={(event) =>
+                                setBackupPassphraseConfirm(event.target.value)
+                              }
+                              placeholder="Enter it again"
+                            />
+                          </label>
+                        </>
+                      ) : (
+                        <div className="backup-unencrypted-warning">
+                          <ShieldWarning size={18} aria-hidden="true" />
+                          <div>
+                            <strong>No encryption will be applied</strong>
+                            <p>
+                              Anyone with this file can read its chart data,
+                              source records, and retained source files.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        className="button button--primary button--full"
+                        disabled={
+                          backupBusy !== null ||
+                          !charts.length ||
+                          desktopBackupDestinationMissing ||
+                          (backupScope === "selected" &&
+                            !selectedBackupCharts.length)
+                        }
+                        onClick={() => void createBackup()}
+                      >
+                        {backupProtection === "encrypted" ? (
+                          <FileLock size={17} aria-hidden="true" />
+                        ) : (
+                          <DownloadSimple size={17} aria-hidden="true" />
+                        )}
+                        {backupBusy === "export"
+                          ? backupProtection === "encrypted"
+                            ? "Encrypting and running backup…"
+                            : "Running backup…"
+                          : desktopBackupDestinationMissing
+                            ? "Choose a backup folder first"
+                            : desktopStorage?.backupDirectory
+                              ? "Run backup now"
+                              : backupProtection === "encrypted"
+                                ? "Encrypt and download"
+                                : "Download unencrypted backup"}
+                      </button>
+                      <p className="backup-run-note">
+                        {desktopStorage?.backupDirectory
+                          ? `Runs the selected contents as one ${backupProtection} timestamped file in the configured backup folder.`
+                          : storageMode === "desktop"
+                            ? "Choose a backup folder above before running the desktop backup."
+                            : "The browser downloads one timestamped backup file using the selected protection."}
+                      </p>
                     </div>
-                  )}
-                  <button
-                    type="button"
-                    className="button button--primary button--full"
-                    disabled={
-                      backupBusy !== null ||
-                      !charts.length ||
-                      desktopBackupDestinationMissing ||
-                      (backupScope === "selected" && !selectedBackupCharts.length) ||
-                      (backupProtection === "unencrypted" && !unencryptedBackupConfirmed)
-                    }
-                    onClick={() => void createBackup()}
-                  >
-                    {backupProtection === "encrypted" ? (
-                      <FileLock size={17} aria-hidden="true" />
-                    ) : (
-                      <DownloadSimple size={17} aria-hidden="true" />
-                    )}
-                    {backupBusy === "export"
-                      ? backupProtection === "encrypted"
-                        ? "Encrypting and running backup…"
-                        : "Running backup…"
-                      : desktopBackupDestinationMissing
-                        ? "Choose a backup folder first"
-                        : desktopStorage?.backupDirectory
-                          ? "Run backup now"
-                          : backupProtection === "encrypted"
-                            ? "Encrypt and download"
-                            : "Download unencrypted backup"}
-                  </button>
-                  <p className="backup-run-note">
-                    {desktopStorage?.backupDirectory
-                      ? `Runs the selected contents as one ${backupProtection} timestamped file in the configured backup folder.`
-                      : storageMode === "desktop"
-                        ? "Choose a backup folder above before running the desktop backup."
-                        : "The browser downloads one timestamped backup file using the selected protection."}
-                  </p>
-                </div>
 
-                <div className="backup-action">
-                  <div><span>02</span><h3>Restore without overwriting</h3></div>
-                  <p>Restore is merge-only. Every recovered chart receives a new ID and returns as a draft.</p>
-                  <label className="backup-file-picker">
-                    <UploadSimple size={22} aria-hidden="true" />
-                    <span>{backupFile?.name ?? "Choose backup file"}</span>
-                    <input
-                      key={backupFile?.name ?? "empty-backup"}
-                      type="file"
-                      accept=".orgchart-backup,application/json"
-                      onChange={(event) => setBackupFile(event.target.files?.[0] ?? null)}
-                    />
-                  </label>
-                  <label className="field-stack">
-                    <span>Passphrase <small>(encrypted backups only)</small></span>
-                    <input
-                      type="password"
-                      autoComplete="current-password"
-                      value={restorePassphrase}
-                      onChange={(event) => setRestorePassphrase(event.target.value)}
-                      placeholder="Leave blank for unencrypted backups"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="button button--secondary button--full"
-                    disabled={backupBusy !== null || !backupFile}
-                    onClick={() => void restoreBackup()}
-                  >
-                    <UploadSimple size={17} aria-hidden="true" />
-                    {backupBusy === "restore" ? "Validating restore…" : "Restore copies"}
-                  </button>
-                </div>
-              </div>
+                    <div className="backup-action">
+                      <div>
+                        <span>02</span>
+                        <h3>Restore without overwriting</h3>
+                      </div>
+                      <p>
+                        Restore is merge-only. Recovered charts receive new IDs;
+                        lifecycle states and historical checkpoints are
+                        preserved.
+                      </p>
+                      <label className="backup-file-picker">
+                        <UploadSimple size={22} aria-hidden="true" />
+                        <span>{backupFile?.name ?? "Choose backup file"}</span>
+                        <input
+                          key={backupFile?.name ?? "empty-backup"}
+                          type="file"
+                          accept=".orgchart-backup,application/json"
+                          onChange={(event) =>
+                            setBackupFile(event.target.files?.[0] ?? null)
+                          }
+                        />
+                      </label>
+                      <label className="field-stack">
+                        <span>
+                          Passphrase <small>(encrypted backups only)</small>
+                        </span>
+                        <input
+                          type="password"
+                          autoComplete="current-password"
+                          value={restorePassphrase}
+                          onChange={(event) =>
+                            setRestorePassphrase(event.target.value)
+                          }
+                          placeholder="Leave blank for unencrypted backups"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="button button--secondary button--full"
+                        disabled={backupBusy !== null || !backupFile}
+                        onClick={() => void restoreBackup()}
+                      >
+                        <UploadSimple size={17} aria-hidden="true" />
+                        {backupBusy === "restore"
+                          ? "Validating restore…"
+                          : "Restore copies"}
+                      </button>
+                    </div>
+                  </div>
 
-              {backupMessage ? <div className="backup-message" role="status">{backupMessage}</div> : null}
-            </section>
+                  {backupMessage ? (
+                    <div className="backup-message" role="status">
+                      {backupMessage}
+                    </div>
+                  ) : null}
+                </section>
               </>
             ) : null}
 
             {workspaceView === "sources" ? (
-            <div className="source-register">
-              <div className="source-register__heading">
-                <div><span className="eyebrow">Active chart</span><h2>{activeChart?.name ?? "No active chart"}</h2></div>
-                <span>{activeChart?.sources.length ?? 0} source records</span>
-              </div>
-              {activeChart?.sources.length ? (
-                <div className="data-table-wrap">
-                  <table>
-                    <caption className="sr-only">Stored source files and provenance for the active chart</caption>
-                    <thead><tr><th scope="col">Source</th><th scope="col">Type</th><th scope="col">Rows</th><th scope="col">Imported</th><th scope="col">Checksum</th><th scope="col">File</th></tr></thead>
-                    <tbody>
-                      {activeChart.sources.map((source) => (
-                        <tr key={source.id}>
-                          <th scope="row">{source.fileName}</th>
-                          <td>{source.sourceType.replace("_", " ")}</td>
-                          <td>{source.rowCount}</td>
-                          <td>{new Date(source.importedAt).toLocaleDateString()}</td>
-                          <td><code>{source.checksum.length > 18 ? `${source.checksum.slice(0, 18)}…` : source.checksum}</code></td>
-                          <td>
-                            {source.storageKey ? (
-                              <a
-                                className="source-download"
-                                href={`/api/charts?resource=source&sourceId=${encodeURIComponent(source.id)}`}
-                                download={source.fileName}
-                              >
-                                <DownloadSimple size={15} aria-hidden="true" />Download
-                              </a>
-                            ) : (
-                              <span className="source-unavailable">Built in</span>
-                            )}
-                          </td>
+              <div className="source-register">
+                <div className="source-register__heading">
+                  <div>
+                    <span className="eyebrow">Active chart</span>
+                    <h2>{activeChart?.name ?? "No active chart"}</h2>
+                  </div>
+                  <span>{activeChart?.sources.length ?? 0} source records</span>
+                </div>
+                {activeChart?.sources.length ? (
+                  <div className="data-table-wrap">
+                    <table>
+                      <caption className="sr-only">
+                        Stored source files and provenance for the active chart
+                      </caption>
+                      <thead>
+                        <tr>
+                          <th scope="col">Source</th>
+                          <th scope="col">Type</th>
+                          <th scope="col">Rows</th>
+                          <th scope="col">Imported</th>
+                          <th scope="col">Checksum</th>
+                          <th scope="col">File</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="source-register__empty">
-                  <Archive size={24} aria-hidden="true" />No source records are attached to this draft.
-                </div>
-              )}
-            </div>
+                      </thead>
+                      <tbody>
+                        {activeChart.sources.map((source) => (
+                          <tr key={source.id}>
+                            <th scope="row">{source.fileName}</th>
+                            <td>{source.sourceType.replace("_", " ")}</td>
+                            <td>{source.rowCount}</td>
+                            <td>
+                              {new Date(source.importedAt).toLocaleDateString()}
+                            </td>
+                            <td>
+                              <code>
+                                {source.checksum.length > 18
+                                  ? `${source.checksum.slice(0, 18)}…`
+                                  : source.checksum}
+                              </code>
+                            </td>
+                            <td>
+                              {source.storageKey ? (
+                                <a
+                                  className="source-download"
+                                  href={`/api/charts?resource=source&sourceId=${encodeURIComponent(source.id)}`}
+                                  download={source.fileName}
+                                >
+                                  <DownloadSimple
+                                    size={15}
+                                    aria-hidden="true"
+                                  />
+                                  Download
+                                </a>
+                              ) : (
+                                <span className="source-unavailable">
+                                  Built in
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="source-register__empty">
+                    <Archive size={24} aria-hidden="true" />
+                    No source records are attached to this draft.
+                  </div>
+                )}
+              </div>
             ) : null}
           </section>
         )}
@@ -7388,7 +9540,9 @@ function StudioWorkspace() {
         <aside className="detail-panel" aria-label="Selected unit details">
           <div className="detail-panel__top">
             <div className="detail-panel__heading">
-              <span className="eyebrow">Selected {selectedNode.data.unit.type}</span>
+              <span className="eyebrow">
+                Selected {selectedNode.data.unit.type}
+              </span>
               <h2>{selectedNode.data.unit.shortName}</h2>
               <p>{selectedNode.data.unit.name}</p>
             </div>
@@ -7440,184 +9594,206 @@ function StudioWorkspace() {
                 saveUnitChanges(event.currentTarget);
               }}
             >
-              <fieldset className="unit-editor__fields" disabled={activeChartReadOnly}>
-              <div className="unit-editor__identity">
-                <span>Stable unit ID</span>
-                <code>{selectedNode.id}</code>
-              </div>
+              <fieldset
+                className="unit-editor__fields"
+                disabled={activeChartReadOnly}
+              >
+                <div className="unit-editor__identity">
+                  <span>Stable unit ID</span>
+                  <code>{selectedNode.id}</code>
+                </div>
 
-              <label className="editor-field">
-                <span>Full unit name</span>
-                <input
-                  name="name"
-                  required
-                  defaultValue={selectedNode.data.unit.name}
-                />
-              </label>
-              <label className="editor-field">
-                <span>Card display name</span>
-                <input
-                  name="shortName"
-                  required
-                  defaultValue={selectedNode.data.unit.shortName}
-                />
-              </label>
-              <div className="editor-field-row">
                 <label className="editor-field">
-                  <span>Unit type</span>
+                  <span>Full unit name</span>
+                  <input
+                    name="name"
+                    required
+                    defaultValue={selectedNode.data.unit.name}
+                  />
+                </label>
+                <label className="editor-field">
+                  <span>Card display name</span>
+                  <input
+                    name="shortName"
+                    required
+                    defaultValue={selectedNode.data.unit.shortName}
+                  />
+                </label>
+                <div className="editor-field-row">
+                  <label className="editor-field">
+                    <span>Unit type</span>
+                    <select
+                      name="type"
+                      defaultValue={selectedNode.data.unit.type}
+                    >
+                      <option value="laboratory">Laboratory</option>
+                      <option value="directorate">Directorate</option>
+                      <option value="division">Division</option>
+                      <option value="section">Section</option>
+                      <option value="group">Group</option>
+                      <option value="team">Team</option>
+                      <option value="program">Program</option>
+                      <option value="office">Office</option>
+                      <option value="project">Project organization</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </label>
+                  <label className="editor-field">
+                    <span>Position status</span>
+                    <select
+                      name="positionStatus"
+                      defaultValue={selectedNode.data.unit.positionStatus}
+                    >
+                      <option value="filled">Filled</option>
+                      <option value="acting">Acting</option>
+                      <option value="vacant">Vacant</option>
+                      <option value="not_specified">
+                        Not specified in source
+                      </option>
+                    </select>
+                  </label>
+                </div>
+                <label className="editor-field">
+                  <span>Primary parent</span>
                   <select
-                    name="type"
-                    defaultValue={selectedNode.data.unit.type}
+                    name="parentId"
+                    defaultValue={selectedParentEdge?.source ?? ""}
+                    disabled={!selectedParentEdge}
                   >
-                    <option value="laboratory">Laboratory</option>
-                    <option value="directorate">Directorate</option>
-                    <option value="division">Division</option>
-                    <option value="section">Section</option>
-                    <option value="group">Group</option>
-                    <option value="team">Team</option>
-                    <option value="program">Program</option>
-                    <option value="office">Office</option>
-                    <option value="project">Project organization</option>
-                    <option value="other">Other</option>
+                    {!selectedParentEdge ? (
+                      <option value="">Organization root</option>
+                    ) : null}
+                    {eligibleParents.map((flowNode) => (
+                      <option key={flowNode.id} value={flowNode.id}>
+                        {flowNode.data.unit.shortName}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label className="editor-field">
-                  <span>Position status</span>
+                  <span>Compact presentation</span>
                   <select
-                    name="positionStatus"
-                    defaultValue={selectedNode.data.unit.positionStatus}
+                    name="compactDisplay"
+                    defaultValue={
+                      selectedNode.data.unit.compactDisplay ?? "auto"
+                    }
                   >
-                    <option value="filled">Filled</option>
-                    <option value="acting">Acting</option>
-                    <option value="vacant">Vacant</option>
+                    <option value="auto">Automatic by hierarchy level</option>
+                    <option value="list">List inside parent group</option>
+                    <option value="card">Keep as a separate card</option>
+                    <option value="sidecar">Leadership sidecar card</option>
+                  </select>
+                  <small>
+                    List applies only to terminal records. Sidecar applies to a
+                    terminal record directly below the chart root.
+                  </small>
+                </label>
+                <label className="editor-field">
+                  <span>Position title</span>
+                  <input
+                    name="positionTitle"
+                    required
+                    defaultValue={selectedNode.data.unit.positionTitle}
+                  />
+                </label>
+                <label className="editor-field">
+                  <span>Assignment or vacancy label</span>
+                  <input
+                    name="assignmentLabel"
+                    defaultValue={selectedNode.data.unit.assignmentLabel}
+                  />
+                </label>
+                <label className="editor-field">
+                  <span>Effective date or label</span>
+                  <input
+                    name="effectiveDate"
+                    defaultValue={selectedNode.data.unit.effectiveDate}
+                  />
+                </label>
+                <label className="editor-field">
+                  <span>Effective state</span>
+                  <select
+                    name="planningState"
+                    defaultValue={
+                      selectedNode.data.unit.planningState ?? "current"
+                    }
+                  >
+                    <option value="current">In effect now</option>
+                    <option value="planned">Planned / future</option>
                   </select>
                 </label>
-              </div>
-              <label className="editor-field">
-                <span>Primary parent</span>
-                <select
-                  name="parentId"
-                  defaultValue={selectedParentEdge?.source ?? ""}
-                  disabled={!selectedParentEdge}
-                >
-                  {!selectedParentEdge ? (
-                    <option value="">Organization root</option>
-                  ) : null}
-                  {eligibleParents.map((flowNode) => (
-                    <option key={flowNode.id} value={flowNode.id}>
-                      {flowNode.data.unit.shortName}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="editor-field">
-                <span>Compact presentation</span>
-                <select
-                  name="compactDisplay"
-                  defaultValue={selectedNode.data.unit.compactDisplay ?? "auto"}
-                >
-                  <option value="auto">Automatic by hierarchy level</option>
-                  <option value="list">List inside parent group</option>
-                  <option value="card">Keep as a separate card</option>
-                  <option value="sidecar">Leadership sidecar card</option>
-                </select>
-                <small>
-                  List applies only to terminal records. Sidecar applies to a terminal record directly below the chart root.
-                </small>
-              </label>
-              <label className="editor-field">
-                <span>Position title</span>
-                <input
-                  name="positionTitle"
-                  required
-                  defaultValue={selectedNode.data.unit.positionTitle}
-                />
-              </label>
-              <label className="editor-field">
-                <span>Assignment or vacancy label</span>
-                <input
-                  name="assignmentLabel"
-                  defaultValue={selectedNode.data.unit.assignmentLabel}
-                />
-              </label>
-              <label className="editor-field">
-                <span>Effective date or label</span>
-                <input
-                  name="effectiveDate"
-                  defaultValue={selectedNode.data.unit.effectiveDate}
-                />
-              </label>
-              <label className="editor-field">
-                <span>Effective state</span>
-                <select
-                  name="planningState"
-                  defaultValue={selectedNode.data.unit.planningState ?? "current"}
-                >
-                  <option value="current">In effect now</option>
-                  <option value="planned">Planned / future</option>
-                </select>
-              </label>
-              <label className="editor-field">
-                <span>Publication visibility</span>
-                <select
-                  name="publicationVisibility"
-                  defaultValue={selectedNode.data.unit.publicationVisibility}
-                >
-                  <option value="internal">Internal</option>
-                  <option value="public">Public</option>
-                </select>
-              </label>
-              <label className="editor-field">
-                <span>Source or provenance note</span>
-                <input
-                  name="source"
-                  defaultValue={selectedNode.data.unit.source}
-                />
-              </label>
-              <label className="editor-field">
-                <span>Source locator</span>
-                <input
-                  name="sourceLocator"
-                  defaultValue={selectedNode.data.unit.sourceLocator ?? ""}
-                  placeholder="Slide, page, worksheet, or row"
-                />
-              </label>
-              <label className="editor-field">
-                <span>Source certainty</span>
-                <select
-                  name="sourceCertainty"
-                  defaultValue={selectedNode.data.unit.sourceCertainty ?? "confirmed"}
-                >
-                  <option value="confirmed">Confirmed</option>
-                  <option value="inferred">Inferred</option>
-                  <option value="needs_review">Needs review</option>
-                </select>
-              </label>
-              <label className="editor-field">
-                <span>Review note</span>
-                <textarea
-                  name="reviewNote"
-                  rows={2}
-                  defaultValue={selectedNode.data.unit.reviewNote ?? ""}
-                  placeholder="Record the unresolved source question or reason for an inference"
-                />
-              </label>
+                <label className="editor-field">
+                  <span>Publication visibility</span>
+                  <select
+                    name="publicationVisibility"
+                    defaultValue={selectedNode.data.unit.publicationVisibility}
+                  >
+                    <option value="internal">Internal</option>
+                    <option value="public">Public</option>
+                  </select>
+                </label>
+                <label className="editor-field">
+                  <span>Source or provenance note</span>
+                  <input
+                    name="source"
+                    defaultValue={selectedNode.data.unit.source}
+                  />
+                </label>
+                <label className="editor-field">
+                  <span>Source locator</span>
+                  <input
+                    name="sourceLocator"
+                    defaultValue={selectedNode.data.unit.sourceLocator ?? ""}
+                    placeholder="Slide, page, worksheet, or row"
+                  />
+                </label>
+                <label className="editor-field">
+                  <span>Source certainty</span>
+                  <select
+                    name="sourceCertainty"
+                    defaultValue={
+                      selectedNode.data.unit.sourceCertainty ?? "confirmed"
+                    }
+                  >
+                    <option value="confirmed">Confirmed</option>
+                    <option value="inferred">Inferred</option>
+                    <option value="needs_review">Needs review</option>
+                  </select>
+                </label>
+                <label className="editor-field">
+                  <span>Review note</span>
+                  <textarea
+                    name="reviewNote"
+                    rows={2}
+                    defaultValue={selectedNode.data.unit.reviewNote ?? ""}
+                    placeholder="Record the unresolved source question or reason for an inference"
+                  />
+                </label>
 
-              <button type="submit" className="button button--primary button--full">
-                <FloppyDisk size={17} aria-hidden="true" /> Save organizational changes
-              </button>
+                <button
+                  type="submit"
+                  className="button button--primary button--full"
+                >
+                  <FloppyDisk size={17} aria-hidden="true" /> Save
+                  organizational changes
+                </button>
               </fieldset>
             </form>
 
             <div className="presentation-state">
               <div>
                 <span>Presentation state</span>
-                <strong>{selectedNode.data.pinned ? "Pinned" : "Auto placed"}</strong>
+                <strong>
+                  {selectedNode.data.pinned ? "Pinned" : "Auto placed"}
+                </strong>
               </div>
               <code>
-                x {Math.round(selectedNode.position.x)} · y {Math.round(selectedNode.position.y)}
+                x {Math.round(selectedNode.position.x)} · y{" "}
+                {Math.round(selectedNode.position.y)}
               </code>
-              <p>Coordinates can change without changing the semantic parent.</p>
+              <p>
+                Coordinates can change without changing the semantic parent.
+              </p>
             </div>
 
             <button
@@ -7625,7 +9801,7 @@ function StudioWorkspace() {
               className="button button--full button--secondary"
               disabled={activeChartReadOnly}
               onClick={() => {
-                recordCurrentState(
+                labelNextEdit(
                   selectedNode.data.pinned
                     ? `unpinning ${selectedNode.data.unit.shortName}`
                     : `pinning ${selectedNode.data.unit.shortName}`,
@@ -7633,7 +9809,13 @@ function StudioWorkspace() {
                 setNodes((currentNodes) =>
                   currentNodes.map((flowNode) =>
                     flowNode.id === selectedNode.id
-                      ? { ...flowNode, data: { ...flowNode.data, pinned: !flowNode.data.pinned } }
+                      ? {
+                          ...flowNode,
+                          data: {
+                            ...flowNode.data,
+                            pinned: !flowNode.data.pinned,
+                          },
+                        }
                       : flowNode,
                   ),
                 );
@@ -7656,24 +9838,46 @@ function StudioWorkspace() {
           >
             <header className="ai-review-panel__header">
               <div>
-                <span className="eyebrow">AI proposal · your decision required</span>
-                <h2 id="ai-review-title">Review before applying</h2>
+                <span className="eyebrow">
+                  AI proposal · your decision required
+                </span>
+                <h2 id="ai-review-title">
+                  {pendingAiProposal.proposed.status === "archived"
+                    ? "Review archive from active library"
+                    : "Review before applying"}
+                </h2>
                 <p>
-                  <strong>Nothing has changed yet.</strong> The canvas is showing a temporary
-                  preview; the saved chart remains unchanged until you apply this proposal.
+                  <strong>Nothing has changed yet.</strong> The canvas is
+                  showing a temporary preview; the saved chart remains unchanged
+                  until you apply this proposal.
                 </p>
               </div>
               <span className="ai-review-panel__unsaved">Not applied</span>
             </header>
 
-            <div className="ai-review-summary" aria-label="Proposed change summary">
-              <div><strong>{pendingAiProposal.summary.added}</strong><span>Added</span></div>
-              <div><strong>{pendingAiProposal.summary.changed}</strong><span>Changed</span></div>
-              <div><strong>{pendingAiProposal.summary.removed}</strong><span>Removed</span></div>
+            <div
+              className="ai-review-summary"
+              aria-label="Proposed change summary"
+            >
+              <div>
+                <strong>{pendingAiProposal.summary.added}</strong>
+                <span>Added</span>
+              </div>
+              <div>
+                <strong>{pendingAiProposal.summary.changed}</strong>
+                <span>Changed</span>
+              </div>
+              <div>
+                <strong>{pendingAiProposal.summary.removed}</strong>
+                <span>Removed</span>
+              </div>
               <p>{pendingAiProposal.summary.text}</p>
             </div>
 
-            <section className="ai-review-purpose" aria-labelledby="ai-review-purpose-title">
+            <section
+              className="ai-review-purpose"
+              aria-labelledby="ai-review-purpose-title"
+            >
               <h3 id="ai-review-purpose-title">Why this change was proposed</h3>
               <p>
                 {pendingAiProposal.changeSummary ??
@@ -7681,14 +9885,19 @@ function StudioWorkspace() {
               </p>
             </section>
 
-            <div className="ai-review-filters" aria-label="Filter proposed changes">
-              {([
-                ["all", "All"],
-                ["chart", "Chart"],
-                ["unit", "Cards"],
-                ["relationship", "Lines"],
-                ["layout", "Layout"],
-              ] as const).map(([category, label]) => (
+            <div
+              className="ai-review-filters"
+              aria-label="Filter proposed changes"
+            >
+              {(
+                [
+                  ["all", "All"],
+                  ["chart", "Chart"],
+                  ["unit", "Cards"],
+                  ["relationship", "Lines"],
+                  ["layout", "Layout"],
+                ] as const
+              ).map(([category, label]) => (
                 <button
                   key={category}
                   type="button"
@@ -7703,7 +9912,10 @@ function StudioWorkspace() {
 
             <div className="ai-review-change-list" aria-live="polite">
               {visibleAiChanges.map((change) => (
-                <article key={change.id} className={`ai-review-change ai-review-change--${change.kind}`}>
+                <article
+                  key={change.id}
+                  className={`ai-review-change ai-review-change--${change.kind}`}
+                >
                   <div className="ai-review-change__heading">
                     <span>{change.kind}</span>
                     <strong>{change.entityLabel}</strong>
@@ -7722,7 +9934,9 @@ function StudioWorkspace() {
                 </article>
               ))}
               {!visibleAiChanges.length ? (
-                <p className="ai-review-change-list__empty">No changes in this category.</p>
+                <p className="ai-review-change-list__empty">
+                  No changes in this category.
+                </p>
               ) : null}
             </div>
 
@@ -7730,15 +9944,13 @@ function StudioWorkspace() {
               <div className="ai-review-next-step">
                 <strong>Your next step</strong>
                 <p>
-                  Review every Before and After item. Apply the change to update the saved
-                  working chart, choose Review later to keep it pending, or reject it to leave
-                  the chart unchanged.
+                  Review every Before and After item. Apply the change to update
+                  the saved working chart, choose Review later to keep it
+                  pending, or reject it to leave the chart unchanged.
                 </p>
                 <small>
-                  This proposal is available until {new Intl.DateTimeFormat(undefined, {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  }).format(new Date(pendingAiProposal.expiresAt))}.
+                  Saved locally until you decide. If the chart changes first,
+                  prepare a fresh proposal.
                 </small>
               </div>
               {aiProposalError ? (
@@ -7764,7 +9976,9 @@ function StudioWorkspace() {
                   disabled={aiProposalBusy !== null}
                   aria-busy={aiProposalBusy === "reject"}
                 >
-                  {aiProposalBusy === "reject" ? "Rejecting…" : "Reject and leave unchanged"}
+                  {aiProposalBusy === "reject"
+                    ? "Rejecting…"
+                    : "Reject and leave unchanged"}
                 </button>
                 <button
                   type="button"
@@ -7775,7 +9989,11 @@ function StudioWorkspace() {
                   aria-busy={aiProposalBusy === "accept"}
                 >
                   <Check size={17} weight="bold" aria-hidden="true" />
-                  {aiProposalBusy === "accept" ? "Applying…" : "Apply change to chart"}
+                  {aiProposalBusy === "accept"
+                    ? "Applying…"
+                    : pendingAiProposal.proposed.status === "archived"
+                      ? "Archive from active library"
+                      : "Apply change to chart"}
                 </button>
               </div>
             </footer>
@@ -7794,26 +10012,44 @@ function StudioWorkspace() {
             <header className="ai-review-panel__header">
               <div>
                 <span className="eyebrow">Local MCP · new chart review</span>
-                <h2 id="ai-import-review-title">Review proposed chart import</h2>
+                <h2 id="ai-import-review-title">
+                  Review proposed chart import
+                </h2>
                 <p>
-                  Validate the hierarchy, uncertainty labels, and retained evidence before
-                  creating a new local chart. Nothing has been added to the library.
+                  Validate the hierarchy, uncertainty labels, and retained
+                  evidence before creating a new local chart. Nothing has been
+                  added to the library.
                 </p>
               </div>
               <span className="ai-review-panel__unsaved">Not created</span>
             </header>
 
             <div className="ai-import-review-summary">
-              <div><span>Proposed chart</span><strong>{pendingAiImportProposal.chartName}</strong></div>
-              <div><span>Units</span><strong>{pendingAiImportProposal.proposed.nodes.length}</strong></div>
-              <div><span>Relationships</span><strong>{pendingAiImportProposal.proposed.edges.length}</strong></div>
-              <div><span>Quality</span><strong>{pendingAiImportProposal.quality.score}/100</strong></div>
+              <div>
+                <span>Proposed chart</span>
+                <strong>{pendingAiImportProposal.chartName}</strong>
+              </div>
+              <div>
+                <span>Units</span>
+                <strong>{pendingAiImportProposal.proposed.nodes.length}</strong>
+              </div>
+              <div>
+                <span>Relationships</span>
+                <strong>{pendingAiImportProposal.proposed.edges.length}</strong>
+              </div>
+              <div>
+                <span>Quality</span>
+                <strong>{pendingAiImportProposal.quality.score}/100</strong>
+              </div>
             </div>
 
             <div className="ai-import-review-evidence">
               <div>
                 <span>Source intake</span>
-                <strong>{pendingAiImportProposal.intakeName ?? "No retained intake linked"}</strong>
+                <strong>
+                  {pendingAiImportProposal.intakeName ??
+                    "No retained intake linked"}
+                </strong>
               </div>
               <p>
                 {pendingAiImportProposal.evidenceFileNames.length
@@ -7828,54 +10064,98 @@ function StudioWorkspace() {
                 <div className="data-table-wrap">
                   <table>
                     <thead>
-                      <tr><th scope="col">Unit</th><th scope="col">Parent</th><th scope="col">State</th><th scope="col">Source</th></tr>
+                      <tr>
+                        <th scope="col">Unit</th>
+                        <th scope="col">Parent</th>
+                        <th scope="col">State</th>
+                        <th scope="col">Source</th>
+                      </tr>
                     </thead>
                     <tbody>
-                      {pendingAiImportProposal.proposed.nodes.slice(0, 40).map((node) => {
-                        const parentEdge = pendingAiImportProposal.proposed.edges.find((edge) => edge.target === node.id);
-                        const parent = pendingAiImportProposal.proposed.nodes.find((candidate) => candidate.id === parentEdge?.source);
-                        return (
-                          <tr key={node.id}>
-                            <th scope="row">{node.data.unit.name}</th>
-                            <td>{parent?.data.unit.shortName ?? "Root"}</td>
-                            <td>{planningStateForNode(node) === "planned" ? `Planned · ${node.data.unit.effectiveDate}` : "In effect"}</td>
-                            <td>
-                              {node.data.unit.sourceCertainty === "needs_review" ? "Needs review" : node.data.unit.sourceCertainty === "inferred" ? "Inferred" : "Confirmed"}
-                              {node.data.unit.sourceLocator ? ` · ${node.data.unit.sourceLocator}` : ""}
-                            </td>
-                          </tr>
-                        );
-                      })}
+                      {pendingAiImportProposal.proposed.nodes
+                        .slice(0, 40)
+                        .map((node) => {
+                          const parentEdge =
+                            pendingAiImportProposal.proposed.edges.find(
+                              (edge) => edge.target === node.id,
+                            );
+                          const parent =
+                            pendingAiImportProposal.proposed.nodes.find(
+                              (candidate) =>
+                                candidate.id === parentEdge?.source,
+                            );
+                          return (
+                            <tr key={node.id}>
+                              <th scope="row">{node.data.unit.name}</th>
+                              <td>{parent?.data.unit.shortName ?? "Root"}</td>
+                              <td>
+                                {planningStateForNode(node) === "planned"
+                                  ? `Planned · ${node.data.unit.effectiveDate}`
+                                  : "In effect"}
+                              </td>
+                              <td>
+                                {node.data.unit.sourceCertainty ===
+                                "needs_review"
+                                  ? "Needs review"
+                                  : node.data.unit.sourceCertainty ===
+                                      "inferred"
+                                    ? "Inferred"
+                                    : "Confirmed"}
+                                {node.data.unit.sourceLocator
+                                  ? ` · ${node.data.unit.sourceLocator}`
+                                  : ""}
+                              </td>
+                            </tr>
+                          );
+                        })}
                     </tbody>
                   </table>
                 </div>
                 {pendingAiImportProposal.proposed.nodes.length > 40 ? (
-                  <p>{pendingAiImportProposal.proposed.nodes.length - 40} additional units passed the same structural validation.</p>
+                  <p>
+                    {pendingAiImportProposal.proposed.nodes.length - 40}{" "}
+                    additional units passed the same structural validation.
+                  </p>
                 ) : null}
               </section>
               <section aria-labelledby="ai-import-findings-title">
-                <h3 id="ai-import-findings-title">Validation and quality findings</h3>
+                <h3 id="ai-import-findings-title">
+                  Validation and quality findings
+                </h3>
                 {pendingAiImportProposal.findings.length ? (
                   <ul className="ai-import-review-findings">
                     {pendingAiImportProposal.findings.map((finding, index) => (
-                      <li key={`${finding.code}-${index}`} className={`finding--${finding.severity}`}>
+                      <li
+                        key={`${finding.code}-${index}`}
+                        className={`finding--${finding.severity}`}
+                      >
                         <WarningDiamond size={16} aria-hidden="true" />
-                        <span><strong>{finding.code}</strong>{finding.message}</span>
+                        <span>
+                          <strong>{finding.code}</strong>
+                          {finding.message}
+                        </span>
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <div className="quality-report__clear"><ShieldCheck size={20} aria-hidden="true" />No validation or quality warnings.</div>
+                  <div className="quality-report__clear">
+                    <ShieldCheck size={20} aria-hidden="true" />
+                    No validation or quality warnings.
+                  </div>
                 )}
               </section>
             </div>
 
             <footer className="ai-review-panel__footer">
               <p>
-                Creating the chart writes this reviewed structure to the local database as a
-                new draft. Existing charts are not overwritten.
+                Creating the chart writes this reviewed structure to the local
+                database as a new draft. Existing charts are not overwritten.
               </p>
-              {aiImportError ? <p className="ai-review-panel__error" role="alert">{aiImportError}</p> : null}
+              {aiImportError ? (
+                <p className="ai-review-panel__error" role="alert">
+                  {aiImportError}
+                </p>
+              ) : null}
               <div>
                 <button
                   type="button"
@@ -7896,7 +10176,9 @@ function StudioWorkspace() {
                   aria-busy={aiImportBusy === "accept"}
                 >
                   <Check size={17} weight="bold" aria-hidden="true" />
-                  {aiImportBusy === "accept" ? "Creating chart…" : "Create reviewed chart"}
+                  {aiImportBusy === "accept"
+                    ? "Creating chart…"
+                    : "Create reviewed chart"}
                 </button>
               </div>
             </footer>
@@ -7927,7 +10209,10 @@ function StudioWorkspace() {
             aria-modal="true"
             aria-labelledby="onboarding-tour-title"
             tabIndex={-1}
-            style={{ top: tourGeometry.panel.top, left: tourGeometry.panel.left }}
+            style={{
+              top: tourGeometry.panel.top,
+              left: tourGeometry.panel.left,
+            }}
           >
             <header>
               <span className="eyebrow">{currentTourStep.eyebrow}</span>
@@ -7950,7 +10235,9 @@ function StudioWorkspace() {
                 type="button"
                 className="onboarding-tour__skip"
                 onClick={() =>
-                  finishOnboardingTour("Tour closed. Choose Tips & tour whenever you want to replay it.")
+                  finishOnboardingTour(
+                    "Tour closed. Choose Tips & tour whenever you want to replay it.",
+                  )
                 }
               >
                 Skip tour
@@ -7974,7 +10261,10 @@ function StudioWorkspace() {
                   type="button"
                   className="button button--primary"
                   onClick={() => {
-                    if ((onboardingStep ?? 0) === ONBOARDING_TOUR_STEPS.length - 1) {
+                    if (
+                      (onboardingStep ?? 0) ===
+                      ONBOARDING_TOUR_STEPS.length - 1
+                    ) {
                       finishOnboardingTour(
                         "Tour complete. Choose Tips & tour whenever you want to replay it.",
                       );
@@ -7982,7 +10272,10 @@ function StudioWorkspace() {
                       setOnboardingStep((current) =>
                         current === null
                           ? null
-                          : Math.min(current + 1, ONBOARDING_TOUR_STEPS.length - 1),
+                          : Math.min(
+                              current + 1,
+                              ONBOARDING_TOUR_STEPS.length - 1,
+                            ),
                       );
                     }
                   }}
@@ -7990,7 +10283,8 @@ function StudioWorkspace() {
                   {(onboardingStep ?? 0) === ONBOARDING_TOUR_STEPS.length - 1
                     ? "Finish tour"
                     : "Next tip"}
-                  {(onboardingStep ?? 0) === ONBOARDING_TOUR_STEPS.length - 1 ? null : (
+                  {(onboardingStep ?? 0) ===
+                  ONBOARDING_TOUR_STEPS.length - 1 ? null : (
                     <CaretRight size={16} aria-hidden="true" />
                   )}
                 </button>
@@ -8042,11 +10336,22 @@ function StudioWorkspace() {
                 void submitLifecycleTransition(event.currentTarget);
               }}
             >
-              <div className="lifecycle-dialog__flow" aria-label="Chart lifecycle flow">
-                {(["draft", "in_review", "current", "archived"] as ChartStatus[]).map((status) => (
+              <div
+                className="lifecycle-dialog__flow"
+                aria-label="Chart lifecycle flow"
+              >
+                {(
+                  ["draft", "in_review", "current", "archived"] as ChartStatus[]
+                ).map((status) => (
                   <span
                     key={status}
-                    className={status === lifecycleDialog.targetStatus ? "is-target" : status === lifecycleDialogChart.status ? "is-current" : ""}
+                    className={
+                      status === lifecycleDialog.targetStatus
+                        ? "is-target"
+                        : status === lifecycleDialogChart.status
+                          ? "is-current"
+                          : ""
+                    }
                   >
                     {chartStatusLabels[status]}
                   </span>
@@ -8055,47 +10360,115 @@ function StudioWorkspace() {
 
               {lifecycleDialog.targetStatus === "current" ? (
                 <>
-                  <div className={`lifecycle-readiness ${lifecycleReadiness?.ready ? "is-ready" : "is-blocked"}`}>
-                    <strong>{lifecycleReadiness?.ready ? "Ready to mark Current" : "Not ready to mark Current"}</strong>
+                  <div
+                    className={`lifecycle-readiness ${lifecycleReadiness?.ready ? "is-ready" : "is-blocked"}`}
+                  >
+                    <strong>
+                      {lifecycleReadiness?.ready
+                        ? "Ready to mark Current"
+                        : "Not ready to mark Current"}
+                    </strong>
                     <ul>
-                      <li>{lifecycleReadiness?.structuralBlockers ? `${lifecycleReadiness.structuralBlockers} blocking structure issues remain` : "Structure validation is clear"}</li>
-                      <li>{lifecycleReadiness?.reviewItems ? `${lifecycleReadiness.reviewItems} source review items remain` : "Review queue is clear"}</li>
-                      <li>A new immutable named checkpoint will be created automatically</li>
+                      <li>
+                        {lifecycleReadiness?.structuralBlockers
+                          ? `${lifecycleReadiness.structuralBlockers} blocking structure issues remain`
+                          : "Structure validation is clear"}
+                      </li>
+                      <li>
+                        {lifecycleReadiness?.reviewItems
+                          ? `${lifecycleReadiness.reviewItems} source review items remain`
+                          : "Review queue is clear"}
+                      </li>
+                      <li>
+                        A new immutable named checkpoint will be created
+                        automatically
+                      </li>
                     </ul>
                   </div>
+                  {lifecycleReadiness?.reviewItems ? (
+                    <label className="lifecycle-acknowledgment">
+                      <input
+                        type="checkbox"
+                        name="acknowledgeReview"
+                        required
+                      />
+                      I am designating this as the current working chart with
+                      the unresolved source notes retained. This does not
+                      confirm those source facts.
+                    </label>
+                  ) : null}
                   <label className="editor-field">
-                    <span>Reviewed and marked Current by</span>
-                    <input name="currentBy" required maxLength={120} autoFocus placeholder="Your name or accountable owner" />
+                    <span>Designated Current by</span>
+                    <input
+                      name="currentBy"
+                      required
+                      maxLength={120}
+                      autoFocus
+                      placeholder="Your name or accountable owner"
+                    />
                   </label>
                   <label className="editor-field">
-                    <span>Approval note <small>Optional</small></span>
-                    <textarea name="approvalNote" rows={3} maxLength={1000} placeholder="Record the review decision or applicable date." />
+                    <span>
+                      Approval note <small>Optional</small>
+                    </span>
+                    <textarea
+                      name="approvalNote"
+                      rows={3}
+                      maxLength={1000}
+                      placeholder="Record the review decision or applicable date."
+                    />
                   </label>
                 </>
               ) : lifecycleDialog.targetStatus === "archived" ? (
                 <div className="lifecycle-dialog__warning">
                   <Archive size={22} aria-hidden="true" />
-                  <p>The chart will become read-only and disappear from the Active library view. Its versions, sources, and last Current approval record will remain available.</p>
+                  <p>
+                    The chart will become read-only and disappear from the
+                    Active library view. Its versions, sources, and last Current
+                    approval record will remain available.
+                  </p>
                 </div>
               ) : lifecycleDialog.targetStatus === "in_review" ? (
                 <div className="lifecycle-dialog__warning">
                   <ShieldCheck size={22} aria-hidden="true" />
-                  <p>In review means the working chart has been submitted for verification. It is not yet approved or authoritative.</p>
+                  <p>
+                    In review means the working chart has been submitted for
+                    verification. It is not yet approved or authoritative.
+                  </p>
                 </div>
               ) : (
                 <div className="lifecycle-dialog__warning">
                   <PencilSimple size={22} aria-hidden="true" />
-                  <p>The chart will be editable again. Any previous Current checkpoint and approval record remain preserved in version history.</p>
+                  <p>
+                    The chart will be editable again. Any previous Current
+                    checkpoint and approval record remain preserved in version
+                    history.
+                  </p>
                 </div>
               )}
 
-              {lifecycleError ? <p className="editor-dialog__error" role="alert">{lifecycleError}</p> : null}
+              {lifecycleError ? (
+                <p className="editor-dialog__error" role="alert">
+                  {lifecycleError}
+                </p>
+              ) : null}
               <div className="editor-dialog__actions">
-                <button type="button" className="button button--secondary" onClick={() => setLifecycleDialog(null)} disabled={lifecycleBusy}>Cancel</button>
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  onClick={() => setLifecycleDialog(null)}
+                  disabled={lifecycleBusy}
+                >
+                  Cancel
+                </button>
                 <button
                   type="submit"
                   className="button button--primary"
-                  disabled={lifecycleBusy || (lifecycleDialog.targetStatus === "current" && !lifecycleReadiness?.ready)}
+                  disabled={
+                    lifecycleBusy ||
+                    (lifecycleDialog.targetStatus === "current" &&
+                      !lifecycleReadiness?.ready)
+                  }
                 >
                   {lifecycleBusy
                     ? "Saving lifecycle…"
@@ -8115,18 +10488,45 @@ function StudioWorkspace() {
 
       {deleteChartDialog ? (
         <div className="editor-dialog-scrim">
-          <section className="editor-dialog delete-chart-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-chart-dialog-title">
+          <section
+            className="editor-dialog delete-chart-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-chart-dialog-title"
+          >
             <div className="editor-dialog__heading">
               <div>
-                <span className="eyebrow">Archived chart · permanent action</span>
-                <h2 id="delete-chart-dialog-title">Permanently delete this chart?</h2>
-                <p>This removes the archived chart, every saved version, and all retained source files. It cannot be undone.</p>
+                <span className="eyebrow">
+                  Archived chart · permanent action
+                </span>
+                <h2 id="delete-chart-dialog-title">
+                  Permanently delete this chart?
+                </h2>
+                <p>
+                  This removes the archived chart, every saved version, and all
+                  retained source files. It cannot be undone.
+                </p>
               </div>
-              <button type="button" className="icon-button" onClick={() => { setDeleteChartDialog(null); setDeleteChartConfirmation(""); }} aria-label="Close deletion dialog" disabled={deleteChartBusy}>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => {
+                  setDeleteChartDialog(null);
+                  setDeleteChartConfirmation("");
+                }}
+                aria-label="Close deletion dialog"
+                disabled={deleteChartBusy}
+              >
                 <X size={18} aria-hidden="true" />
               </button>
             </div>
-            <form className="editor-dialog__form" onSubmit={(event) => { event.preventDefault(); submitPermanentDelete(); }}>
+            <form
+              className="editor-dialog__form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitPermanentDelete();
+              }}
+            >
               <label className="editor-field">
                 <span>Type the complete chart name to confirm</span>
                 <strong>{deleteChartDialog.chartName}</strong>
@@ -8142,13 +10542,31 @@ function StudioWorkspace() {
                   }}
                 />
               </label>
-              {deleteChartError ? <p className="editor-dialog__error" role="alert">{deleteChartError}</p> : null}
+              {deleteChartError ? (
+                <p className="editor-dialog__error" role="alert">
+                  {deleteChartError}
+                </p>
+              ) : null}
               <div className="editor-dialog__actions">
-                <button type="button" className="button button--secondary" onClick={() => { setDeleteChartDialog(null); setDeleteChartConfirmation(""); }} disabled={deleteChartBusy}>Cancel</button>
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  onClick={() => {
+                    setDeleteChartDialog(null);
+                    setDeleteChartConfirmation("");
+                  }}
+                  disabled={deleteChartBusy}
+                >
+                  Cancel
+                </button>
                 <button
                   type="submit"
                   className="button button--danger"
-                  disabled={deleteChartBusy || deleteChartConfirmation.trim() !== deleteChartDialog.chartName}
+                  disabled={
+                    deleteChartBusy ||
+                    deleteChartConfirmation.trim() !==
+                      deleteChartDialog.chartName
+                  }
                 >
                   {deleteChartBusy ? "Deleting…" : "Permanently delete chart"}
                 </button>
@@ -8169,7 +10587,9 @@ function StudioWorkspace() {
             <div className="editor-dialog__heading">
               <div>
                 <span className="eyebrow">
-                  {editorDialog.kind === "edit-chart" ? "Chart details" : "Create draft"}
+                  {editorDialog.kind === "edit-chart"
+                    ? "Chart details"
+                    : "Create draft"}
                 </span>
                 <h2 id="editor-dialog-title">
                   {editorDialog.kind === "create-chart"
@@ -8205,7 +10625,9 @@ function StudioWorkspace() {
             >
               <label className="editor-field">
                 <span>
-                  {editorDialog.kind === "add-child" ? "Unit name" : "Chart name"}
+                  {editorDialog.kind === "add-child"
+                    ? "Unit name"
+                    : "Chart name"}
                 </span>
                 <input
                   name="dialogName"
@@ -8248,7 +10670,6 @@ function StudioWorkspace() {
           </section>
         </div>
       ) : null}
-
     </div>
   );
 }

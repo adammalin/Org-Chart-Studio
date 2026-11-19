@@ -1,4 +1,12 @@
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
+import type { ChartFonts, OfficialCard } from "./chart-appearance";
+import {
+  PDFDocument,
+  StandardFonts,
+  rgb,
+  type PDFFont,
+  type PDFPage,
+} from "pdf-lib";
 import {
   connectionPointsForNode,
   EXPORT_CONNECTION_POINT_RADIUS,
@@ -40,7 +48,10 @@ function fitPdfTextSize(
   minimumSize = 3,
 ): number {
   let size = preferredSize;
-  while (size > minimumSize && font.widthOfTextAtSize(value, size) > maximumWidth) {
+  while (
+    size > minimumSize &&
+    font.widthOfTextAtSize(value, size) > maximumWidth
+  ) {
     size -= 0.25;
   }
   return Math.max(minimumSize, size);
@@ -63,16 +74,14 @@ function drawNode(
   const mapY = (top: number) => pageHeight - offsetY - top * scale;
   const compact = !node.showConnectionPoints;
   const divisionLike = /division|directorate/i.test(node.unitType);
-  const cardFill = compact && node.hierarchyLevel === 2
-    ? divisionLike
-      ? EXPORT_COLORS.energy
-      : EXPORT_COLORS.graphite
-    : EXPORT_COLORS.white;
-  const cardFillOpacity = compact && node.hierarchyLevel === 2
-    ? divisionLike
-      ? 0.18
-      : 0.58
-    : 1;
+  const cardFill =
+    compact && node.hierarchyLevel === 2
+      ? divisionLike
+        ? EXPORT_COLORS.energy
+        : EXPORT_COLORS.graphite
+      : EXPORT_COLORS.white;
+  const cardFillOpacity =
+    compact && node.hierarchyLevel === 2 ? (divisionLike ? 0.18 : 0.58) : 1;
   const centeredX = (value: string, font: PDFFont, size: number) =>
     x + Math.max(8 * scale, (width - font.widthOfTextAtSize(value, size)) / 2);
   const statusHex =
@@ -99,7 +108,11 @@ function drawNode(
           y: y + height - (node.hierarchyLevel === 1 ? 8 : 5) * scale,
           width,
           height: (node.hierarchyLevel === 1 ? 8 : 5) * scale,
-          color: color(node.hierarchyLevel === 2 ? EXPORT_COLORS.darkTeal : EXPORT_COLORS.green),
+          color: color(
+            node.hierarchyLevel === 2
+              ? EXPORT_COLORS.darkTeal
+              : EXPORT_COLORS.green,
+          ),
         }
       : {
           x,
@@ -172,7 +185,8 @@ function drawNode(
   const statusMarkerRadius = Math.max(1.8, 4 * scale);
   const statusGap = 7 * scale;
   const statusRowStartX = compact
-    ? x + Math.max(
+    ? x +
+      Math.max(
         8 * scale,
         (width - (statusMarkerRadius * 2 + statusGap + statusTextWidth)) / 2,
       )
@@ -245,7 +259,10 @@ function drawNode(
         Math.max(3.5, 8 * scale),
         entryStatusMaximumWidth,
       );
-      const entryStatusWidth = bold.widthOfTextAtSize(entry.statusText, entryStatusSize);
+      const entryStatusWidth = bold.widthOfTextAtSize(
+        entry.statusText,
+        entryStatusSize,
+      );
       const entryStatusRight = x + width - 12 * scale;
       const entryStatusMarkerRadius = Math.max(1.4, 3.5 * scale);
       page.drawLine({
@@ -308,10 +325,13 @@ function drawNode(
 export async function buildChartPdf(
   scene: ChartExportScene,
   presetId: ExportPresetId = "natural",
+  fonts?: ChartFonts|null,
 ): Promise<Uint8Array> {
   const targetScale = 0.72;
   const maxPageDimension = 14_400;
-  const preset = EXPORT_PRESETS.find((candidate) => candidate.id === presetId) ?? EXPORT_PRESETS[0];
+  const preset =
+    EXPORT_PRESETS.find((candidate) => candidate.id === presetId) ??
+    EXPORT_PRESETS[0];
   const pageWidth = preset.pageWidthInches
     ? preset.pageWidthInches * 72
     : Math.min(maxPageDimension, Math.max(792, scene.width * targetScale));
@@ -337,10 +357,28 @@ export async function buildChartPdf(
   document.setCreationDate(new Date(scene.generatedAt));
   document.setModificationDate(new Date(scene.generatedAt));
 
-  const regular = await document.embedFont(StandardFonts.Helvetica);
-  const bold = await document.embedFont(StandardFonts.HelveticaBold);
+  if(fonts)document.registerFontkit(fontkit);
+  const decode=(base64:string)=>Uint8Array.from(atob(base64),c=>c.charCodeAt(0));
+  const regular = await document.embedFont(fonts?decode(fonts.regular):StandardFonts.Helvetica,{subset:!!fonts});
+  const bold = await document.embedFont(fonts?decode(fonts.bold):StandardFonts.HelveticaBold,{subset:!!fonts});
   const page = document.addPage([pageWidth, pageHeight]);
   const mapY = (top: number) => pageHeight - offsetY - top * scale;
+  if(scene.appearance === "official") {
+    page.drawRectangle({x:0,y:0,width:pageWidth,height:pageHeight,color:rgb(1,1,1)});
+    const drawCard=(card:OfficialCard,x:number,y:number,width:number,height:number)=>{
+      page.drawRectangle({x:offsetX+x*scale,y:mapY(y+height),width:width*scale,height:height*scale,color:color(card.fill),borderColor:color(card.border),borderWidth:card.borderWidth*scale});
+      for(const line of card.lines){const font=line.bold?bold:regular;const size=line.size*scale;
+        page.drawText(pdfText(line.text,font),{x:offsetX+(x+line.x)*scale-font.widthOfTextAtSize(line.text,size)/2,y:mapY(y+line.y),size,font,color:rgb(0,0,0)});
+      }
+    };
+    const drawLine=(points:{x:number;y:number}[],dashed=false)=>{for(let i=1;i<points.length;i++)page.drawLine({start:{x:offsetX+points[i-1].x*scale,y:mapY(points[i-1].y)},end:{x:offsetX+points[i].x*scale,y:mapY(points[i].y)},color:color('595959'),thickness:(scene.connectorWidth??1.5)*scale,...(dashed?{dashArray:[(scene.connectorWidth??1.5)*3*scale,(scene.connectorWidth??1.5)*2*scale]}:{})});};
+    for(const edge of scene.edges)drawLine(edge.points);
+    for(const n of scene.nodes)drawCard(n.official!,n.x,n.y,n.width,n.height);
+    for(const p of scene.supportPanels??[]){if(p.connector)drawLine(p.connector.points,p.connector.style==='dashed');drawCard(p.official!,p.x,p.y,p.width,p.height);}
+    page.drawText(pdfText(`${exportLifecycleLabel(scene).replaceAll('•','-')} - Generated ${scene.generatedAt}`,regular),{x:offsetX+52*scale,y:mapY(scene.height-12),size:10*scale,font:regular,color:color('595959')});
+    return document.save();
+  }
+
   page.drawRectangle({
     x: 0,
     y: 0,
@@ -369,16 +407,13 @@ export async function buildChartPdf(
     font: bold,
     color: color(EXPORT_COLORS.ink),
   });
-  page.drawText(
-    exportLifecycleLabel(scene).replaceAll("•", "-"),
-    {
-      x: offsetX + 30 * scale,
-      y: mapY(53),
-      size: Math.max(5, 10 * scale),
-      font: bold,
-      color: color(EXPORT_COLORS.darkTeal),
-    },
-  );
+  page.drawText(exportLifecycleLabel(scene).replaceAll("•", "-"), {
+    x: offsetX + 30 * scale,
+    y: mapY(53),
+    size: Math.max(5, 10 * scale),
+    font: bold,
+    color: color(EXPORT_COLORS.darkTeal),
+  });
 
   scene.edges.forEach((edge) => {
     for (let index = 1; index < edge.points.length; index += 1) {
@@ -395,6 +430,52 @@ export async function buildChartPdf(
   scene.nodes.forEach((node) =>
     drawNode(page, node, pageHeight, scale, offsetX, offsetY, regular, bold),
   );
+  for (const p of scene.supportPanels ?? []) {
+    const x = offsetX + p.x * scale,
+      y = pageHeight - offsetY - (p.y + p.height) * scale;
+    for (let i = 1; i < (p.connector?.points.length ?? 0); i++) {
+      const a = p.connector!.points[i - 1],
+        b = p.connector!.points[i];
+      page.drawLine({
+        start: {
+          x: offsetX + a.x * scale,
+          y: pageHeight - offsetY - a.y * scale,
+        },
+        end: {
+          x: offsetX + b.x * scale,
+          y: pageHeight - offsetY - b.y * scale,
+        },
+        color: color("65756B"),
+        thickness: 0.75,
+        ...(p.connector!.style === "dashed" ? { dashArray: [4, 3] } : {}),
+      });
+    }
+    page.drawRectangle({
+      x,
+      y,
+      width: p.width * scale,
+      height: p.height * scale,
+      color: color("E7E9E7"),
+      borderColor: color("6C7571"),
+      borderWidth: 0.75,
+    });
+    page.drawText(pdfText(p.title, bold), {
+      x: x + 20 * scale,
+      y: pageHeight - offsetY - (p.y + 32) * scale,
+      size: 20 * scale,
+      font: bold,
+      color: color("273C36"),
+    });
+    p.lines.forEach((line, i) =>
+      page.drawText(pdfText(line, regular), {
+        x: x + 20 * scale,
+        y: pageHeight - offsetY - (p.y + 62 + i * p.lineHeight) * scale,
+        size: p.fontSize * scale,
+        font: regular,
+        color: color("273C36"),
+      }),
+    );
+  }
 
   const generated = new Date(scene.generatedAt).toISOString();
   page.drawText(

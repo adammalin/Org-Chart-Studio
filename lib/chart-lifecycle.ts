@@ -1,3 +1,4 @@
+import { supportReviewCount, type ChartSupplements } from "./chart-supplements";
 import type { Edge } from "@xyflow/react";
 import type { ChartDocument, ChartStatus } from "./chart-library";
 import { validateHierarchy, type OrgFlowNode } from "./org-chart";
@@ -10,17 +11,23 @@ export interface LifecycleReadiness {
 }
 
 const allowedTransitions: Record<ChartStatus, ChartStatus[]> = {
-  draft: ["in_review", "archived"],
+  draft: ["in_review", "current", "archived"],
   in_review: ["draft", "current", "archived"],
   current: ["draft", "archived"],
   archived: ["draft"],
 };
 
-export function canTransitionChartStatus(from: ChartStatus, to: ChartStatus): boolean {
+export function canTransitionChartStatus(
+  from: ChartStatus,
+  to: ChartStatus,
+): boolean {
   return from === to || allowedTransitions[from].includes(to);
 }
 
-export function sourceReviewItemCount(nodes: OrgFlowNode[], edges: Edge[]): number {
+export function sourceReviewItemCount(
+  nodes: OrgFlowNode[],
+  edges: Edge[],
+): number {
   const nodeCount = nodes.filter(
     (node) => node.data.unit.sourceCertainty === "needs_review",
   ).length;
@@ -31,21 +38,17 @@ export function sourceReviewItemCount(nodes: OrgFlowNode[], edges: Edge[]): numb
 }
 
 export function currentReadiness(
-  chart: Pick<ChartDocument, "nodes" | "edges">,
+  chart: Pick<ChartDocument, "nodes" | "edges"> & ChartSupplements,
 ): LifecycleReadiness {
   const structuralBlockers = validateHierarchy(chart.nodes, chart.edges).filter(
     (finding) => finding.severity === "blocking",
   ).length;
-  const reviewItems = sourceReviewItemCount(chart.nodes, chart.edges);
+  const reviewItems =
+    sourceReviewItemCount(chart.nodes, chart.edges) + supportReviewCount(chart);
   const blockingReasons: string[] = [];
   if (structuralBlockers) {
     blockingReasons.push(
       `${structuralBlockers} blocking structure issue${structuralBlockers === 1 ? "" : "s"} must be resolved.`,
-    );
-  }
-  if (reviewItems) {
-    blockingReasons.push(
-      `${reviewItems} source review item${reviewItems === 1 ? "" : "s"} must be resolved.`,
     );
   }
   return {
@@ -57,16 +60,13 @@ export function currentReadiness(
 }
 
 export function lifecycleTransitionError(
-  chart: Pick<ChartDocument, "status" | "nodes" | "edges">,
+  chart: Pick<ChartDocument, "status" | "nodes" | "edges"> & ChartSupplements,
   targetStatus: ChartStatus,
 ): string | null {
   if (!canTransitionChartStatus(chart.status, targetStatus)) {
     return `A ${chart.status.replace("_", " ")} chart cannot move directly to ${targetStatus.replace("_", " ")}.`;
   }
   if (targetStatus === "current") {
-    if (chart.status !== "in_review") {
-      return "Only a chart that is In review can be marked Current.";
-    }
     const readiness = currentReadiness(chart);
     if (!readiness.ready) return readiness.blockingReasons.join(" ");
   }

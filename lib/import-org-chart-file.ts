@@ -228,13 +228,13 @@ function normalizeWorkbookRows(matrix: string[][]): {
         parentId: read("parentId"),
         positionTitle: read("positionTitle"),
         assignmentLabel,
-        positionStatus: ["filled", "acting", "vacant"].includes(statusValue)
+        positionStatus: ["filled", "acting", "vacant", "not_specified"].includes(statusValue)
           ? statusValue
           : /vacant/i.test(assignmentLabel)
             ? "vacant"
             : assignmentLabel
               ? "filled"
-              : "vacant",
+              : "not_specified",
         effectiveDate: read("effectiveDate"),
         publicationVisibility:
           read("publicationVisibility").toLowerCase() === "public"

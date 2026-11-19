@@ -1,3 +1,5 @@
+import { readJsonObject, jsonField } from "../../../lib/json-request";
+import { normalizeSupplements } from "../../../lib/chart-supplements";
 import { ensureSchema, getBindings } from "../../../db";
 import type { AiImportProposal } from "../../../lib/ai-import-review";
 import { auditChartQuality } from "../../../lib/chart-governance";
@@ -8,7 +10,10 @@ import {
   type ChartDocument,
   type SourceRecord,
 } from "../../../lib/chart-library";
-import type { ImportIntakeFile, ImportIntakeStatus } from "../../../lib/import-intake";
+import type {
+  ImportIntakeFile,
+  ImportIntakeStatus,
+} from "../../../lib/import-intake";
 import { parseImportBytes } from "../../../lib/import-org-chart-file";
 
 const PROPOSAL_TTL_MS = 30 * 60_000;
@@ -69,7 +74,8 @@ function cleanProposalStore() {
   const store = proposalStore();
   const now = Date.now();
   for (const [id, stored] of store.proposals) {
-    if (Date.parse(stored.proposal.expiresAt) <= now) store.proposals.delete(id);
+    if (Date.parse(stored.proposal.expiresAt) <= now)
+      store.proposals.delete(id);
   }
   while (store.proposals.size >= MAX_PENDING_PROPOSALS) {
     const oldest = store.proposals.keys().next().value as string | undefined;
@@ -92,7 +98,10 @@ async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
 }
 
 function chartFromRow(row: ChartRow): ChartDocument {
-  const payload = JSON.parse(row.payload) as Pick<ChartDocument, "nodes" | "edges"> & {
+  const payload = JSON.parse(row.payload) as Pick<
+    ChartDocument,
+    "nodes" | "edges"
+  > & {
     lifecycle?: Partial<ChartDocument["lifecycle"]>;
   };
   const status = normalizeChartStatus(row.status);
@@ -113,6 +122,7 @@ function chartFromRow(row: ChartRow): ChartDocument {
     ),
     nodes: payload.nodes,
     edges: payload.edges,
+    ...normalizeSupplements(payload),
     sources: [],
   };
 }
@@ -148,6 +158,7 @@ function chartInsert(db: D1Database, chart: ChartDocument) {
       JSON.stringify({
         nodes: storageSafeNodes(chart.nodes),
         edges: chart.edges,
+        ...normalizeSupplements(chart),
         lifecycle: chart.lifecycle,
       }),
     );
@@ -166,7 +177,10 @@ function versionInsert(db: D1Database, chart: ChartDocument, label: string) {
       chart.version,
       label,
       chart.createdAt,
-      JSON.stringify({ nodes: storageSafeNodes(chart.nodes), edges: chart.edges }),
+      JSON.stringify({
+        nodes: storageSafeNodes(chart.nodes),
+        edges: chart.edges,
+      }),
     );
 }
 
@@ -196,21 +210,34 @@ function sourceInsert(db: D1Database, source: SourceRecord) {
 async function loadPendingIntake(db: D1Database, intakeId: string | null) {
   if (!intakeId) return { intake: null, files: [] as ImportIntakeFile[] };
   const [intake, files] = await Promise.all([
-    db.prepare("SELECT * FROM import_intakes WHERE id = ? AND status = 'pending'")
+    db
+      .prepare(
+        "SELECT * FROM import_intakes WHERE id = ? AND status = 'pending'",
+      )
       .bind(intakeId)
       .first<IntakeRow>(),
-    db.prepare("SELECT * FROM import_intake_files WHERE intake_id = ? ORDER BY created_at")
+    db
+      .prepare(
+        "SELECT * FROM import_intake_files WHERE intake_id = ? ORDER BY created_at",
+      )
       .bind(intakeId)
       .all<IntakeFileRow>(),
   ]);
-  if (!intake) throw new Error("The selected source intake is unavailable or already used.");
+  if (!intake)
+    throw new Error(
+      "The selected source intake is unavailable or already used.",
+    );
   return { intake, files: files.results.map(intakeFileFromRow) };
 }
 
 export async function GET(request: Request) {
   cleanProposalStore();
   const proposalId = new URL(request.url).searchParams.get("proposalId");
-  if (!proposalId) return noStoreJson({ error: "A proposal ID is required." }, { status: 400 });
+  if (!proposalId)
+    return noStoreJson(
+      { error: "A proposal ID is required." },
+      { status: 400 },
+    );
   const stored = proposalStore().proposals.get(proposalId);
   if (!stored) {
     return noStoreJson(
@@ -225,7 +252,16 @@ export async function POST(request: Request) {
   const { DB, SOURCE_FILES } = getBindings();
   await ensureSchema(DB);
   cleanProposalStore();
-  const body = (await request.json()) as {
+  const requestBody = await readJsonObject(request, {
+    action: jsonField.text,
+    chartName: jsonField.text,
+    format: jsonField.text,
+    contents: jsonField.text,
+    intakeId: jsonField.text,
+    proposalId: jsonField.text,
+  });
+  if (!requestBody.ok) return requestBody.response;
+  const body = requestBody.body as {
     action?: "stage" | "accept" | "reject";
     chartName?: string;
     format?: "csv" | "json";
@@ -238,20 +274,40 @@ export async function POST(request: Request) {
     const chartName = body.chartName?.trim() ?? "";
     const contents = body.contents ?? "";
     if (!chartName || chartName.length > 160) {
-      return noStoreJson({ error: "Provide a chart name no longer than 160 characters." }, { status: 400 });
+      return noStoreJson(
+        { error: "Provide a chart name no longer than 160 characters." },
+        { status: 400 },
+      );
     }
     if (!body.format || !["csv", "json"].includes(body.format) || !contents) {
-      return noStoreJson({ error: "Normalized CSV or JSON contents are required." }, { status: 400 });
+      return noStoreJson(
+        { error: "Normalized CSV or JSON contents are required." },
+        { status: 400 },
+      );
     }
     if (new TextEncoder().encode(contents).byteLength > 4_500_000) {
-      return noStoreJson({ error: "Normalized import contents exceed 4.5 MB." }, { status: 413 });
+      return noStoreJson(
+        { error: "Normalized import contents exceed 4.5 MB." },
+        { status: 413 },
+      );
     }
     let intake;
     let intakeFiles: ImportIntakeFile[];
     try {
-      ({ intake, files: intakeFiles } = await loadPendingIntake(DB, body.intakeId ?? null));
+      ({ intake, files: intakeFiles } = await loadPendingIntake(
+        DB,
+        body.intakeId ?? null,
+      ));
     } catch (error) {
-      return noStoreJson({ error: error instanceof Error ? error.message : "The source intake is unavailable." }, { status: 404 });
+      return noStoreJson(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "The source intake is unavailable.",
+        },
+        { status: 404 },
+      );
     }
     let preview;
     try {
@@ -260,15 +316,29 @@ export async function POST(request: Request) {
         new TextEncoder().encode(contents),
       );
     } catch (error) {
-      return noStoreJson({ error: error instanceof Error ? error.message : "The normalized import could not be parsed." }, { status: 422 });
-    }
-    if (preview.findings.some((finding) => finding.severity === "blocking")) {
       return noStoreJson(
-        { error: "Resolve blocking validation findings before staging the import.", findings: preview.findings },
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "The normalized import could not be parsed.",
+        },
         { status: 422 },
       );
     }
-    const existing = await DB.prepare("SELECT * FROM charts ORDER BY updated_at DESC").all<ChartRow>();
+    if (preview.findings.some((finding) => finding.severity === "blocking")) {
+      return noStoreJson(
+        {
+          error:
+            "Resolve blocking validation findings before staging the import.",
+          findings: preview.findings,
+        },
+        { status: 422 },
+      );
+    }
+    const existing = await DB.prepare(
+      "SELECT * FROM charts ORDER BY updated_at DESC",
+    ).all<ChartRow>();
     const quality = auditChartQuality(
       preview.nodes,
       preview.edges,
@@ -286,7 +356,12 @@ export async function POST(request: Request) {
       intakeId: intake?.id ?? null,
       intakeName: intake?.name ?? null,
       evidenceFileNames: intakeFiles.map((file) => file.fileName),
-      proposed: { nodes: preview.nodes, edges: preview.edges },
+      proposed: {
+        nodes: preview.nodes,
+        edges: preview.edges,
+        supportPanels: preview.supportPanels,
+        sourceLayout: preview.sourceLayout,
+      },
       findings: [...preview.findings, ...quality.findings],
       quality,
     };
@@ -294,10 +369,16 @@ export async function POST(request: Request) {
     return noStoreJson({ proposal }, { status: 201 });
   }
 
-  if ((body.action === "accept" || body.action === "reject") && body.proposalId) {
+  if (
+    (body.action === "accept" || body.action === "reject") &&
+    body.proposalId
+  ) {
     const stored = proposalStore().proposals.get(body.proposalId);
     if (!stored) {
-      return noStoreJson({ error: "This AI import proposal expired or is no longer available." }, { status: 404 });
+      return noStoreJson(
+        { error: "This AI import proposal expired or is no longer available." },
+        { status: 404 },
+      );
     }
     if (body.action === "reject") {
       proposalStore().proposals.delete(body.proposalId);
@@ -307,10 +388,21 @@ export async function POST(request: Request) {
     let intake;
     let intakeFiles: ImportIntakeFile[];
     try {
-      ({ intake, files: intakeFiles } = await loadPendingIntake(DB, stored.proposal.intakeId));
+      ({ intake, files: intakeFiles } = await loadPendingIntake(
+        DB,
+        stored.proposal.intakeId,
+      ));
     } catch (error) {
       proposalStore().proposals.delete(body.proposalId);
-      return noStoreJson({ error: error instanceof Error ? error.message : "The source intake is unavailable." }, { status: 409 });
+      return noStoreJson(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "The source intake is unavailable.",
+        },
+        { status: 409 },
+      );
     }
     const now = new Date().toISOString();
     const chartId = `chart-${crypto.randomUUID()}`;
@@ -319,12 +411,15 @@ export async function POST(request: Request) {
     const normalizedFileName = `ai-normalized-org-chart.${stored.proposal.format}`;
     const normalizedStorageKey = `chart-sources/${chartId}/${normalizedSourceId}-${normalizedFileName}`;
     const normalizedChecksum = await sha256Hex(normalizedBytes.slice().buffer);
-    const warningCount = stored.proposal.findings.filter((finding) => finding.severity === "warning").length;
+    const warningCount = stored.proposal.findings.filter(
+      (finding) => finding.severity === "warning",
+    ).length;
     const normalizedSource: SourceRecord = {
       id: normalizedSourceId,
       chartId,
       fileName: normalizedFileName,
-      contentType: stored.proposal.format === "json" ? "application/json" : "text/csv",
+      contentType:
+        stored.proposal.format === "json" ? "application/json" : "text/csv",
       fileSize: normalizedBytes.byteLength,
       checksum: normalizedChecksum,
       storageKey: normalizedStorageKey,
@@ -357,12 +452,17 @@ export async function POST(request: Request) {
       lifecycle: normalizeChartLifecycle(null, "draft", now, 1),
       nodes: storageSafeNodes(stored.proposal.proposed.nodes),
       edges: stored.proposal.proposed.edges,
+      ...normalizeSupplements(stored.proposal.proposed),
       sources: [normalizedSource, ...evidenceSources],
     };
     try {
       await SOURCE_FILES.put(normalizedStorageKey, normalizedBytes, {
         httpMetadata: { contentType: normalizedSource.contentType },
-        customMetadata: { chartId, sourceId: normalizedSourceId, checksum: normalizedChecksum },
+        customMetadata: {
+          chartId,
+          sourceId: normalizedSourceId,
+          checksum: normalizedChecksum,
+        },
       });
       await DB.batch([
         chartInsert(DB, chart),
@@ -385,5 +485,8 @@ export async function POST(request: Request) {
     return noStoreJson({ chart }, { status: 201 });
   }
 
-  return noStoreJson({ error: "Unsupported AI import proposal action." }, { status: 400 });
+  return noStoreJson(
+    { error: "Unsupported AI import proposal action." },
+    { status: 400 },
+  );
 }

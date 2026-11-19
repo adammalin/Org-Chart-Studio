@@ -1,3 +1,9 @@
+import {
+  normalizeSupplements,
+  type ChartSupplements,
+  type SourceLayout,
+  type SupportPanel,
+} from "./chart-supplements";
 import type { Edge } from "@xyflow/react";
 import {
   UNIT_TYPES,
@@ -33,6 +39,8 @@ export const importColumns = [
 export type ImportRow = Record<(typeof importColumns)[number], string>;
 
 export interface ImportPreview {
+  supportPanels?: SupportPanel[];
+  sourceLayout?: SourceLayout;
   nodes: OrgFlowNode[];
   edges: Edge[];
   findings: ValidationFinding[];
@@ -66,10 +74,17 @@ function splitCsvLine(line: string): string[] {
 }
 
 function normalizedHeader(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 }
 
-function stablePersonId(value: string, index: number, used: Set<string>): string {
+function stablePersonId(
+  value: string,
+  index: number,
+  used: Set<string>,
+): string {
   const stem =
     value
       .toLowerCase()
@@ -95,7 +110,8 @@ function personNameKey(value: string): string {
     .split(/\s+/)
     .filter(Boolean);
   const withoutMiddleInitials = parts.filter(
-    (part, index) => part.length > 1 || index === 0 || index === parts.length - 1,
+    (part, index) =>
+      part.length > 1 || index === 0 || index === parts.length - 1,
   );
   return withoutMiddleInitials.join("");
 }
@@ -133,7 +149,8 @@ function workforceRosterRows(matrix: string[][]): {
     "managerfullname",
     "managername",
   );
-  if (fullNameColumn < 0 || titleColumn < 0 || supervisorColumn < 0) return null;
+  if (fullNameColumn < 0 || titleColumn < 0 || supervisorColumn < 0)
+    return null;
 
   const organizationColumn = column(
     "organizationname",
@@ -141,7 +158,11 @@ function workforceRosterRows(matrix: string[][]): {
     "departmentname",
     "orgname",
   );
-  const employmentTypeColumn = column("employmenttype", "workertype", "employeetype");
+  const employmentTypeColumn = column(
+    "employmenttype",
+    "workertype",
+    "employeetype",
+  );
   const usedIds = new Set<string>();
   const rawRows = matrix
     .slice(1)
@@ -151,7 +172,9 @@ function workforceRosterRows(matrix: string[][]): {
       const positionTitle = String(values[titleColumn] ?? "").trim();
       const supervisorName = String(values[supervisorColumn] ?? "").trim();
       const organizationName =
-        organizationColumn >= 0 ? String(values[organizationColumn] ?? "").trim() : "";
+        organizationColumn >= 0
+          ? String(values[organizationColumn] ?? "").trim()
+          : "";
       const employmentType =
         employmentTypeColumn >= 0
           ? String(values[employmentTypeColumn] ?? "").trim()
@@ -177,9 +200,14 @@ function workforceRosterRows(matrix: string[][]): {
   let ambiguousSupervisorCount = 0;
   const rows = rawRows.map((row) => {
     const matches = row.supervisorName
-      ? [...new Set(idsByPersonName.get(personNameKey(row.supervisorName)) ?? [])]
+      ? [
+          ...new Set(
+            idsByPersonName.get(personNameKey(row.supervisorName)) ?? [],
+          ),
+        ]
       : [];
-    if (row.supervisorName && matches.length === 0) externalSupervisorCount += 1;
+    if (row.supervisorName && matches.length === 0)
+      externalSupervisorCount += 1;
     if (matches.length > 1) ambiguousSupervisorCount += 1;
     const assignmentParts = [row.organizationName];
     if (row.employmentType && !/^employee$/i.test(row.employmentType)) {
@@ -192,12 +220,15 @@ function workforceRosterRows(matrix: string[][]): {
       type: inferredRosterType(row.positionTitle),
       parentId: matches.length === 1 ? matches[0] : "",
       positionTitle: row.positionTitle,
-      assignmentLabel: assignmentParts.filter(Boolean).join(" · ") || row.fullName,
+      assignmentLabel:
+        assignmentParts.filter(Boolean).join(" · ") || row.fullName,
       positionStatus: "filled",
       effectiveDate: "Current",
       publicationVisibility: "internal",
       source: [
-        row.organizationName ? `Roster organization: ${row.organizationName}` : "",
+        row.organizationName
+          ? `Roster organization: ${row.organizationName}`
+          : "",
         row.employmentType ? `Employment type: ${row.employmentType}` : "",
         row.supervisorName ? `Roster supervisor: ${row.supervisorName}` : "",
       ]
@@ -208,7 +239,10 @@ function workforceRosterRows(matrix: string[][]): {
       reviewNote: "",
       planningState: "current",
       relationshipType: "primary supervisory",
-      relationshipSourceLocator: matches.length === 1 ? `Workforce roster row ${row.rowNumber}; Supervisor Full Name` : "",
+      relationshipSourceLocator:
+        matches.length === 1
+          ? `Workforce roster row ${row.rowNumber}; Supervisor Full Name`
+          : "",
       relationshipSourceCertainty: matches.length === 1 ? "confirmed" : "",
       relationshipReviewNote: "",
     } satisfies ImportRow;
@@ -253,14 +287,17 @@ function parseCsvWithFindings(text: string): {
   if (!matrix.length) return { rows: [], findings: [] };
   const headers = matrix[0].map((header) => header.trim());
   return {
-    rows: matrix.slice(1).map((values) =>
-      Object.fromEntries(
-        importColumns.map((column) => [
-          column,
-          values[headers.indexOf(column)]?.trim() ?? "",
-        ]),
-      ) as ImportRow,
-    ),
+    rows: matrix
+      .slice(1)
+      .map(
+        (values) =>
+          Object.fromEntries(
+            importColumns.map((column) => [
+              column,
+              values[headers.indexOf(column)]?.trim() ?? "",
+            ]),
+          ) as ImportRow,
+      ),
     findings: [],
   };
 }
@@ -285,7 +322,8 @@ function rowsFromSourceManifest(value: unknown): ImportRow[] | null {
   if (!canonicalData || typeof canonicalData !== "object") return null;
 
   const units = (canonicalData as { units?: unknown }).units;
-  const relationships = (canonicalData as { relationships?: unknown }).relationships;
+  const relationships = (canonicalData as { relationships?: unknown })
+    .relationships;
   if (!Array.isArray(units) || !Array.isArray(relationships)) return null;
 
   const relationshipByTarget = new Map<string, Record<string, unknown>>();
@@ -319,7 +357,9 @@ function rowsFromSourceManifest(value: unknown): ImportRow[] | null {
       sourceCertainty: String(unit.sourceCertainty ?? ""),
       reviewNote: String(unit.reviewNote ?? ""),
       planningState: String(unit.planningState ?? ""),
-      relationshipType: String(relationship?.relationshipType ?? relationship?.type ?? ""),
+      relationshipType: String(
+        relationship?.relationshipType ?? relationship?.type ?? "",
+      ),
       relationshipSourceLocator: String(relationship?.sourceLocator ?? ""),
       relationshipSourceCertainty: String(relationship?.sourceCertainty ?? ""),
       relationshipReviewNote: String(relationship?.reviewNote ?? ""),
@@ -362,7 +402,11 @@ const structuralNameWords = new Set([
 function looksLikePersonName(value: string): boolean {
   const words = value.trim().split(/\s+/).filter(Boolean);
   if (words.length < 2 || words.length > 5) return false;
-  if (words.some((word) => structuralNameWords.has(word.toLowerCase().replace(/[^a-z]/g, "")))) {
+  if (
+    words.some((word) =>
+      structuralNameWords.has(word.toLowerCase().replace(/[^a-z]/g, "")),
+    )
+  ) {
     return false;
   }
   return words.every((word) => /^[A-Z][A-Za-z'’.-]*$/.test(word));
@@ -370,13 +414,14 @@ function looksLikePersonName(value: string): boolean {
 
 function importSafetyFindings(rows: ImportRow[]): ValidationFinding[] {
   const findings: ValidationFinding[] = [];
-  const missingUnitCertainty = rows.filter((row) => !row.sourceCertainty.trim()).length;
+  const missingUnitCertainty = rows.filter(
+    (row) => !row.sourceCertainty.trim(),
+  ).length;
   const missingRelationshipCertainty = rows.filter(
     (row) => row.parentId && !row.relationshipSourceCertainty.trim(),
   ).length;
   const confirmedWithoutLocator = rows.filter(
-    (row) =>
-      row.sourceCertainty === "confirmed" && !row.sourceLocator.trim(),
+    (row) => row.sourceCertainty === "confirmed" && !row.sourceLocator.trim(),
   ).length;
   const confirmedRelationshipWithoutLocator = rows.filter(
     (row) =>
@@ -387,21 +432,28 @@ function importSafetyFindings(rows: ImportRow[]): ValidationFinding[] {
   const personVacancies = rows.filter(
     (row) =>
       row.positionStatus === "vacant" &&
-      /^(?:position\s+)?vacant$/i.test(row.assignmentLabel.trim() || "Position vacant") &&
+      /^(?:position\s+)?vacant$/i.test(
+        row.assignmentLabel.trim() || "Position vacant",
+      ) &&
       looksLikePersonName(row.name),
   );
   const descriptiveUnits = rows.filter(
     (row) =>
       row.positionStatus === "vacant" &&
       (!row.positionTitle.trim() || /not supplied/i.test(row.positionTitle)) &&
-      /\b(portfolio|coverage|specialt(?:y|ies)|service list|client list|legend)\b/i.test(row.name),
+      /\b(portfolio|coverage|specialt(?:y|ies)|service list|client list|legend)\b/i.test(
+        row.name,
+      ),
   );
   const locatorCounts = new Map<string, number>();
   rows.forEach((row) => {
     const locator = row.sourceLocator.trim().toLowerCase();
-    if (locator) locatorCounts.set(locator, (locatorCounts.get(locator) ?? 0) + 1);
+    if (locator)
+      locatorCounts.set(locator, (locatorCounts.get(locator) ?? 0) + 1);
   });
-  const sharedLocators = [...locatorCounts.values()].filter((count) => count > 1).length;
+  const sharedLocators = [...locatorCounts.values()].filter(
+    (count) => count > 1,
+  ).length;
 
   if (missingUnitCertainty) {
     findings.push({
@@ -448,7 +500,11 @@ function importSafetyFindings(rows: ImportRow[]): ValidationFinding[] {
 
   const children = new Map<string, string[]>();
   rows.forEach((row) => {
-    if (row.parentId) children.set(row.parentId, [...(children.get(row.parentId) ?? []), row.id]);
+    if (row.parentId)
+      children.set(row.parentId, [
+        ...(children.get(row.parentId) ?? []),
+        row.id,
+      ]);
   });
   let longestLinearChain = 0;
   rows.forEach((row) => {
@@ -462,7 +518,10 @@ function importSafetyFindings(rows: ImportRow[]): ValidationFinding[] {
     }
     longestLinearChain = Math.max(longestLinearChain, length);
   });
-  if (longestLinearChain >= 6 && longestLinearChain >= Math.ceil(rows.length * 0.6)) {
+  if (
+    longestLinearChain >= 6 &&
+    longestLinearChain >= Math.ceil(rows.length * 0.6)
+  ) {
     findings.push({
       code: "SUSPICIOUS_LINEAR_CHAIN",
       severity: "warning",
@@ -477,7 +536,12 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
   const findings: ValidationFinding[] = [];
   const ids = new Set<string>();
   const allowedTypes = new Set<UnitType>(UNIT_TYPES);
-  const allowedStatuses = new Set<PositionStatus>(["filled", "acting", "vacant"]);
+  const allowedStatuses = new Set<PositionStatus>([
+    "filled",
+    "acting",
+    "vacant",
+    "not_specified",
+  ]);
 
   if (!rows.length) {
     findings.push({
@@ -511,7 +575,10 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
         message: `Row ${rowNumber} has unsupported type ${row.type}.`,
       });
     }
-    if (row.positionStatus && !allowedStatuses.has(row.positionStatus as PositionStatus)) {
+    if (
+      row.positionStatus &&
+      !allowedStatuses.has(row.positionStatus as PositionStatus)
+    ) {
       findings.push({
         code: "INVALID_POSITION_STATUS",
         severity: "blocking",
@@ -528,7 +595,10 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
         message: `Row ${rowNumber} has unsupported sourceCertainty ${row.sourceCertainty}.`,
       });
     }
-    if (row.planningState && !["current", "planned"].includes(row.planningState)) {
+    if (
+      row.planningState &&
+      !["current", "planned"].includes(row.planningState)
+    ) {
       findings.push({
         code: "INVALID_PLANNING_STATE",
         severity: "blocking",
@@ -537,7 +607,9 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
     }
     if (
       row.relationshipSourceCertainty &&
-      !["confirmed", "inferred", "needs_review"].includes(row.relationshipSourceCertainty)
+      !["confirmed", "inferred", "needs_review"].includes(
+        row.relationshipSourceCertainty,
+      )
     ) {
       findings.push({
         code: "INVALID_RELATIONSHIP_SOURCE_CERTAINTY",
@@ -547,7 +619,9 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
     }
     if (
       row.relationshipType &&
-      !["primary supervisory", "secondary supervisory"].includes(row.relationshipType)
+      !["primary supervisory", "secondary supervisory"].includes(
+        row.relationshipType,
+      )
     ) {
       findings.push({
         code: "INVALID_RELATIONSHIP_TYPE",
@@ -596,22 +670,31 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
           id: row.id,
           name: row.name,
           shortName: row.shortName || row.name,
-          type: (allowedTypes.has(row.type as UnitType) ? row.type : "group") as UnitType,
+          type: (allowedTypes.has(row.type as UnitType)
+            ? row.type
+            : "group") as UnitType,
           positionTitle: row.positionTitle || "Position not supplied",
           assignmentLabel: row.assignmentLabel || "Position vacant",
-          positionStatus: (allowedStatuses.has(row.positionStatus as PositionStatus)
+          positionStatus: (allowedStatuses.has(
+            row.positionStatus as PositionStatus,
+          )
             ? row.positionStatus
             : "vacant") as PositionStatus,
           effectiveDate: row.effectiveDate || "Current",
           source: row.source || "Structured import pending review",
           sourceLocator: row.sourceLocator,
           sourceCertainty:
-            row.sourceCertainty === "confirmed" || row.sourceCertainty === "inferred"
+            row.sourceCertainty === "confirmed" ||
+            row.sourceCertainty === "inferred"
               ? row.sourceCertainty
               : "needs_review",
           reviewNote:
-            row.reviewNote || (!row.sourceCertainty ? "Source certainty was not supplied during import." : ""),
-          planningState: row.planningState === "planned" ? "planned" : "current",
+            row.reviewNote ||
+            (!row.sourceCertainty
+              ? "Source certainty was not supplied during import."
+              : ""),
+          planningState:
+            row.planningState === "planned" ? "planned" : "current",
           publicationVisibility:
             row.publicationVisibility === "public" ? "public" : "internal",
         },
@@ -659,7 +742,8 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
     findings.push({
       code: "MISSING_ROOT",
       severity: "blocking",
-      message: "At least one row must have an empty parentId to establish a root.",
+      message:
+        "At least one row must have an empty parentId to establish a root.",
     });
   }
 
@@ -682,7 +766,10 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
       Array.isArray((parsed as { nodes?: unknown }).nodes) &&
       Array.isArray((parsed as { edges?: unknown }).edges)
     ) {
-      const chart = parsed as { nodes: OrgFlowNode[]; edges: Edge[] };
+      const chart = parsed as {
+        nodes: OrgFlowNode[];
+        edges: Edge[];
+      } & ChartSupplements;
       const hasMalformedNode = chart.nodes.some(
         (node) =>
           !node ||
@@ -726,7 +813,8 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
             {
               code: "MALFORMED_RELATIONSHIP",
               severity: "blocking",
-              message: "Every canonical relationship requires an id, source, and target.",
+              message:
+                "Every canonical relationship requires an id, source, and target.",
             },
           ],
           rowCount: chart.nodes.length,
@@ -739,7 +827,8 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
             ...node.data,
             unit: {
               ...node.data?.unit,
-              sourceCertainty: node.data?.unit?.sourceCertainty ?? "needs_review",
+              sourceCertainty:
+                node.data?.unit?.sourceCertainty ?? "needs_review",
               reviewNote:
                 node.data?.unit?.reviewNote ??
                 (node.data?.unit?.sourceCertainty
@@ -762,10 +851,14 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
         })) as Edge[],
       };
       const nodeIds = canonical.nodes.map((node) => node.id);
-      const duplicateIds = nodeIds.filter((id, index) => nodeIds.indexOf(id) !== index);
+      const duplicateIds = nodeIds.filter(
+        (id, index) => nodeIds.indexOf(id) !== index,
+      );
       const parentCounts = new Map<string, number>();
       canonical.edges.forEach((edge) => {
-        parentCounts.set(edge.target, (parentCounts.get(edge.target) ?? 0) + 1);
+        if ((edge.data?.relationshipType ?? "primary supervisory") === "primary supervisory") {
+          parentCounts.set(edge.target, (parentCounts.get(edge.target) ?? 0) + 1);
+        }
       });
       const findings = validateHierarchy(canonical.nodes, canonical.edges);
       const incomingRelationship = new Map(
@@ -785,18 +878,26 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
               assignmentLabel: String(node.data.unit.assignmentLabel ?? ""),
               positionStatus: String(node.data.unit.positionStatus ?? ""),
               effectiveDate: String(node.data.unit.effectiveDate ?? ""),
-              publicationVisibility: String(node.data.unit.publicationVisibility ?? ""),
+              publicationVisibility: String(
+                node.data.unit.publicationVisibility ?? "",
+              ),
               source: String(node.data.unit.source ?? ""),
               sourceLocator: String(node.data.unit.sourceLocator ?? ""),
               sourceCertainty: String(node.data.unit.sourceCertainty ?? ""),
               reviewNote: String(node.data.unit.reviewNote ?? ""),
               planningState: String(node.data.unit.planningState ?? ""),
-              relationshipType: String(relationship?.data?.relationshipType ?? ""),
-              relationshipSourceLocator: String(relationship?.data?.sourceLocator ?? ""),
+              relationshipType: String(
+                relationship?.data?.relationshipType ?? "",
+              ),
+              relationshipSourceLocator: String(
+                relationship?.data?.sourceLocator ?? "",
+              ),
               relationshipSourceCertainty: String(
                 relationship?.data?.sourceCertainty ?? "",
               ),
-              relationshipReviewNote: String(relationship?.data?.reviewNote ?? ""),
+              relationshipReviewNote: String(
+                relationship?.data?.reviewNote ?? "",
+              ),
             };
           }),
         ),
@@ -809,14 +910,20 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
             message: `Unit ${node.id} has unsupported type ${node.data.unit.type}.`,
           });
         }
-        if (!["filled", "acting", "vacant"].includes(node.data.unit.positionStatus)) {
+        if (
+          !["filled", "acting", "vacant", "not_specified"].includes(
+            node.data.unit.positionStatus,
+          )
+        ) {
           findings.push({
             code: "INVALID_POSITION_STATUS",
             severity: "blocking",
             message: `Unit ${node.id} has unsupported positionStatus ${node.data.unit.positionStatus}.`,
           });
         }
-        if (!["internal", "public"].includes(node.data.unit.publicationVisibility)) {
+        if (
+          !["internal", "public"].includes(node.data.unit.publicationVisibility)
+        ) {
           findings.push({
             code: "INVALID_PUBLICATION_VISIBILITY",
             severity: "blocking",
@@ -849,7 +956,7 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
         }
         if (
           edge.data?.relationshipType &&
-          !["primary supervisory", "secondary supervisory"].includes(
+          !["primary supervisory", "secondary supervisory", "source connection — authority unspecified"].includes(
             String(edge.data.relationshipType),
           )
         ) {
@@ -867,7 +974,9 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
           message: `Canonical nodes repeat id ${duplicateIds[0]}.`,
         });
       }
-      const multipleParentTarget = [...parentCounts].find(([, count]) => count > 1)?.[0];
+      const multipleParentTarget = [...parentCounts].find(
+        ([, count]) => count > 1,
+      )?.[0];
       if (multipleParentTarget) {
         findings.push({
           code: "MULTIPLE_PRIMARY_PARENTS",
@@ -878,6 +987,7 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
       return {
         nodes: canonical.nodes,
         edges: canonical.edges,
+        ...normalizeSupplements({ ...chart, sourceChecks: undefined }),
         findings,
         rowCount: canonical.nodes.length,
       };
@@ -925,7 +1035,7 @@ ${JSON.stringify(Object.fromEntries(importColumns.map((column) => [column, ""]))
 - Use parentId to reference the id of the single primary parent.
 - Leave parentId empty for exactly one root unit.
 - type must be one of: ${UNIT_TYPES.join(", ")}.
-- positionStatus must be filled, acting, or vacant.
+- positionStatus must be filled, acting, vacant, or not_specified. Use not_specified when the source does not identify an assignment; use vacant only for an explicit vacancy.
 - publicationVisibility must be internal or public; use internal when the source does not establish approval for public display.
 - sourceLocator should identify the supporting slide, page, worksheet row, or other precise location when available.
 - sourceCertainty must be confirmed, inferred, or needs_review. Use needs_review rather than hiding an unresolved source issue.
@@ -933,7 +1043,7 @@ ${JSON.stringify(Object.fromEntries(importColumns.map((column) => [column, ""]))
 - planningState must be current or planned. A planned unit must have a meaningful future effectiveDate.
 - relationshipType must be primary supervisory or secondary supervisory when parentId is supplied.
 - relationshipSourceLocator, relationshipSourceCertainty, and relationshipReviewNote describe the reporting line separately from the card. Never copy a card's confidence onto its reporting line unless the source independently supports both.
-- Keep assignmentLabel empty or use Position vacant when a person is not supplied.
+- Keep assignmentLabel empty when a person is not supplied and use not_specified status. Use Position vacant and vacant status only when the source explicitly identifies a vacancy.
 - When a visual card contains a person and role, split them into assignmentLabel and positionTitle and mark the position filled or acting as supported by the source. Do not store a visible person as a vacant organizational unit.
 - Treat stacked labels, shaded strips, legends, client portfolios, coverage areas, specialties, and service lists as descriptive content unless an explicit connector or source statement establishes that they are separate reporting units. Preserve descriptive content in source or reviewNote instead of inventing child units.
 - A row of staff cards connected to one shared reporting line normally represents siblings under the same parent. Do not chain adjacent staff cards or their descriptive lists together because of reading order or proximity.

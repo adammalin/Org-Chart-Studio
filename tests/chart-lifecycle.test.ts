@@ -22,16 +22,16 @@ test("legacy Approved records migrate to Current with an inferred approval recor
   assert.equal(lifecycle.lastCurrentBy, "Migrated approved record");
 });
 
-test("chart lifecycle permits the governed workflow and blocks skipped approval steps", () => {
+test("chart lifecycle permits direct Current designation and keeps archive restoration explicit", () => {
   assert.equal(canTransitionChartStatus("draft", "in_review"), true);
   assert.equal(canTransitionChartStatus("in_review", "current"), true);
   assert.equal(canTransitionChartStatus("current", "archived"), true);
   assert.equal(canTransitionChartStatus("archived", "draft"), true);
-  assert.equal(canTransitionChartStatus("draft", "current"), false);
+  assert.equal(canTransitionChartStatus("draft", "current"), true);
   assert.equal(canTransitionChartStatus("archived", "current"), false);
 });
 
-test("Current readiness requires valid structure and a clear source review queue", () => {
+test("Current readiness requires valid structure and counts source notes separately", () => {
   const chart = createBlankChart("Lifecycle test", "chart-lifecycle-test");
   chart.status = "in_review";
   assert.equal(currentReadiness(chart).ready, true);
@@ -39,12 +39,12 @@ test("Current readiness requires valid structure and a clear source review queue
 
   chart.nodes[0].data.unit.sourceCertainty = "needs_review";
   const readiness = currentReadiness(chart);
-  assert.equal(readiness.ready, false);
+  assert.equal(readiness.ready, true);
   assert.equal(readiness.reviewItems, 1);
-  assert.match(lifecycleTransitionError(chart, "current") ?? "", /source review item/i);
+  assert.equal(lifecycleTransitionError(chart,"current"),null);
 });
 
-test("only In review charts may be marked Current", () => {
+test("Draft charts may be explicitly designated Current", () => {
   const chart = createBlankChart("Draft lifecycle test", "chart-draft-lifecycle-test");
-  assert.match(lifecycleTransitionError(chart, "current") ?? "", /cannot move directly|only.*In review/i);
+  assert.equal(lifecycleTransitionError(chart,"current"),null);
 });

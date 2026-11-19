@@ -1,3 +1,4 @@
+import { readJsonObject, jsonField } from "../../../lib/json-request";
 import {
   IDLE_MCP_ACTIVITY,
   type McpActivitySnapshot,
@@ -90,7 +91,20 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const body = (await request.json()) as Record<string, unknown>;
+  const requestBody = await readJsonObject(request, {
+    action: jsonField.text,
+    activityId: jsonField.text,
+    operation: jsonField.text,
+    label: jsonField.text,
+    chartId: jsonField.text,
+    chartName: jsonField.text,
+    proposalId: jsonField.text,
+    completionKind: jsonField.text,
+    message: jsonField.text,
+    succeeded: jsonField.boolean,
+  });
+  if (!requestBody.ok) return requestBody.response;
+  const body = requestBody.body as Record<string, unknown>;
   const action = safeText(body.action, 20);
   const activityId = safeText(body.activityId, 160);
   const store = activityStore();

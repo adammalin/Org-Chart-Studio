@@ -38,6 +38,9 @@ function fixture(): LibraryBackup {
     ],
     aiActivities: [],
     sourceFiles: [],
+    checkpoints: [],
+    monthlyUpdates: [],
+    editHistory: {operations:[],events:[]},
   };
 }
 
@@ -142,4 +145,15 @@ test("authenticated encryption rejects a modified backup", async () => {
 
 test("short backup passphrases are rejected", async () => {
   await assert.rejects(encryptLibraryBackup(fixture(), "too short"), /at least 12/i);
+});
+
+test("encrypted backup rejects excessive or malformed key derivation parameters", async () => {
+  const encrypted = await encryptLibraryBackup(fixture(), "correct horse battery staple");
+  for (const iterations of [0, -1, 1.5, NaN, Infinity, 2_147_483_647]) {
+    await assert.rejects(decryptLibraryBackup({...encrypted, encryption: {...encrypted.encryption, iterations}}, "test"), /not an OrgChart Studio encrypted backup/);
+  }
+  for (const field of ["saltBase64", "ivBase64"] as const) {
+    await assert.rejects(decryptLibraryBackup({...encrypted, encryption: {...encrypted.encryption, [field]: "AA=="}}, "test"), /could not be decrypted/);
+  }
+  await assert.rejects(decryptLibraryBackup({...encrypted, encryption: {...encrypted.encryption, keyLength: 128}}, "test"), /not an OrgChart Studio encrypted backup/);
 });
