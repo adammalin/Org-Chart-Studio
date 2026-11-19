@@ -25,6 +25,8 @@ export interface SourceLayout {
   capturedAt: string;
   width: number;
   height: number;
+  /** Source-observed card fills, keyed by stable node ID; never inferred from role names. */
+  cardFills?: Record<string, string>;
 }
 export interface SupportPanel {
   geometry?: SourceBounds;
@@ -205,6 +207,16 @@ export function normalizeSupplements(
       width: layout.width,
       height: layout.height,
     };
+    if (layout.cardFills !== undefined) {
+      const fills = object(layout.cardFills, "Source card fills");
+      const nodeIds = new Set(input.nodes.map((node) => node.id));
+      const entries = Object.entries(fills);
+      if (entries.length > input.nodes.length) throw Error("Too many source card fills.");
+      for (const [id, fill] of entries)
+        if (!nodeIds.has(id) || typeof fill !== "string" || !/^[0-9a-f]{6}$/i.test(fill))
+          throw Error("Source card fills need an existing node and six-digit RGB color.");
+      result.sourceLayout.cardFills = Object.fromEntries(entries.map(([id, fill]) => [id, (fill as string).toUpperCase()]));
+    }
   }
   for (const edge of input.edges ?? [])
     if (edge.data?.sourceRoute) {

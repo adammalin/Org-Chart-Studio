@@ -36,7 +36,7 @@ export function officialAssignment(unit:Pick<OrganizationalUnit,'assignmentLabel
 export function officialScale(sourceWidth:number|undefined,width:number) {
   return sourceWidth ? sourceWidth/960 : Math.max(.65,Math.min(1.5,width/194));
 }
-export function officialCard(unit:OrganizationalUnit,width:number,height:number,level:number,scale:number, publicAudience=false,entries:{id:string;title:string;assignment:string}[]=[]):OfficialCard {
+export function officialCard(unit:OrganizationalUnit,width:number,height:number,level:number,scale:number, publicAudience=false,entries:{id:string;title:string;assignment:string}[]=[],sourceFill?:string):OfficialCard {
   const title=clean(unit.shortName||unit.name);
   const role=clean(unit.positionTitle);
   const assignment=publicAudience ? (unit.positionStatus==='vacant'?'Vacant':unit.positionStatus==='acting'?'Interim':'') : officialAssignment(unit);
@@ -48,7 +48,7 @@ export function officialCard(unit:OrganizationalUnit,width:number,height:number,
     ...assignment.split(/\r?\n/).filter(Boolean).map((text,i)=>({text,size:(root?(unit.type==='division'?14.28:[15.84,12.96,10.08][Math.min(i,2)]):bodySize)*scale,bold:false})),
     ...entries.flatMap(e=>[{text:e.title,size:10.8*scale,bold:true,entityId:e.id},{text:e.assignment,size:10.8*scale,bold:false,entityId:e.id}])];
   return layoutOfficialBlocks(blocks,width,height,scale,
-    root?OFFICIAL_COLORS.white:unit.type==='division'?OFFICIAL_COLORS.division:['group','team'].includes(unit.type)?OFFICIAL_COLORS.team:OFFICIAL_COLORS.white);
+    sourceFill && /^[0-9a-f]{6}$/i.test(sourceFill) ? sourceFill.toUpperCase() : root?OFFICIAL_COLORS.white:unit.type==='division'?OFFICIAL_COLORS.division:['group','team'].includes(unit.type)?OFFICIAL_COLORS.team:OFFICIAL_COLORS.white);
 }
 export function layoutOfficialBlocks(blocks:{text:string;size:number;bold:boolean;entityId?:string}[],width:number,height:number,scale:number,fill:string):OfficialCard {
   const inset=7.2*scale;

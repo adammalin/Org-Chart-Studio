@@ -526,7 +526,7 @@ function OrgUnitNode({ id, data, selected }: NodeProps<OrgFlowNode>) {
   const { unit } = data;
   const official = data.appearance !== "annotated";
   const cardWidth = data.visualWidth ?? NODE_WIDTH, cardHeight = data.visualHeight ?? NODE_HEIGHT;
-  const sourceCard = official ? officialCard(unit,cardWidth,cardHeight,data.hierarchyLevel??1,officialScale(data.presentationMode === "compact" ? undefined : data.sourceCanvasWidth,cardWidth),false,(data.compactEntries??[]).map(e=>({id:e.id,title:cleanOrgChartDisplayText(e.unit.shortName||e.unit.name),assignment:officialAssignment(e.unit)}))) : null;
+  const sourceCard = official ? officialCard(unit,cardWidth,cardHeight,data.hierarchyLevel??1,officialScale(data.presentationMode === "compact" ? undefined : data.sourceCanvasWidth,cardWidth),false,(data.compactEntries??[]).map(e=>({id:e.id,title:cleanOrgChartDisplayText(e.unit.shortName||e.unit.name),assignment:officialAssignment(e.unit)})),data.sourceCardFill) : null;
   const displayName = cleanOrgChartDisplayText(unit.shortName || unit.name);
   const displayPositionTitle = cleanOrgChartDisplayText(unit.positionTitle);
   const displayStatus =
@@ -2731,12 +2731,13 @@ function StudioWorkspace() {
             )
           : [];
       const level = compactPresentation.levels.get(flowNode.id) ?? 1;
-      const targetSide: "top" | "left" =
+      const sourceRouteSide = [...edgeRoutes.values()].find(route => route.targetId === flowNode.id)?.targetSide;
+      const targetSide: "top" | "left" = sourceRouteSide ?? (
         presentationMode === "compact" &&
         (compactPresentation.sidecarNodeIds.has(flowNode.id) ||
           (compactLayoutOrientation === "vertical" && level >= 3))
           ? "left"
-          : "top";
+          : "top");
       return {
         ...flowNode,
         hidden: presentationHiddenIds.has(flowNode.id),
@@ -2755,6 +2756,7 @@ function StudioWorkspace() {
           compactSidecar: compactPresentation.sidecarNodeIds.has(flowNode.id),
           appearance: chartAppearance,
           sourceCanvasWidth: canvasChart?.sourceLayout?.width,
+          sourceCardFill: canvasChart?.sourceLayout?.cardFills?.[flowNode.id],
           visualWidth: Number(flowNode.style?.width) || NODE_WIDTH,
           visualHeight: Number(flowNode.style?.height) || NODE_HEIGHT,
           aiChange: aiPreviewMarks?.addedNodes.has(flowNode.id)
@@ -2774,7 +2776,7 @@ function StudioWorkspace() {
       };
     });
   }, [
-    chartAppearance, canvasChart?.sourceLayout?.width,
+    chartAppearance, canvasChart?.sourceLayout?.width, canvasChart?.sourceLayout?.cardFills, edgeRoutes,
     aiPreviewMarks,
     collapsedIds,
     compactPresentation.entriesByParent,

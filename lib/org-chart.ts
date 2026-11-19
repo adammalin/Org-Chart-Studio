@@ -70,6 +70,7 @@ export interface OrgNodeData extends Record<string, unknown> {
   targetSide?: "top" | "left";
   appearance?: import("./chart-appearance").ChartAppearance;
   sourceCanvasWidth?: number;
+  sourceCardFill?: string;
   visualHeight?: number;
   visualWidth?: number;
   onToggleCollapse?: (id: string) => void;

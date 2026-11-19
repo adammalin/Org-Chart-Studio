@@ -603,7 +603,7 @@ export function buildChartExportScene(
       Math.max(18, (compactListStartY ?? dimensions.height) - 110),
     );
     return {
-      ...(official?{official:officialCard(unit,dimensions.width,dimensions.height,hierarchyLevel,officialScale(presentationMode === "compact"?undefined:chart.sourceLayout?.width,dimensions.width),audience === "public",compactEntries.map(e=>({id:e.id,title:e.name,assignment:e.statusText})))}:{}),
+      ...(official?{official:officialCard(unit,dimensions.width,dimensions.height,hierarchyLevel,officialScale(presentationMode === "compact"?undefined:chart.sourceLayout?.width,dimensions.width),audience === "public",compactEntries.map(e=>({id:e.id,title:e.name,assignment:e.statusText})),chart.sourceLayout?.cardFills?.[node.id])}:{}),
       id: node.id,
       x: node.position.x + offsetX,
       y: node.position.y + offsetY,

@@ -815,6 +815,33 @@ function capturedSourceRoutes(nodes: EdgeRoutingNode[], edges: Edge[]): Map<stri
   return captured;
 }
 
+// A captured side spine is source evidence for how its aligned siblings join.
+// Complete only missing branches of that same parent/column. Never infer a
+// reporting relationship, replace a captured/manual path, or move a card.
+function completeSourceSpines(nodes: EdgeRoutingNode[], edges: Edge[], captured: Map<string, Point[]>) {
+  const nodeById = new Map(nodes.map(node => [node.id, node]));
+  for (const anchor of edges) {
+    const points = captured.get(anchor.id);
+    const parent = nodeById.get(anchor.source), child = nodeById.get(anchor.target);
+    if (!points || points.length !== 3 || !parent || !child) continue;
+    const [start, corner, end] = points;
+    if (Math.abs(start.x-corner.x)>EPSILON || Math.abs(corner.y-end.y)>EPSILON ||
+        corner.x >= child.x || Math.abs(end.x-child.x)>EPSILON ||
+        Math.abs(start.y-(parent.y+parent.height))>4 ||
+        start.x < parent.x || start.x > parent.x+parent.width ||
+        Math.abs(end.y-(child.y+child.height/2))>child.height*.05) continue;
+    for (const edge of edges) {
+      if (edge.source!==anchor.source || captured.has(edge.id) || manualEdgeRouteForEdge(edge)) continue;
+      const target = nodeById.get(edge.target);
+      if (!target || Math.abs(target.x-child.x)>2 || target.y<parent.y+parent.height) continue;
+      const branch = [ {...start}, {x:start.x,y:target.y+target.height/2}, {x:target.x,y:target.y+target.height/2} ];
+      const obstacles = nodes.filter(node=>node.id!==parent.id && node.id!==target.id).map(node=>({id:node.id,left:node.x,right:node.x+node.width,top:node.y,bottom:node.y+node.height}));
+      if (segmentsForPoints(branch).some(segment=>obstacles.some(obstacle=>segmentIntersectsObstacle(segment,obstacle)))) continue;
+      captured.set(edge.id,branch);
+    }
+  }
+}
+
 export function buildOrthogonalEdgeRoutes(
   nodes: EdgeRoutingNode[],
   edges: Edge[],
@@ -823,6 +850,7 @@ export function buildOrthogonalEdgeRoutes(
   const routes = new Map<string, OrthogonalEdgeRoute>();
   const reserved: Segment[] = [];
   const captured = capturedSourceRoutes(nodes, edges);
+  completeSourceSpines(nodes, edges, captured);
   const groups = buildRouteGroups(nodes, edges, mode, captured);
 
   groups.forEach((group) => {
@@ -844,18 +872,19 @@ export function buildOrthogonalEdgeRoutes(
             (group.portIndex - (group.portCount - 1) / 2) * LANE_SPACING,
             group.bundleKey,
           ));
+      const targetSide = capturedPoints && Math.abs(capturedPoints.at(-1)!.x-target.x)<=EPSILON
+        ? "left" : target.targetSide ?? "top";
       const targetPortOffset = manualRoute
         ? Math.max(
             -TARGET_PORT_MAX_OFFSET,
             Math.min(TARGET_PORT_MAX_OFFSET, manualRoute.targetPortOffset),
           )
-        : target.targetSide === "left"
+        : targetSide === "left"
           ? (automaticPoints?.at(-1)?.y ?? target.y + target.height / 2) -
             (target.y + target.height / 2)
           : (automaticPoints?.at(-1)?.x ?? target.x + target.width / 2) -
             (target.x + target.width / 2);
       const sourcePoint = { x: group.sourceX, y: group.sourceY };
-      const targetSide = target.targetSide ?? "top";
       const targetPoint =
         targetSide === "left"
           ? { x: target.x, y: target.y + target.height / 2 + targetPortOffset }
