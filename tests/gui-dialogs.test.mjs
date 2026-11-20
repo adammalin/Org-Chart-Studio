@@ -36,17 +36,18 @@ test("AI proposal review keeps actionable buttons and failures inside its modal"
 });
 
 test("first-run onboarding is interactive, dismissible, and replayable", () => {
-  assert.match(workspaceSource, /orgchart-studio-onboarding-v1/);
+  const tutorial = readFileSync(path.join(projectRoot, "app", "studio-tutorial.tsx"), "utf8");
+  const topics = readFileSync(path.join(projectRoot, "lib", "studio-tutorial.ts"), "utf8");
+  assert.match(topics, /orgchart-studio-onboarding-v1/);
   assert.match(workspaceSource, /Tips &amp; tour/);
-  assert.match(workspaceSource, /aria-labelledby="onboarding-tour-title"/);
-  assert.match(
-    workspaceSource,
-    /onboardingStep === null \|\| reviewNeedsAttention[\s\S]*ONBOARDING_TOUR_STEPS\[onboardingStep\]/,
-  );
-  assert.match(workspaceSource, /Skip tour/);
-  assert.match(workspaceSource, /Finish tour/);
-  assert.match(workspaceSource, /data-tour-target="ai-control"/);
-  assert.match(workspaceSource, /data-tour-target="presentation"/);
+  assert.match(workspaceSource, /tutorialOpen && !reviewNeedsAttention/);
+  assert.match(tutorial, /aria-labelledby="studio-tutorial-title"/);
+  assert.match(tutorial, /Close tutorial/);
+  assert.match(tutorial, /Finish tour/);
+  assert.match(tutorial, /Start .*Simple.*Advanced.* tour/);
+  assert.match(tutorial, /event.key==='Tab'/);
+  assert.match(tutorial, /event.key==='Escape'/);
+  assert.match(workspaceSource, /setWorkspaceView\(tutorialReturnView.current\)/);
 });
 
 test("compact groups are the default presentation and individual cards remain available", () => {
@@ -124,7 +125,8 @@ test("selected unit details use a dismissible editor-only drawer", () => {
     workspaceSource,
     /const detailPanelVisible = workspaceView === "canvas" && Boolean\(selectedNode\)/,
   );
-  assert.match(workspaceSource, /detailPanelVisible && selectedNode/);
+  assert.match(workspaceSource, /selectedNode && \(detailPanelVisible \|\| preserveTutorialEditor\)/);
+  assert.match(workspaceSource, /hidden=\{!detailPanelVisible\}/);
   assert.match(workspaceSource, /aria-label="Close selected unit details"/);
   assert.match(workspaceSource, /dismissedSelectionIdsRef/);
   assert.match(

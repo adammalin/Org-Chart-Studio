@@ -25,3 +25,14 @@ Advanced uses the same data, review process, history, and file formats. It adds:
 These groups start collapsed to keep the chart visible. Source arrangement details and chart-control help are also expandable. Existing layout, appearance, routing, and pin preferences are preserved when you change modes.
 
 Switching modes keeps the open chart and unfinished card fields intact. It does not save a chart, change reporting lines or source geometry, clear review questions, alter AI access, or grant approval. AI access can still be paused from AI control in either mode; detailed access settings and receipts are expandable.
+
+## Guided tutorials
+
+**Tips & tour** opens a chooser for two separate walkthroughs:
+
+- **Simple — 12 topics:** library files and saving; search; library views, creation and import; basic card updates; undo and recovery; AI access and Before/After decisions; source reviews; lifecycle; historical checkpoints; monthly updates; backups and restore; audience-aware exports and the final library save.
+- **Advanced — 18 topics:** all Simple topics, plus detailed hierarchy and assignments; card layout and pins; connector routes, source typography and arrangement; source-evidence import proposals; accessible tables; cross-chart consistency.
+
+Use **Next topic**, **Back**, or **Jump to topic**. Arrow keys move between topics, Tab stays inside the tutorial, and Escape closes it. Each tour temporarily previews its interface mode and relevant workspace sections. Closing restores the previous section, mode and card selection, retaining unfinished card fields. A tour never applies a proposal, edits a chart, creates a checkpoint, changes AI permissions, or saves/exports a file.
+
+The file and AI guidance follows the runtime: browser recovery and working-file saves on the web; the local database and separate portable file workspace on desktop. When the library is empty, chart-specific topics stay in the library and explain that a chart must be opened or imported first. Both tours can be replayed; completion is remembered separately on this device when preference storage is available.

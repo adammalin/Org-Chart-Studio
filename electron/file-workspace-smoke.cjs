@@ -1,6 +1,6 @@
 // Synthetic, disposable-profile GUI journey for the separate static editor.
 module.exports.fileWorkspaceJourneyScript=`(async()=>{
- const wait=async(fn,label)=>{const end=Date.now()+45000;while(Date.now()<end){const skip=[...document.querySelectorAll('button')].find(b=>b.textContent==='Skip tour');skip?.click();const value=await fn();if(value)return value;await new Promise(r=>setTimeout(r,80));}throw Error('File workspace timed out: '+label);};
+ const wait=async(fn,label)=>{const end=Date.now()+45000;while(Date.now()<end){document.querySelector('.onboarding-tour button[aria-label="Close tutorial"]')?.click();const value=await fn();if(value)return value;await new Promise(r=>setTimeout(r,80));}throw Error('File workspace timed out: '+label);};
  const button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent===text&&!b.disabled);
  await wait(()=>document.querySelector('.library-file-bar'),'browser library controls');
  if(window.orgChartDesktop)throw Error('File workspace received the privileged desktop bridge.');
