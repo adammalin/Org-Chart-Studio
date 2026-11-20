@@ -607,13 +607,15 @@ function createMainWindow(url) {
           () => document.body.textContent.includes('Organizational chart library'),
           'the chart library workspace'
         );
-        const onboardingSkipButton = await waitFor(
-          () => [...document.querySelectorAll('.onboarding-tour button')].find(
-            (button) => button.textContent.trim() === 'Skip tour'
-          ),
-          'the first-run tour'
+        const onboardingCloseButton = await waitFor(
+          () => document.querySelector('.onboarding-tour button[aria-label="Close tutorial"]'),
+          'the first-run tutorial chooser'
         );
-        onboardingSkipButton.click();
+        const tutorialChoices = [...document.querySelectorAll('.onboarding-tour button')].map(button => button.textContent.trim());
+        if (!tutorialChoices.includes('Start Simple tour') || !tutorialChoices.includes('Start Advanced tour')) {
+          throw new Error('The first-run chooser must offer both tutorial modes.');
+        }
+        onboardingCloseButton.click();
         const onboardingTourDismissed = await waitFor(
           () => !document.querySelector('.onboarding-tour'),
           'the first-run tour to close'
