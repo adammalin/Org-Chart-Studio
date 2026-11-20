@@ -22,6 +22,6 @@ module.exports.fileWorkspaceJourneyScript=`(async()=>{
  transfer.items.add(new File([text],'Synthetic-Native-Library.orgchart-workspace',{type:'application/json'}));picker.files=transfer.files;picker.dispatchEvent(new Event('change',{bubbles:true}));
  await wait(()=>document.querySelector('.library-file-bar')?.textContent.includes('Synthetic-Native-Library.orgchart-workspace'),'working file open');
  if(!document.querySelector('.library-file-summary').textContent.includes('Opened library file · no changes'))throw Error('A file opened from disk was incorrectly labeled as recovery-only.');
- if(document.querySelector('.chart-switcher select').value!==chartId)throw Error('Open cloned chart IDs instead of continuing the file.');
+ await wait(()=>document.querySelector('.chart-switcher select')?.value===chartId,'continued chart identity after file open');
  return {chartId,fileText:text,workspaceId:file.workspace.id};
 })()`;
