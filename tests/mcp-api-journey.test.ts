@@ -6,7 +6,7 @@ import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {InMemoryTransport} from '@modelcontextprotocol/sdk/inMemory.js';
 import {OrgChartAppClient} from '../mcp/orgchart-app-client.mjs';
 import {createOrgChartMcpServer} from '../mcp/server.mjs';
-const routeNames=['charts','ai-activity','ai-proposals','ai-import-proposals','mcp-control','history','edit-history','consistency','monthly-workspace','history/answers','source-extractions','import-intakes'];
+const routeNames=['agent-workflows','charts','ai-activity','ai-proposals','ai-import-proposals','mcp-control','history','edit-history','consistency','monthly-workspace','history/answers','source-extractions','import-intakes'];
 const routes=new Map(await Promise.all(routeNames.map(async name=>[name,await import(`../app/api/${name}/route.ts`)] as const)));
 class ApiClient extends OrgChartAppClient {
  async rawRequest(path:string,init:RequestInit={}) {
@@ -27,7 +27,7 @@ test('MCP tools complete a synthetic monthly lifecycle through actual APIs, incl
   assert.notEqual(result.isError,true,`${name}: ${JSON.stringify(result.content)}`);invoked.add(name);return result.structuredContent as any;
  }
  try{
-  await server.connect(a);await client.connect(b);assert.equal((await client.listTools()).tools.length,30);
+  await server.connect(a);await client.connect(b);assert.equal((await client.listTools()).tools.length,38);
   await app.request('/api/mcp-control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'configure',chartScope:'all',sourceAccessEnabled:true})});
   let c=(await tool('create_chart_draft',{name:'Synthetic MCP release chart'})).chart;
   assert.equal((await tool('list_charts')).charts.length,1);
@@ -74,7 +74,16 @@ test('MCP tools complete a synthetic monthly lifecycle through actual APIs, incl
   c=(await tool('get_chart',{chartId:c.id})).chart;
   await tool('record_source_check',{chartId:c.id,expectedVersion:c.version,expectedUpdatedAt:c.updatedAt,checkedBy:'Synthetic test agent',sourceUrl:'https://example.invalid/synthetic-source',sourceLocator:'Synthetic fixture',scope:'full_chart',result:'differences',findings:'Synthetic test: no official source comparison is claimed.'});
   const checks=await tool('get_source_checks',{chartId:c.id});assert.equal(checks.checks.at(-1).reviewerType,'ai');assert.equal(checks.checks.at(-1).stale,false);
+  c=(await tool('get_chart',{chartId:c.id})).chart;
+  const patch=await tool('stage_chart_patch',{requestId:'agent-sdk-patch',chartId:c.id,expectedVersion:c.version,expectedUpdatedAt:c.updatedAt,changeSummary:'Synthetic SDK patch',patches:[{kind:'chart',fields:{description:'Synthetic SDK reviewed update'}}]});
+  assert.equal((await tool('get_chart_proposal',{proposalId:patch.proposalId})).digest,patch.digest);
+  await tool('prepare_reviewed_apply',{requestId:'agent-sdk-apply',proposals:[{proposalId:patch.proposalId,digest:patch.digest}]});
+  await app.request('/api/agent-workflows',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'apply_reviewed',requestId:'agent-sdk-apply'})});
+  await tool('start_validation_batch',{requestId:'agent-sdk-validate',label:'Synthetic SDK validation',chartIds:[c.id]});assert.equal((await tool('continue_agent_batch',{requestId:'agent-sdk-validate'})).completed,1);
+  c=(await tool('get_chart',{chartId:c.id})).chart;
+  await tool('start_source_check_batch',{requestId:'agent-sdk-source',label:'Synthetic source receipt',checks:[{chartId:c.id,expectedVersion:c.version,expectedUpdatedAt:c.updatedAt,checkedBy:'Synthetic SDK test',sourceUrl:'https://example.invalid/synthetic',sourceLocator:'Synthetic fixture only',result:'differences',scope:'full_chart',findings:'No official source comparison is claimed in this synthetic test.'}]});
+  await tool('continue_agent_batch',{requestId:'agent-sdk-source'});assert.equal((await tool('get_agent_operation',{requestId:'agent-sdk-source'})).failures,0);assert.ok((await tool('list_agent_operations')).operations.some((o:{requestId:string})=>o.requestId==='agent-sdk-source'));
   // The retained-source recheck tool has a separate STDIO/rollback-package test.
-  assert.equal(invoked.size,29);
+  assert.equal(invoked.size,37);
  }finally{await client.close();await server.close();sql.close();}
 });

@@ -8,9 +8,9 @@ Object.defineProperty(globalThis,'document',{value:{modelContext:{registerTool:(
 Object.defineProperty(globalThis,'window',{value:{dispatchEvent:()=>{saveRequests++;}},configurable:true});
 const metadata={id:'workspace-synthetic-tools',connectionId:'connection-synthetic-tools',revision:3,fileRevision:2,fileName:'Synthetic.orgchart-workspace',lastFileSavedAt:null,recoveredAt:'',protection:'unencrypted' as const};
 browserSession.getSnapshot=()=>metadata;
-registerBrowserTools();
-test('browser tool definitions share all 30 operations and require an explicit workspace',()=>{
- assert.equal(tools.length,32);assert.equal(new Set(tools.map(t=>t.name)).size,32);
+await registerBrowserTools().ready;
+test('browser tool definitions share all 38 shared operations and require an explicit workspace',()=>{
+ assert.equal(tools.length,42);assert.equal(new Set(tools.map(t=>t.name)).size,42);
  for(const tool of tools.filter(t=>!['orgchart_get_workspace_status','orgchart_prepare_library_save'].includes(t.name)))assert.ok(tool.inputSchema.required?.includes('expectedWorkspaceId'),tool.name);
 });
 test('wrong workspace and malformed input cannot reach chart commands',async()=>{

@@ -31,3 +31,23 @@ test('an external change during serialization also blocks overwrite',async()=>{
  const original=browserSession.export;browserSession.export=async()=>{file.change('Synthetic concurrent external change');return structuredClone(document);};
  try{await assert.rejects(()=>saveFile({encrypted:false,passphrase:''}),/changed while/);assert.equal(file.writes,0);}finally{browserSession.export=original;}
 });
+
+test('switching the same workspace to a new connection during a picker blocks writing',async()=>{
+ await unlinkFile();const file=linked('synthetic');const count=saved;
+ (window as unknown as {showSaveFilePicker:unknown}).showSaveFilePicker=async()=>{metadata.connectionId='synthetic-new-connection';return file.handle;};
+ await assert.rejects(()=>saveFile({encrypted:false,passphrase:''}),/active library changed/);assert.equal(file.writes,0);assert.equal(saved,count);
+});
+
+test('download receipt verifies exact bytes, labels agent evidence, and keeps later edits dirty',async()=>{
+ const {prepareLibraryDownload,getPreparedDownload,confirmPreparedDownload,clearPreparedDownload}=await import('../web/prepared-download');
+ const receipt=await prepareLibraryDownload(false,'');assert.equal(receipt.revision,4);const blob=await (await fetch(getPreparedDownload()!.url)).blob();assert.equal(blob.size,receipt.bytes);
+ const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer())),b=>b.toString(16).padStart(2,'0')).join('');assert.equal(hash,receipt.sha256);
+ const count=saved;await assert.rejects(()=>confirmPreparedDownload(receipt.receiptId,'agent-reported-download',{bytes:receipt.bytes,sha256:'0'.repeat(64)}),/does not match/);assert.equal(saved,count);
+ metadata.revision=5;let evidence:unknown;const original=browserSession.saved;browserSession.saved=async(...args)=>{evidence=args[4];return metadata;};
+ const result=await confirmPreparedDownload(receipt.receiptId,'agent-reported-download',{bytes:receipt.bytes,sha256:hash});assert.equal(evidence,'agent-reported-download');assert.equal(result.appVerifiedDiskWrite,false);assert.equal(result.libraryFileNeedsSaving,true);assert.equal(getPreparedDownload(),null);browserSession.saved=original;clearPreparedDownload();
+});
+
+test('old download receipts cannot mark a reopened library clean',async()=>{
+ const {prepareLibraryDownload,confirmPreparedDownload,clearPreparedDownload}=await import('../web/prepared-download');
+ const receipt=await prepareLibraryDownload(false,'');metadata.connectionId='synthetic-reopened';const count=saved;await assert.rejects(()=>confirmPreparedDownload(receipt.receiptId,'user-confirmed-download'),/connection changed/);assert.equal(saved,count);clearPreparedDownload();
+});

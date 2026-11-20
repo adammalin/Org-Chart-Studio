@@ -20,7 +20,15 @@ self.onmessage=event=>{
     try {
       if(action==='unlock')ready=initialize(payload.passphrase);
       const workspace=await ready;
+      if(payload?.expectedConnectionId&&payload.expectedConnectionId!==workspace.connectionId)throw Error('The active library connection changed. Discover tools again.');
+      if(payload?.expectedWorkspaceId&&payload.expectedWorkspaceId!==workspace.metadata.id)throw Error('The active library changed. Read workspace status again.');
       let result:unknown;
+      if((action==='export'&&payload?.agentAccess)||(action==='saved'&&payload?.fileSaveEvidence==='agent-reported-download')){
+        const allowed=await workspace.request(new Request('https://orgchart.local/api/mcp-control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'authorize',toolName:action==='export'?'prepare_library_download':'confirm_library_download',mode:'read',sourceAccess:true})}));
+        const data=await allowed.json() as {error?:string;control:{chartScope:string}};
+        if(!allowed.ok||data.control.chartScope!=='all')throw Error(data.error??'A full library download requires all-chart scope.');
+        if(action==='export'&&workspace.metadata.protection==='encrypted')throw Error('Prepare an encrypted download using the visible file controls.');
+      }
       if(action==='status'||action==='unlock')result=workspace.metadata;
       else if(action==='export')result=await workspace.export();
       else if(action==='open')result=await workspace.openDocument(payload.document,payload.fileName,payload.protection,payload.passphrase);

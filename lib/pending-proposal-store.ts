@@ -24,7 +24,7 @@ export async function getPendingProposal(db: D1Database, id: string): Promise<Ai
   return row ? JSON.parse(row.payload) as AiChartProposal : null;
 }
 
-export async function savePendingProposal(db: D1Database, proposal: AiChartProposal) {
+export async function savePendingProposal(db: D1Database, proposal: AiChartProposal, extra: D1PreparedStatement[] = []) {
   // D1 batches are transactional: failed inserts preserve the previous pending review.
   await db.batch([
     db.prepare("UPDATE ai_chart_proposals SET status = 'superseded' WHERE chart_id = ? AND status = 'pending'")
@@ -34,6 +34,7 @@ export async function savePendingProposal(db: D1Database, proposal: AiChartPropo
       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`)
       .bind(proposal.id, proposal.chartId, proposal.chartName, proposal.changeSummary,
         proposal.createdAt, JSON.stringify({ ...proposal.summary, proposedStatus: proposal.proposed.status }), JSON.stringify(proposal)),
+    ...extra,
   ]);
 }
 

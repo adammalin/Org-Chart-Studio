@@ -110,7 +110,7 @@ export class BrowserWorkspace {
       await this.recovery.commit(this.engine,this.metadata);return {id,fileName:id+'.orgchart-backup',path:'Browser recovery / '+id,storage:'browser-recovery'};
     }catch(error){this.engine.restore(before);throw error;}
   });}
-  markFileSaved(revision:number,fileName:string,protection:'encrypted'|'unencrypted',passphrase?:string,fileSaveEvidence:'verified-write'|'user-confirmed-download'='verified-write') { return this.serial(async()=>{
+  markFileSaved(revision:number,fileName:string,protection:'encrypted'|'unencrypted',passphrase?:string,fileSaveEvidence:'verified-write'|'user-confirmed-download'|'agent-reported-download'='verified-write') { return this.serial(async()=>{
     if(revision>this.metadata.revision)throw Error('Invalid file revision.');
     const next={...this.metadata,fileRevision:revision,fileName,fileSaveEvidence,lastFileSavedAt:new Date().toISOString(),protection};
     const priorKey=this.recovery.key,priorSalt=this.recovery.salt;

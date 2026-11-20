@@ -1,3 +1,4 @@
+import {agentDigest,operationId,replayOperation} from "../../../lib/agent-workflows";
 import { nextSavedTimestamp } from "../../../lib/save-timestamp";
 import { editableChartShapeError } from "../../../lib/editable-chart-shape";
 import { readJsonObject, jsonField } from "../../../lib/json-request";
@@ -772,6 +773,7 @@ export async function POST(request: Request) {
     expectedVersion: jsonField.number,
     acknowledgeReview: jsonField.boolean,
     sourceCheck: jsonField.object,
+    requestId: jsonField.text,
     chart: jsonField.object,
   });
   if (!requestBody.ok) return requestBody.response;
@@ -786,6 +788,7 @@ export async function POST(request: Request) {
       | "snapshot_current"
       | "restore_version"
       | "delete";
+    requestId?: string;
     sourceCheck?: Omit<SourceCheck, "id" | "checkedAt" | "contentFingerprint">;
     name?: string;
     chartId?: string;
@@ -1045,6 +1048,15 @@ export async function POST(request: Request) {
         { error: "Archived charts are read-only." },
         { status: 423 },
       );
+    let requestHash: string | null = null;
+    if (body.requestId) {
+      try {
+        operationId.parse(body.requestId);
+        requestHash = await agentDigest({action:body.action,chartId:body.chartId,expectedVersion:body.expectedVersion,expectedUpdatedAt:body.expectedUpdatedAt,sourceCheck:body.sourceCheck});
+        const prior = await replayOperation(DB,body.requestId,requestHash);
+        if(prior)return Response.json({chart:chartFromRow(row,sourceRows.results.map(sourceFromRow)),...prior,replayed:true});
+      } catch { return Response.json({error:"Invalid or reused source-check request ID."},{status:409}); }
+    }
     if (
       body.expectedVersion !== row.version ||
       body.expectedUpdatedAt !== row.updated_at
@@ -1098,6 +1110,7 @@ export async function POST(request: Request) {
       at,
       `${sourceCheck.reviewerType === "ai" ? "AI source check" : "Human source review"}: ${sourceCheck.result}`,
       update,
+      body.requestId && requestHash ? [DB.prepare("INSERT INTO agent_operations(id,kind,request_hash,chart_ids,payload,created_at,updated_at) SELECT ?,'source_check',?,?,?,?,? WHERE EXISTS(SELECT 1 FROM charts WHERE id=? AND updated_at=?)").bind(body.requestId,requestHash,JSON.stringify([chart.id]),JSON.stringify({sourceCheck}),at,at,chart.id,at)] : [],
     );
     if ((result.meta.changes ?? 0) < 1)
       return Response.json(

@@ -3,6 +3,7 @@ import { useInterfaceMode } from "./interface-mode";
 import { StudioTutorial } from "./studio-tutorial";
 import { TUTORIAL_WELCOME_KEY } from "../lib/studio-tutorial";
 import type { InterfaceMode } from "../lib/interface-mode";
+import {AgentReviewRequests} from '../components/agent-review-requests';
 import { RuntimeLibraryControls, useStudioEnvironment } from "../runtime/ui";
 import { studioRequest, downloadStudioFile } from "../runtime/request";
 import { SourcePresentationDrawing } from "./source-presentation";
@@ -5108,7 +5109,7 @@ function StudioWorkspace() {
                 ? `${blockingFindings.length} blocking`
                 : "Structure valid"}
           </span>
-          {storageMode === "desktop" ? (
+            {storageMode === "desktop" ? (
             <button
               type="button"
               className="topbar__quit"
@@ -5284,6 +5285,12 @@ function StudioWorkspace() {
 
       <main className="workspace">
         <RuntimeLibraryControls editorSaveState={saveState}/>
+        <AgentReviewRequests disabled={saveState !== "saved" || !!pendingAiProposal || !!pendingAiImportProposal || historyReplayBusy} onApplied={async()=>{
+          const response=await studioRequest('/api/charts',{cache:'no-store'});if(!response.ok)throw Error('Changes applied; refresh the library to see them.');
+          const library=await response.json() as ChartLibraryResponse;setCharts(library.charts);await loadPendingAiProposals();
+          const updated=library.charts.find(c=>c.id===activeChartId);if(updated){hydratedChartRef.current=null;openChart(updated,workspaceView);}
+        }}/>
+
         {workspaceView === "backups" && environment.kind === "desktop" && storageMode === "desktop" && window.orgChartDesktop?.openFileWorkspace ? <section className="desktop-file-handoff"><button onClick={()=>void window.orgChartDesktop!.openFileWorkspace().catch(error=>setNotice(error.message))}>Open a portable file workspace</button><button disabled={saveState === "saving" || saveState === "error"} onClick={()=>void downloadStudioFile("/api/workspace","OrgChart-Library.orgchart-workspace").then(()=>setNotice("Complete unencrypted working library downloaded, including pending reviews and history. Open it in the web app or the separate file workspace.")).catch(error=>setNotice(error.message))}>Download full working library</button><span>Open web library files separately. Your desktop database stays in this window.</span></section> : null}
         {nextPendingAiProposal && !pendingAiProposal ? (
           <section
@@ -7919,6 +7926,7 @@ function StudioWorkspace() {
               </button>
             </div>
 
+            {environment.BrowserAgentControls && <environment.BrowserAgentControls/>}
             {storageMode === "desktop" ? (
               <section
                 className="ai-integration-card"

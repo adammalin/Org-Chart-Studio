@@ -29,7 +29,9 @@ export async function pickOpen(passphrase:string){
  const picker=(window as unknown as {showOpenFilePicker:()=>Promise<LinkedFile[]>}).showOpenFilePicker;
  const [next]=await picker();await openFile(await next.getFile(),passphrase,next);
 }
-export async function saveFile(options:{copy?:boolean;download?:boolean;encrypted:boolean;passphrase:string}){
+export async function saveFile(options:{copy?:boolean;download?:boolean;agentAccess?:boolean;encrypted:boolean;passphrase:string}){
+ const start={...browserSession.getSnapshot()},guard={expectedWorkspaceId:start.id,expectedConnectionId:start.connectionId};
+ const checkConnection=()=>{const now=browserSession.getSnapshot();if(now.id!==start.id||now.connectionId!==start.connectionId)throw Error('The active library changed while preparing this file. Retry in the current library.');};
  // Pick before any awaited serialization to retain the trusted user gesture.
  let next=options.copy||options.download?null:handle;
  if(!options.download&&!next&&fileSupport())next=await (window as unknown as {showSaveFilePicker:(o:unknown)=>Promise<LinkedFile>}).showSaveFilePicker({suggestedName:'OrgChart-Library.orgchart-workspace'});
@@ -37,23 +39,24 @@ export async function saveFile(options:{copy?:boolean;download?:boolean;encrypte
   if(await next.requestPermission?.({mode:'readwrite'})!=='granted')throw Error('File permission is required. Your browser recovery copy is intact.');
  }
  if(next===handle&&fingerprint&&await digest(await next!.getFile())!==fingerprint)throw Error('This file changed outside Studio. Open the newer file or use Save a copy.');
- const document=await browserSession.export();
+ checkConnection();const document=await browserSession.export({...guard,agentAccess:options.agentAccess});checkConnection();
  const value=options.encrypted?await encryptPortableDocument(document,options.passphrase):document;
  const blob=new Blob([JSON.stringify(value)],{type:'application/json'});
  if(blob.size>512_000_000)throw Error('This library exceeds the supported 512 MB file limit. Keep recovery intact and export smaller scoped backups; no data has been dropped.');
- if(!next)return {kind:'download_ready' as const,blob,revision:document.workspace.revision,protection:options.encrypted?'encrypted' as const:'unencrypted' as const};
+ checkConnection();if(!next)return {kind:'download_ready' as const,blob,revision:document.workspace.revision,protection:options.encrypted?'encrypted' as const:'unencrypted' as const};
  if(next===handle&&fingerprint&&await digest(await next.getFile())!==fingerprint)throw Error('This file changed while Studio prepared the save. Open the newer file or use Save a copy.');
- const writer=await next.createWritable();
- try {await writer.write(blob);await writer.close();}catch(error){await writer.abort?.().catch(()=>{});throw error;}
+ checkConnection();const writer=await next.createWritable();
+ try {checkConnection();await writer.write(blob);checkConnection();await writer.close();}catch(error){await writer.abort?.().catch(()=>{});throw error;}
  const check=await next.getFile();
  if(await digest(check)!==await digest(blob))throw Error('The saved file did not pass readback verification. Save a copy and keep this browser recovery session.');
- if(!options.copy){handle=next;fingerprint=await digest(check);await browserSession.saved(document.workspace.revision,next.name,options.encrypted?'encrypted':'unencrypted',options.passphrase);await rememberLink().catch(()=>{});}
+ checkConnection();if(!options.copy){const savedFingerprint=await digest(check);checkConnection();await browserSession.saved(document.workspace.revision,next.name,options.encrypted?'encrypted':'unencrypted',options.passphrase,'verified-write',guard);checkConnection();handle=next;fingerprint=savedFingerprint;await rememberLink().catch(()=>{});}
  return {kind:'file_written' as const,fileName:next.name,revision:document.workspace.revision};
 }
 async function handleDatabase(){return new Promise<IDBDatabase>((resolve,reject)=>{const r=indexedDB.open('orgchart-studio-file-links-v1',1);r.onupgradeneeded=()=>r.result.createObjectStore('links');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});}
 async function rememberLink(){
+ const id=browserSession.getSnapshot().id,value={handle,fingerprint};
  const db=await handleDatabase();await new Promise<void>((resolve,reject)=>{const tx=db.transaction('links','readwrite');
- tx.objectStore('links').put({handle,fingerprint},browserSession.getSnapshot().id);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});db.close();
+ tx.objectStore('links').put(value,id);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});db.close();
 }
 export async function resumeFileLink(){
  const db=await handleDatabase();const value=await new Promise<{handle:LinkedFile|null;fingerprint:string|null}|undefined>((resolve,reject)=>{const tx=db.transaction('links');const r=tx.objectStore('links').get(browserSession.getSnapshot().id);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});db.close();

@@ -2,6 +2,7 @@ import type { WorkspaceMetadata } from '../runtime/browser/recovery';
 import type { WorkspacePackage } from '../lib/workspace-format';
 import { installStudioRequester, type StudioRequester } from '../runtime/request';
 let worker:Worker;
+let initialization:Promise<void>|undefined;
 let metadata:WorkspaceMetadata & {connectionId:string};
 let counter=0;
 const pending=new Map<number,{resolve:(value:unknown)=>void;reject:(error:Error)=>void}>();
@@ -13,9 +14,9 @@ interface BrowserSession {
  init:()=>Promise<void>;
  unlock:(passphrase:string)=>Promise<void>;
  request:StudioRequester;
- export:()=>Promise<WorkspacePackage>;
+ export:(guard?:{expectedWorkspaceId:string;expectedConnectionId:string;agentAccess?:boolean})=>Promise<WorkspacePackage>;
  open:(document:unknown,fileName:string|null,protection:'encrypted'|'unencrypted',passphrase?:string)=>Promise<WorkspaceMetadata>;
- saved:(revision:number,fileName:string,protection:'encrypted'|'unencrypted',passphrase?:string,fileSaveEvidence?:'verified-write'|'user-confirmed-download')=>Promise<WorkspaceMetadata>;
+ saved:(revision:number,fileName:string,protection:'encrypted'|'unencrypted',passphrase?:string,fileSaveEvidence?:'verified-write'|'user-confirmed-download'|'agent-reported-download',guard?:{expectedWorkspaceId:string;expectedConnectionId:string})=>Promise<WorkspaceMetadata>;
 }
 export const browserSession:BrowserSession={
   getSnapshot:()=>metadata,
@@ -24,7 +25,9 @@ export const browserSession:BrowserSession={
     const id=++counter;
     return new Promise<T>((resolve,reject)=>{pending.set(id,{resolve:resolve as (v:unknown)=>void,reject});worker.postMessage({id,action,payload});});
   },
-  async init(){
+  init(){
+    if(initialization)return initialization;
+    initialization=(async()=>{
     worker=new Worker(new URL('./worker.ts',import.meta.url),{type:'module'});
     worker.onmessage=event=>{
       const {id,result,error,metadata:next}=event.data;
@@ -35,6 +38,7 @@ export const browserSession:BrowserSession={
     worker.onerror=()=>{for(const p of pending.values())p.reject(Error('Browser workspace stopped. Reload to recover the last saved state.'));pending.clear();};
     installStudioRequester(browserSession.request);await browserSession.rpc('status');
     void navigator.storage?.persist?.();
+    })();return initialization;
   },
   unlock:async(passphrase:string)=>{await browserSession.rpc('unlock',{passphrase});},
   request:(async(input,init)=>{
@@ -46,7 +50,9 @@ export const browserSession:BrowserSession={
       expectedConnectionId:metadata.connectionId,path:url.pathname+url.search,method:request.method,headers:[...request.headers],body:await request.arrayBuffer()});
     return new Response(response.body,{status:response.status,statusText:response.statusText,headers:response.headers});
   }) satisfies StudioRequester,
-  export:()=>browserSession.rpc<WorkspacePackage>('export'),
+  export:(guard)=>browserSession.rpc<WorkspacePackage>('export',guard),
   open:(document:unknown,fileName:string|null,protection:'encrypted'|'unencrypted',passphrase?:string)=>browserSession.rpc<WorkspaceMetadata>('open',{document,fileName,protection,passphrase}),
-  saved:(revision:number,fileName:string,protection:'encrypted'|'unencrypted',passphrase?:string,fileSaveEvidence?:'verified-write'|'user-confirmed-download')=>browserSession.rpc<WorkspaceMetadata>('saved',{revision,fileName,protection,passphrase,fileSaveEvidence}),
+  saved:(revision:number,fileName:string,protection:'encrypted'|'unencrypted',passphrase?:string,fileSaveEvidence?:'verified-write'|'user-confirmed-download'|'agent-reported-download',guard?:{expectedWorkspaceId:string;expectedConnectionId:string})=>browserSession.rpc<WorkspaceMetadata>('saved',{revision,fileName,protection,passphrase,fileSaveEvidence,...guard}),
 };
+
+if(import.meta.hot)import.meta.hot.dispose(()=>{worker?.terminate();for(const p of pending.values())p.reject(Error('Browser development build changed. Reload to reconnect.'));pending.clear();});
