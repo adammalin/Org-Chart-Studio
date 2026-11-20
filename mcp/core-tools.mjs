@@ -491,7 +491,7 @@ export function registerTools(server, client) {
     {
       title: "Propose changes to a working chart",
       description:
-        "Stage a complete ChartDocument for field-by-field human review in OrgChart Studio. The saved chart is not changed until a person applies the proposal. The chart ID, version, and updatedAt must still match, so stale proposals are rejected. Use changeSummary only to restate the human-supplied reason for the change; never infer one.",
+        "Stage a complete ChartDocument for field-by-field human review in OrgChart Studio. The saved chart is not changed until a person applies the proposal. The chart ID, version, and updatedAt must still match, so stale proposals are rejected. Use unit.reportingPlacement standalone for a source card with no stated primary parent, and relationshipType source connection — authority unspecified for an evidenced connection whose supervisory meaning is not established. Preserve source locators and explanatory notes; do not invent supervision to satisfy validation. Use changeSummary only to restate the human-supplied reason for the change; never infer one.",
       inputSchema: {
         chart: z.record(z.string(), z.unknown()),
         changeSummary: z.string().min(3).max(500).optional(),

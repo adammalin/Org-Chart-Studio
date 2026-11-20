@@ -114,6 +114,8 @@ import {
   compactNodeDimensions,
   deriveCompactPresentation,
   descendantIds,
+  isPrimaryRelationship,
+  RELATIONSHIP_TYPES,
   positionBranchNodesFromSnapshot,
   runElkLayout,
   selectionMovementIds,
@@ -1103,7 +1105,7 @@ function StudioWorkspace() {
     [nodes],
   );
   const tableParentByNodeId = useMemo(
-    () => new Map(edges.map((edge) => [edge.target, edge.source])),
+    () => new Map(edges.filter(isPrimaryRelationship).map((edge) => [edge.target, edge.source])),
     [edges],
   );
   const tableUnitTypes = useMemo(
@@ -1133,7 +1135,7 @@ function StudioWorkspace() {
         const parentId = tableParentByNodeId.get(flowNode.id);
         const parentName = parentId
           ? (tableNodeById.get(parentId)?.data.unit.shortName ?? "")
-          : "Root";
+          : flowNode.data.unit.reportingPlacement === "standalone" ? "No parent shown in source" : "Root";
         const matchesSearch =
           !deferredTableSearchQuery ||
           [
@@ -2605,7 +2607,7 @@ function StudioWorkspace() {
           ...flowNode.data,
           collapsed:
             presentationMode === "individual" && collapsedIds.has(flowNode.id),
-          childCount: edges.filter((edge) => edge.source === flowNode.id)
+          childCount: edges.filter((edge) => isPrimaryRelationship(edge) && edge.source === flowNode.id)
             .length,
           sourcePortCount: sourcePortCounts.get(flowNode.id) ?? 0,
           targetPortOffset: targetPortOffsets.get(flowNode.id) ?? 0,
@@ -2754,11 +2756,42 @@ function StudioWorkspace() {
       "Connector pins cleared. Automatic non-overlapping routing is controlling this relationship again.",
     );
   }, [labelNextEdit, selectedEdge, setEdges, setNotice]);
+  const changeConnectionMeaning = (edgeId: string, meaning: string) => {
+    if (activeChartReadOnly || !RELATIONSHIP_TYPES.includes(meaning as typeof RELATIONSHIP_TYPES[number])) return;
+    const edge = edges.find(candidate => candidate.id === edgeId);
+    if (!edge || (edge.data?.relationshipType ?? "primary supervisory") === meaning) return;
+    const nextEdges = edges.map(candidate => candidate.id === edgeId ? {
+      ...candidate,
+      data: {
+        ...candidate.data,
+        relationshipType: meaning,
+        sourceCertainty: "needs_review",
+        reviewNote: "Connection meaning edited; verify its source. An authority-unspecified connection asserts no supervisory relationship.",
+      },
+    } : candidate);
+    const hasParent = nextEdges.some(candidate => candidate.target === edge.target && isPrimaryRelationship(candidate));
+    const nextNodes = nodes.map(node => node.id === edge.target ? {
+      ...node,
+      data: {
+        ...node.data,
+        unit: { ...node.data.unit, reportingPlacement: hasParent ? "hierarchy" as const : "standalone" as const },
+      },
+    } : node);
+    const blocking = validateHierarchy(nextNodes, nextEdges).find(finding => finding.severity === "blocking");
+    if (blocking) {
+      setNotice(`Connection was not changed: ${blocking.message}`);
+      return;
+    }
+    labelNextEdit("changing connection meaning");
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    setNotice("Connection meaning updated. Source review is required; card positions are preserved.");
+  };
   const selectedCardCount = nodes.filter(
     (flowNode) => flowNode.selected,
   ).length;
   const selectedParentEdge = edges.find(
-    (edge) => edge.target === selectedNode?.id,
+    (edge) => edge.target === selectedNode?.id && isPrimaryRelationship(edge),
   );
   const findings = useMemo(
     () => (activeChart ? validateHierarchy(nodes, edges) : []),
@@ -3135,10 +3168,10 @@ function StudioWorkspace() {
       compareVersion.nodes.map((flowNode) => [flowNode.id, flowNode]),
     );
     const currentParents = new Map(
-      edges.map((edge) => [edge.target, edge.source]),
+      edges.filter(isPrimaryRelationship).map((edge) => [edge.target, edge.source]),
     );
     const savedParents = new Map(
-      compareVersion.edges.map((edge) => [edge.target, edge.source]),
+      compareVersion.edges.filter(isPrimaryRelationship).map((edge) => [edge.target, edge.source]),
     );
     const added = nodes.filter((flowNode) => !savedById.has(flowNode.id));
     const removed = compareVersion.nodes.filter(
@@ -3251,14 +3284,14 @@ function StudioWorkspace() {
     setSelectedEdgeId(edge.id);
     focusNode(edge.target);
     setNotice(
-      `Correct ${child?.data.unit.shortName ?? "this reporting line"} with the Primary parent field in Selected unit details, then choose Save organizational changes.`,
+      `Check ${child?.data.unit.shortName ?? "this connection"} against the source. Use Primary parent for supervision, or Advanced → Connection meaning when the source leaves authority unspecified.`,
     );
   };
 
   const rejectAndRemoveCard = (nodeId: string) => {
     const reviewNode = nodes.find((flowNode) => flowNode.id === nodeId);
-    const parentEdge = edges.find((edge) => edge.target === nodeId);
-    if (!reviewNode || !parentEdge) {
+    const parentEdge = edges.find((edge) => edge.target === nodeId && isPrimaryRelationship(edge));
+    if (!reviewNode || (!parentEdge && reviewNode.data.unit.reportingPlacement !== "standalone")) {
       setNotice(
         "The chart root cannot be removed from the review queue. Correct its source fields or delete the entire chart from the library.",
       );
@@ -3287,7 +3320,7 @@ function StudioWorkspace() {
         (edge) => !branchIds.has(edge.source) && !branchIds.has(edge.target),
       ),
     );
-    setSelectedId(parentEdge.source);
+    setSelectedId(parentEdge?.source ?? "");
     setNotice(
       `${branchDescription} removed from the working draft. Saving automatically…`,
     );
@@ -3340,6 +3373,8 @@ function StudioWorkspace() {
   const saveUnitChanges = (form: HTMLFormElement) => {
     if (!selectedNode) return;
     const formData = new FormData(form);
+    const parentChoice = String(formData.get("parentId") ?? "");
+    const parentDraftId = parentChoice === "__standalone__" ? "" : parentChoice;
     const normalizedUnit: OrganizationalUnit = {
       ...selectedNode.data.unit,
       name: String(formData.get("name") ?? "").trim(),
@@ -3369,11 +3404,11 @@ function StudioWorkspace() {
       compactDisplay: String(
         formData.get("compactDisplay") ?? "auto",
       ) as CompactDisplay,
+      reportingPlacement: parentChoice === "__standalone__" ? "standalone" : selectedNode.data.unit.reportingPlacement ? "hierarchy" : undefined,
       publicationVisibility: String(
         formData.get("publicationVisibility") ?? "internal",
       ) as "internal" | "public",
     };
-    const parentDraftId = String(formData.get("parentId") ?? "");
 
     if (
       !normalizedUnit.name ||
@@ -3383,9 +3418,13 @@ function StudioWorkspace() {
       setNotice("Name, display name, and position title are required.");
       return;
     }
-    if (selectedParentEdge && !parentDraftId) {
+    if (selectedParentEdge && !parentDraftId && parentChoice !== "__standalone__") {
       setNotice("Every non-root unit must have one primary parent.");
       return;
+    }
+    if (normalizedUnit.reportingPlacement === "standalone" && selectedNode.data.unit.reportingPlacement !== "standalone") {
+      normalizedUnit.sourceCertainty = "needs_review";
+      normalizedUnit.reviewNote = `${normalizedUnit.reviewNote ? `${normalizedUnit.reviewNote} ` : ""}Standalone placement selected; verify that the source does not state a primary parent.`;
     }
 
     const nextNodes = nodes.map((flowNode) =>
@@ -3397,7 +3436,7 @@ function StudioWorkspace() {
         : flowNode,
     );
     let nextEdges = edges;
-    if (selectedParentEdge && parentDraftId !== selectedParentEdge.source) {
+    if (parentDraftId !== (selectedParentEdge?.source ?? "")) {
       nextEdges = [
         ...edges.filter(
           (edge) =>
@@ -3407,13 +3446,13 @@ function StudioWorkspace() {
                 "primary supervisory"
             ),
         ),
-        {
-          id: `edge-${parentDraftId}-${selectedNode.id}`,
+        ...(parentDraftId ? [{
+          id: selectedParentEdge?.id ?? `edge-${crypto.randomUUID()}`,
           source: parentDraftId,
           target: selectedNode.id,
           type: "smoothstep",
-          data: { relationshipType: "primary supervisory" },
-        },
+          data: { relationshipType: "primary supervisory", sourceCertainty: "needs_review", reviewNote: "Primary parent edited by the user; verify against the source." },
+        }] : []),
       ];
     }
 
@@ -3428,9 +3467,7 @@ function StudioWorkspace() {
 
     const unitChanged =
       JSON.stringify(selectedNode.data.unit) !== JSON.stringify(normalizedUnit);
-    const parentChanged =
-      Boolean(selectedParentEdge) &&
-      parentDraftId !== selectedParentEdge?.source;
+    const parentChanged = parentDraftId !== (selectedParentEdge?.source ?? "");
     if (!unitChanged && !parentChanged) {
       setNotice("No organizational data changes were detected.");
       return;
@@ -3522,7 +3559,7 @@ function StudioWorkspace() {
   };
 
   const deleteSelectedBranch = () => {
-    if (!selectedNode || !selectedParentEdge) {
+    if (!selectedNode || (!selectedParentEdge && selectedNode.data.unit.reportingPlacement !== "standalone")) {
       setNotice(
         "The chart root cannot be deleted here. Delete the chart from the library instead.",
       );
@@ -3548,7 +3585,7 @@ function StudioWorkspace() {
         (edge) => !branchIds.has(edge.source) && !branchIds.has(edge.target),
       ),
     );
-    setSelectedId(selectedParentEdge.source);
+    setSelectedId(selectedParentEdge?.source ?? "");
     setNotice(
       branchIds.size === 1
         ? `${branchLabel} was removed from the draft.`
@@ -5731,6 +5768,7 @@ function StudioWorkspace() {
                       : "Automatic route"}
                   </small>
                 </span>
+                <label>Connection meaning<select aria-label="Connection meaning" value={String(selectedEdge.data?.relationshipType ?? "primary supervisory")} disabled={activeChartReadOnly} onChange={event=>changeConnectionMeaning(selectedEdge.id,event.target.value)}>{RELATIONSHIP_TYPES.map(meaning=><option key={meaning} value={meaning}>{meaning}</option>)}</select><small>Authority unspecified preserves a source connection without asserting supervision.</small></label>
                 <button
                   type="button"
                   className="button button--secondary"
@@ -5832,7 +5870,20 @@ function StudioWorkspace() {
                       : changes,
                   )
                 }
-                onEdgesChange={onEdgesChange}
+                onEdgesChange={(changes) => {
+                  // Keep keyboard selection in UI state, out of saved chart data.
+                  for (const change of changes) {
+                    if (change.type === "select" && advanced) {
+                      if (change.selected) {
+                        setSelectedEdgeId(change.id);
+                        setSelectedId("");
+                      } else {
+                        setSelectedEdgeId(current => current === change.id ? "" : current);
+                      }
+                    }
+                  }
+                  onEdgesChange(changes.filter(change => change.type !== "select"));
+                }}
                 onNodeClick={handleNodeClick}
                 onEdgeClick={(event, edge) => {
                   event.stopPropagation();
@@ -6313,7 +6364,7 @@ function StudioWorkspace() {
               <div className="source-review-list">
                 {visibleSourceReviewNodes.map((flowNode) => {
                   const parentEdge = edges.find(
-                    (edge) => edge.target === flowNode.id,
+                    (edge) => edge.target === flowNode.id && isPrimaryRelationship(edge),
                   );
                   return (
                     <article
@@ -6386,9 +6437,9 @@ function StudioWorkspace() {
                           type="button"
                           className="button button--danger"
                           onClick={() => rejectAndRemoveCard(flowNode.id)}
-                          disabled={!parentEdge}
+                          disabled={!parentEdge && flowNode.data.unit.reportingPlacement !== "standalone"}
                           title={
-                            parentEdge
+                            parentEdge || flowNode.data.unit.reportingPlacement === "standalone"
                               ? "Reject this imported record and remove its branch"
                               : "The chart root cannot be removed here"
                           }
@@ -6427,7 +6478,7 @@ function StudioWorkspace() {
                     >
                       <header>
                         <span className="source-review-item__kind">
-                          Reporting line
+                          Connection
                         </span>
                         <span className="source-review-item__status">
                           Needs review
@@ -6777,7 +6828,7 @@ function StudioWorkspace() {
                           </button>
                         </th>
                         <td>{formatUnitType(flowNode.data.unit.type)}</td>
-                        <td>{parent?.data.unit.shortName ?? "Root"}</td>
+                        <td>{parent?.data.unit.shortName ?? (flowNode.data.unit.reportingPlacement === "standalone" ? "No parent shown in source" : "Root")}</td>
                         <td>{flowNode.data.unit.positionTitle}</td>
                         <td>{flowNode.data.unit.assignmentLabel}</td>
                         <td>
@@ -8459,7 +8510,7 @@ function StudioWorkspace() {
                             <h3>Review normalized hierarchy</h3>
                             <p>
                               {importPreview.rowCount} units and{" "}
-                              {importPreview.edges.length} primary relationships
+                              {importPreview.edges.filter(isPrimaryRelationship).length} primary relationships
                               will create a new draft.
                             </p>
                           </div>
@@ -8479,7 +8530,7 @@ function StudioWorkspace() {
                                 .slice(0, 16)
                                 .map((flowNode) => {
                                   const parentEdge = importPreview.edges.find(
-                                    (edge) => edge.target === flowNode.id,
+                                    (edge) => edge.target === flowNode.id && isPrimaryRelationship(edge),
                                   );
                                   const parent = importPreview.nodes.find(
                                     (candidate) =>
@@ -8491,7 +8542,7 @@ function StudioWorkspace() {
                                         {flowNode.data.unit.name}
                                       </th>
                                       <td>
-                                        {parent?.data.unit.shortName ?? "Root"}
+                                        {parent?.data.unit.shortName ?? (flowNode.data.unit.reportingPlacement === "standalone" ? "No parent shown in source" : "Root")}
                                       </td>
                                       <td>
                                         {
@@ -9449,9 +9500,9 @@ function StudioWorkspace() {
                 type="button"
                 className="button button--danger"
                 onClick={deleteSelectedBranch}
-                disabled={!selectedParentEdge || activeChartReadOnly}
+                disabled={(!selectedParentEdge && selectedNode.data.unit.reportingPlacement !== "standalone") || activeChartReadOnly}
                 title={
-                  selectedParentEdge
+                  selectedParentEdge || selectedNode.data.unit.reportingPlacement === "standalone"
                     ? "Delete this unit and its descendants"
                     : "The chart root is managed from the chart library"
                 }
@@ -9553,18 +9604,19 @@ function StudioWorkspace() {
                       <span>Primary parent</span>
                       <select
                         name="parentId"
-                        defaultValue={selectedParentEdge?.source ?? ""}
-                        disabled={!selectedParentEdge}
+                        defaultValue={selectedNode.data.unit.reportingPlacement === "standalone" ? "__standalone__" : selectedParentEdge?.source ?? ""}
                       >
                         {!selectedParentEdge ? (
                           <option value="">Organization root</option>
                         ) : null}
+                        <option value="__standalone__">No parent shown in source (standalone)</option>
                         {eligibleParents.map((flowNode) => (
                           <option key={flowNode.id} value={flowNode.id}>
                             {flowNode.data.unit.shortName}
                           </option>
                         ))}
                       </select>
+                      <small>Standalone preserves a real source card without inventing a parent. Source connections remain separate from supervision.</small>
                     </label>
                     <label className="editor-field">
                       <span>Compact presentation</span>
@@ -9953,7 +10005,7 @@ function StudioWorkspace() {
                         .map((node) => {
                           const parentEdge =
                             pendingAiImportProposal.proposed.edges.find(
-                              (edge) => edge.target === node.id,
+                              (edge) => edge.target === node.id && isPrimaryRelationship(edge),
                             );
                           const parent =
                             pendingAiImportProposal.proposed.nodes.find(
@@ -9963,7 +10015,7 @@ function StudioWorkspace() {
                           return (
                             <tr key={node.id}>
                               <th scope="row">{node.data.unit.name}</th>
-                              <td>{parent?.data.unit.shortName ?? "Root"}</td>
+                              <td>{parent?.data.unit.shortName ?? (node.data.unit.reportingPlacement === "standalone" ? "No parent shown in source" : "Root")}</td>
                               <td>
                                 {planningStateForNode(node) === "planned"
                                   ? `Planned · ${node.data.unit.effectiveDate}`

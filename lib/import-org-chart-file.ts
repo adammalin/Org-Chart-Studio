@@ -26,6 +26,7 @@ const headerAliases: Record<(typeof importColumns)[number], string[]> = {
   sourceCertainty: ["sourcecertainty", "certainty", "confidence", "reviewstatus"],
   reviewNote: ["reviewnote", "reviewquestion", "ambiguity", "uncertaintynote"],
   planningState: ["planningstate", "organizationstate", "orgstate", "scenario"],
+  reportingPlacement: ["reportingplacement", "parentplacement"],
   relationshipType: ["relationshiptype", "reportingrelationshiptype", "edgetype"],
   relationshipSourceLocator: [
     "relationshipsourcelocator",
@@ -245,6 +246,7 @@ function normalizeWorkbookRows(matrix: string[][]): {
         sourceCertainty: read("sourceCertainty"),
         reviewNote: read("reviewNote"),
         planningState: read("planningState"),
+        reportingPlacement: read("reportingPlacement"),
         relationshipType: read("relationshipType"),
         relationshipSourceLocator: read("relationshipSourceLocator"),
         relationshipSourceCertainty: read("relationshipSourceCertainty"),

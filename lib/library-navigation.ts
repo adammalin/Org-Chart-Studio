@@ -37,7 +37,7 @@ function root(chart: ChartDocument) {
       )
       .map((e) => e.target),
   );
-  return chart.nodes.find((n) => !children.has(n.id)) ?? chart.nodes[0];
+  return chart.nodes.find((n) => n.data.unit.reportingPlacement !== "standalone" && !children.has(n.id)) ?? chart.nodes[0];
 }
 function organizationNames(value: string) {
   const name = searchText(value);

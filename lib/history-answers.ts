@@ -174,7 +174,7 @@ export function roleAnswers(
       h.chart.nodes
         .filter(
           (n) =>
-            !h.chart.edges.some(
+            n.data.unit.reportingPlacement !== "standalone" && !h.chart.edges.some(
               (e) =>
                 e.target === n.id &&
                 (e.data?.relationshipType ?? "primary supervisory") ===

@@ -7,6 +7,7 @@ import {
 import type { Edge } from "@xyflow/react";
 import {
   UNIT_TYPES,
+  RELATIONSHIP_TYPES,
   validateHierarchy,
   type OrgFlowNode,
   type PositionStatus,
@@ -34,9 +35,10 @@ export const importColumns = [
   "relationshipSourceLocator",
   "relationshipSourceCertainty",
   "relationshipReviewNote",
+  "reportingPlacement",
 ] as const;
 
-export type ImportRow = Record<(typeof importColumns)[number], string>;
+export type ImportRow = Record<Exclude<(typeof importColumns)[number], "reportingPlacement">, string> & {reportingPlacement?: string};
 
 export interface ImportPreview {
   supportPanels?: SupportPanel[];
@@ -357,6 +359,7 @@ function rowsFromSourceManifest(value: unknown): ImportRow[] | null {
       sourceCertainty: String(unit.sourceCertainty ?? ""),
       reviewNote: String(unit.reviewNote ?? ""),
       planningState: String(unit.planningState ?? ""),
+      reportingPlacement: String(unit.reportingPlacement ?? ""),
       relationshipType: String(
         relationship?.relationshipType ?? relationship?.type ?? "",
       ),
@@ -619,8 +622,8 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
     }
     if (
       row.relationshipType &&
-      !["primary supervisory", "secondary supervisory"].includes(
-        row.relationshipType,
+      !RELATIONSHIP_TYPES.includes(
+        row.relationshipType as typeof RELATIONSHIP_TYPES[number],
       )
     ) {
       findings.push({
@@ -695,6 +698,7 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
               : ""),
           planningState:
             row.planningState === "planned" ? "planned" : "current",
+          ...(row.reportingPlacement ? {reportingPlacement:row.reportingPlacement as "hierarchy" | "standalone"} : {}),
           publicationVisibility:
             row.publicationVisibility === "public" ? "public" : "internal",
         },
@@ -709,10 +713,7 @@ export function rowsToChart(rows: ImportRow[]): ImportPreview {
       target: row.id,
       type: "smoothstep",
       data: {
-        relationshipType:
-          row.relationshipType === "secondary supervisory"
-            ? "secondary supervisory"
-            : "primary supervisory",
+        relationshipType: row.relationshipType || "primary supervisory",
         sourceLocator: row.relationshipSourceLocator,
         sourceCertainty:
           row.relationshipSourceCertainty === "confirmed" ||
@@ -886,6 +887,7 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
               sourceCertainty: String(node.data.unit.sourceCertainty ?? ""),
               reviewNote: String(node.data.unit.reviewNote ?? ""),
               planningState: String(node.data.unit.planningState ?? ""),
+              reportingPlacement: String(node.data.unit.reportingPlacement ?? ""),
               relationshipType: String(
                 relationship?.data?.relationshipType ?? "",
               ),
@@ -956,8 +958,8 @@ export function parseImportFile(fileName: string, text: string): ImportPreview {
         }
         if (
           edge.data?.relationshipType &&
-          !["primary supervisory", "secondary supervisory", "source connection — authority unspecified"].includes(
-            String(edge.data.relationshipType),
+          !RELATIONSHIP_TYPES.includes(
+            String(edge.data.relationshipType) as typeof RELATIONSHIP_TYPES[number],
           )
         ) {
           findings.push({
@@ -1033,7 +1035,7 @@ ${JSON.stringify(Object.fromEntries(importColumns.map((column) => [column, ""]))
 
 - Use a stable, unique id for every unit.
 - Use parentId to reference the id of the single primary parent.
-- Leave parentId empty for exactly one root unit.
+- Leave parentId empty for the one hierarchy root. A source card with no stated parent may instead have reportingPlacement standalone and an empty parentId.
 - type must be one of: ${UNIT_TYPES.join(", ")}.
 - positionStatus must be filled, acting, vacant, or not_specified. Use not_specified when the source does not identify an assignment; use vacant only for an explicit vacancy.
 - publicationVisibility must be internal or public; use internal when the source does not establish approval for public display.
@@ -1041,7 +1043,7 @@ ${JSON.stringify(Object.fromEntries(importColumns.map((column) => [column, ""]))
 - sourceCertainty must be confirmed, inferred, or needs_review. Use needs_review rather than hiding an unresolved source issue.
 - reviewNote should concisely state the unresolved question or inference; otherwise leave it empty.
 - planningState must be current or planned. A planned unit must have a meaningful future effectiveDate.
-- relationshipType must be primary supervisory or secondary supervisory when parentId is supplied.
+- relationshipType must be primary supervisory, secondary supervisory, or source connection — authority unspecified when a connection endpoint is supplied in parentId. The last type never asserts supervision; mark a card standalone when it has no primary parent. Use canonical chart JSON for multiple connections to one card.
 - relationshipSourceLocator, relationshipSourceCertainty, and relationshipReviewNote describe the reporting line separately from the card. Never copy a card's confidence onto its reporting line unless the source independently supports both.
 - Keep assignmentLabel empty when a person is not supplied and use not_specified status. Use Position vacant and vacant status only when the source explicitly identifies a vacancy.
 - When a visual card contains a person and role, split them into assignmentLabel and positionTitle and mark the position filled or acting as supported by the source. Do not store a visible person as a vacant organizational unit.
@@ -1051,7 +1053,7 @@ ${JSON.stringify(Object.fromEntries(importColumns.map((column) => [column, ""]))
 - Preserve source wording. Do not invent people, titles, units, dates, or reporting relationships.
 - When a staff roster supplies Full Name and Supervisor Full Name, use those columns for reporting relationships and tolerate middle-initial differences only when the match is unique.
 - Treat organization numbers, matrix or home organizations, employment type, and similar source conventions as metadata that must be preserved in the source/provenance note until a dedicated canonical field is approved.
-- Never create a second root or omit a required parent merely to make an ambiguous source validate. Stop and ask the human to resolve the relationship before producing final JSON.
+- Never invent a parent or convert an ambiguous line to supervision. Explicit standalone placement records that no primary parent is shown; retain its evidence and explanatory note. Unmarked extra roots still fail validation.
 - Keep the original source file unchanged; it will be retained as evidence beside the normalized data.
 
 ## Synthetic shape example
