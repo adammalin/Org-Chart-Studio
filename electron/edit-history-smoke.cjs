@@ -12,7 +12,7 @@ module.exports.editHistoryJourneyScript = `
  const other=(await post('/api/charts',{action:'create',name:'Synthetic History Switch Target'})).chart;
  await activity('synthetic-history-refresh',chart.id);
  const choose=async id=>{const select=await wait(()=>{const s=document.querySelector('.chart-switcher select');return s&&[...s.options].some(o=>o.value===id)&&!s.disabled?s:null;},'history chart selector');select.value=id;select.dispatchEvent(new Event('change',{bubbles:true}));await wait(()=>document.querySelector('.chart-switcher select')?.value===id,'selected history chart');};
- const history=async()=>{const b=await wait(()=>[...document.querySelectorAll('.sidebar button')].find(b=>b.textContent.includes('History / Timeline')),'history navigation');b.click();await wait(()=>document.querySelector('.edit-history-panel'),'durable history panel');};
+ const history=async()=>{const b=await wait(()=>[...document.querySelectorAll('.sidebar button')].find(b=>b.textContent.includes('History / Timeline')),'history navigation');b.click();const panel=await wait(()=>document.querySelector('.edit-history-panel'),'durable history panel');const disclosure=panel.closest('details');if(disclosure&&!disclosure.open)disclosure.querySelector('summary').click();};
  // A minimized/background Windows renderer may defer animation frames. Saved
  // recovery must hydrate the selected chart without waiting for a visual frame.
  const originalAnimationFrame=window.requestAnimationFrame.bind(window),deferredFrames=[];

@@ -19,7 +19,8 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.match(bundle, /Monthly updates/);
   assert.match(bundle, /Consistency & priorities/);
   assert.match(bundle, /Ask saved history/);
-  assert.match(bundle, /only charts that staff create or import/i);
+  assert.match(bundle, /Workspace mode/);
+  assert.match(bundle, /Appearance & layout/);
   assert.match(bundle, /Chart library/);
   assert.match(bundle, /Chart editor/);
   assert.match(bundle, /Separate lanes/);
@@ -78,7 +79,7 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.doesNotMatch(bundle, /codex-preview|react-loading-skeleton|Starter Project/i);
 });
 
-test("keeps core prototype boundaries explicit in source", async () => {
+test("keeps data protection and review boundaries explicit in source", async () => {
   const [studio, model, importModel, backupModel, chartRoute, sourceExtractionRoute, proposalRoute, schema, nextConfig, packageJson, hosting] = await Promise.all([
     readFile(new URL("../app/orgchart-studio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/org-chart.ts", import.meta.url), "utf8"),
@@ -93,7 +94,7 @@ test("keeps core prototype boundaries explicit in source", async () => {
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
   ]);
 
-  assert.match(studio, /no personnel system or AI endpoint is connected/i);
+  assert.match(studio, /Nothing has been applied/);
   assert.match(studio, /semantic parent did not change/);
   assert.match(studio, /your older draft was not allowed to overwrite it/i);
   assert.match(studio, /savedContent === editorContent/);

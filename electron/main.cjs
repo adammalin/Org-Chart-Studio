@@ -618,6 +618,7 @@ function createMainWindow(url) {
           () => !document.querySelector('.onboarding-tour'),
           'the first-run tour to close'
         );
+        const interfaceModes = await ${require("./interface-modes-smoke.cjs").interfaceModesJourneyScript};
         const created = await fetch('/api/charts', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -1353,7 +1354,8 @@ function createMainWindow(url) {
             unencryptedBackupSave.fileName === 'orgchart-studio-backup-unencrypted-electron-smoke.orgchart-backup' &&
             unencryptedBackupSave.bytes > 0,
           backupRunActionReady,
-          optionalBackupProtectionVisible
+          optionalBackupProtectionVisible,
+          ...interfaceModes
         };
       })().catch((error) => ({
         __smokeError: String(error?.message ?? error),
@@ -1387,7 +1389,7 @@ function createMainWindow(url) {
           const rect = selector => document.querySelector(selector).getBoundingClientRect();
           const search = rect('.global-search'), status = rect('.topbar__status');
           const progress = document.querySelector('.source-check-progress');
-          const compactFits = innerWidth > 1220 || (progress.getBoundingClientRect().height < 60 && progress.scrollWidth <= progress.clientWidth);
+          const compactFits = !progress || !progress.getClientRects().length || innerWidth > 1220 || (progress.getBoundingClientRect().height < 60 && progress.scrollWidth <= progress.clientWidth);
           const controls = [...document.querySelector('.topbar__status').children].filter(el => getComputedStyle(el).display !== 'none');
           return compactFits && search.right <= status.left + 1 && controls.every(el => {
             const r = el.getBoundingClientRect(); return r.left >= status.left - 1 && r.right <= innerWidth + 1;

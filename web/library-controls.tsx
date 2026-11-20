@@ -23,18 +23,23 @@ export function LibraryControls({editorSaveState}:{editorSaveState:string}){
  useEffect(()=>{const failed=(event:Event)=>setMessage('Browser AI tools could not register: '+String((event as CustomEvent).detail));window.addEventListener('orgchart-agent-error',failed);return()=>window.removeEventListener('orgchart-agent-error',failed);},[]);
  const guardOpen=()=>!waiting&&(!dirty||window.confirm('Your library file has unsaved changes. Continue only if you have saved a copy. Open a different library?'));
  return <section className="library-file-bar" aria-label="Library file and recovery" data-editor-state={editorSaveState} data-unsaved-file={dirty} data-workspace-id={state.id} data-revision={state.revision}>
-  <div><strong>{state.fileName??'New browser library'}</strong><span>{dirty?'Library file needs saving':'Recovery copy saved in this browser'} · Revision {state.revision}</span>{state.lastFileSavedAt&&<small>{state.fileSaveEvidence==='user-confirmed-download'?'Download confirmed by you:':'Last file save:'} {new Date(state.lastFileSavedAt).toLocaleString()}</small>}</div>
-  <div className="library-file-actions">
-   <button disabled={busy||waiting} onClick={()=>{if(!guardOpen())return;if(fileSupport())void run(()=>pickOpen(passphrase));else input.current?.click();}}>Open library</button>
-   <input ref={input} type="file" accept=".json,.orgchart-backup,.orgchart-workspace" hidden onChange={event=>{const file=event.target.files?.[0];if(file)void run(()=>openFile(file,passphrase));event.target.value='';}}/>
-   <button disabled={busy||waiting} onClick={()=>void run(()=>save())}>{busy?'Working…':fileSupport()?'Save library':'Prepare library download'}</button>
-   <button disabled={busy||waiting} onClick={()=>void run(()=>save(true))}>Save a copy</button>
-   {fileSupport()&&<details><summary>More file options</summary><button disabled={busy||waiting} onClick={()=>{if(guardOpen())input.current?.click();}}>Open with standard file chooser</button><button disabled={busy||waiting} onClick={()=>void run(()=>save(false,true))}>Prepare download</button></details>}
-   <label><input type="checkbox" checked={encrypted} onChange={e=>setEncrypted(e.target.checked)}/>Encrypt file</label>
-   <label>File passphrase<input type="password" autoComplete="off" value={passphrase} placeholder="For encrypted open/save" onChange={e=>setPassphrase(e.target.value)}/></label>
-   {fileSupport()&&<label><input type="checkbox" checked={autosave} disabled={!linkedFile()} onChange={e=>setAutosave(e.target.checked)}/>Autosave linked file while open</label>}
+  <div className="library-file-summary"><div><strong title={state.fileName??'New browser library'}>{state.fileName??'New browser library'}</strong><span className={dirty?'file-needs-save':''}>{dirty?'Library file needs saving':state.fileSaveEvidence==='verified-write'?'Library file saved':state.fileSaveEvidence==='user-confirmed-download'?'Download confirmed by you':'Recovery copy only · save a library file'}</span></div>
+   <div className="library-file-actions">
+    <button disabled={busy||waiting} onClick={()=>{if(!guardOpen())return;if(fileSupport())void run(()=>pickOpen(passphrase));else input.current?.click();}}>Open library</button>
+    <button className="library-file-save" disabled={busy||waiting} onClick={()=>void run(()=>save())}>{busy?'Working…':fileSupport()?'Save library':'Prepare library download'}</button>
+   </div>
   </div>
-  <p>Choose a file in your synced OneDrive or Dropbox folder if desired. Studio confirms file writes; your sync client handles uploading. Use Merge backup below to import copies.</p>
+  <input ref={input} type="file" accept=".json,.orgchart-backup,.orgchart-workspace" hidden onChange={event=>{const file=event.target.files?.[0];if(file)void run(()=>openFile(file,passphrase));event.target.value='';}}/>
+  <details className="library-file-options"><summary>More file options</summary><div className="library-file-actions">
+    <button disabled={busy||waiting} onClick={()=>void run(()=>save(true))}>Save a copy</button>
+    {fileSupport()&&<><button disabled={busy||waiting} onClick={()=>{if(guardOpen())input.current?.click();}}>Open with standard file chooser</button><button disabled={busy||waiting} onClick={()=>void run(()=>save(false,true))}>Prepare download</button></>}
+    <label><input type="checkbox" checked={encrypted} onChange={e=>setEncrypted(e.target.checked)}/>Encrypt file</label>
+    <label>File passphrase<input type="password" autoComplete="off" value={passphrase} placeholder="For encrypted open/save" onChange={e=>setPassphrase(e.target.value)}/></label>
+    {fileSupport()&&<label><input type="checkbox" checked={autosave} disabled={!linkedFile()} onChange={e=>setAutosave(e.target.checked)}/>Autosave linked file while open</label>}
+   </div>
+   <p>Choose a file in your synced OneDrive or Dropbox folder if desired. Studio confirms file writes; your sync client handles uploading. Use Backup &amp; restore to merge copies. For an encrypted library, enter its passphrase here before opening it.</p>
+   <small>Revision {state.revision}{state.lastFileSavedAt&&<> · {state.fileSaveEvidence==='user-confirmed-download'?'Download confirmed by you:':'Last file save:'} {new Date(state.lastFileSavedAt).toLocaleString()}</>}</small>
+  </details>
   {(message||reminder)&&<p role="status">{message||'Your library file has unsaved changes. Save it to preserve work outside this browser.'}{reminder&&<button onClick={()=>setReminder(false)}>Dismiss reminder</button>}</p>}
   {download&&<div><a href={download.url} download="OrgChart-Library.orgchart-workspace">Download prepared library</a> <button onClick={()=>void run(async()=>{await browserSession.saved(download.revision,'OrgChart-Library.orgchart-workspace',download.protection,download.passphrase,'user-confirmed-download');await unlinkFile();setMessage('Download confirmed by you; disk contents were not verified.');setDownload(null);})}>I saved this download</button></div>}
  </section>;

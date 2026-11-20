@@ -1,4 +1,5 @@
 "use client";
+import { useInterfaceMode } from "./interface-mode";
 import { RuntimeLibraryControls, useStudioEnvironment } from "../runtime/ui";
 import { studioRequest, downloadStudioFile } from "../runtime/request";
 import { SourcePresentationDrawing } from "./source-presentation";
@@ -85,7 +86,6 @@ import { Rows } from "@phosphor-icons/react/Rows";
 import { Selection } from "@phosphor-icons/react/Selection";
 import { ShieldCheck } from "@phosphor-icons/react/ShieldCheck";
 import { ShieldWarning } from "@phosphor-icons/react/ShieldWarning";
-import { Sparkle } from "@phosphor-icons/react/Sparkle";
 import { SquaresFour } from "@phosphor-icons/react/SquaresFour";
 import { Table } from "@phosphor-icons/react/Table";
 import { TreeStructure } from "@phosphor-icons/react/TreeStructure";
@@ -248,6 +248,7 @@ interface OnboardingTourStep {
   target:
     | "navigation"
     | "presentation"
+    | "workspace-mode"
     | "chart-status"
     | "ai-control"
     | "tips"
@@ -292,9 +293,9 @@ const ONBOARDING_TOUR_STEPS: OnboardingTourStep[] = [
   },
   {
     eyebrow: "Step 2",
-    title: "Choose grouped, vertical, horizontal, or individual cards",
-    body: "Compact groups keeps major units as cards and lists terminal assignments inside their parent group. Vertical is the default column stack; Horizontal uses wider hierarchy rows. Individual cards restores one card for every record. Switching views never removes chart data.",
-    target: "presentation",
+    title: "Choose Simple or Advanced",
+    body: "Simple keeps routine editing, AI review, files, exports, and history close at hand. Advanced adds layout, connector, import, and consistency tools in expandable sections. Switching modes keeps your chart and unfinished card edits intact.",
+    target: "workspace-mode",
     placement: "bottom",
   },
   {
@@ -307,7 +308,7 @@ const ONBOARDING_TOUR_STEPS: OnboardingTourStep[] = [
   {
     eyebrow: "Step 4",
     title: "AI proposals always wait for your decision",
-    body: "Open Local AI control to manage access and receipts. When a proposal arrives, compare Before and After, then apply it, reject it, or choose Review later. A pending banner keeps unsaved proposals easy to find.",
+    body: "Open AI control to manage access and receipts. When a proposal arrives, compare Before and After, then apply it, reject it, or choose Review later. A pending banner keeps unsaved proposals easy to find.",
     target: "ai-control",
     placement: "right",
   },
@@ -843,6 +844,7 @@ function StudioWorkspace() {
     return () => document.removeEventListener("pointerdown", close);
   }, []);
   const [searchArchives, setSearchArchives] = useState(false);
+  const {interfaceMode, advanced, chooseInterfaceMode, preferenceError} = useInterfaceMode();
   const [libraryView, setLibraryView] = useState<"flat" | "tree">("flat");
   const [libraryViewReady, setLibraryViewReady] = useState(false);
   const [chartAppearance,setChartAppearance] = useState<ChartAppearance>("official");
@@ -900,9 +902,7 @@ function StudioWorkspace() {
     (): ConnectorRoutingMode => "separate",
   );
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("library");
-  const [notice, setNotice] = useState(
-    "Chart library ready. It contains only charts that staff create or import; no personnel system or AI endpoint is connected.",
-  );
+  const [notice, setNotice] = useState("");
   const [isLayoutRunning, setIsLayoutRunning] = useState(false);
   const [importName, setImportName] = useState("");
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -4934,7 +4934,8 @@ function StudioWorkspace() {
 
   return (
     <div
-      className={`studio-shell${
+      data-interface-mode={interfaceMode}
+      className={`studio-shell studio-shell--${interfaceMode}${
         mcpActivityVisible ? ` studio-shell--ai-${mcpActivity.phase}` : ""
       }${pendingAiProposal || pendingAiImportProposal ? " studio-shell--ai-review" : ""}${
         detailPanelVisible ? " studio-shell--detail-open" : ""
@@ -5015,7 +5016,7 @@ function StudioWorkspace() {
           </span>
           <span>
             <strong>OrgChart Studio</strong>
-            <small>{environment.kind === "browser" ? "Browser file workspace" : "ORNL working prototype"}</small>
+            <small>{environment.kind === "browser" ? "Browser file workspace" : "Desktop workspace"}</small>
           </span>
         </div>
 
@@ -5176,8 +5177,8 @@ function StudioWorkspace() {
               ))}
             </select>
           </label>
-          <span className="version-chip">{version}</span>
-          {activeChart &&
+          <span className="version-chip" title="Chart lifecycle and version">{version}</span>
+          {advanced && activeChart &&
           activeChart.status !== "current" &&
           activeChart.status !== "archived" ? (
             <button
@@ -5206,7 +5207,7 @@ function StudioWorkspace() {
               Retry save
             </button>
           ) : null}
-          <span className="validation-status">
+          <span className={`validation-status ${blockingFindings.length ? "has-blocking-findings" : ""}`}>
             {!activeChart ? (
               <FolderOpen size={16} aria-hidden="true" />
             ) : blockingFindings.length ? (
@@ -5247,8 +5248,14 @@ function StudioWorkspace() {
         aria-label="Workspace navigation"
         data-tour-target="navigation"
       >
-        <div className="sidebar__section">
-          <p className="sidebar__label">Workspace</p>
+        <label className="interface-mode-control" data-tour-target="workspace-mode">
+          <span>Workspace mode</span>
+          <select aria-label="Workspace mode" value={interfaceMode} onChange={event=>chooseInterfaceMode(event.target.value)}>
+            <option value="simple">Simple</option><option value="advanced">Advanced</option>
+          </select>
+        </label>
+        {preferenceError ? <p className="interface-mode-error" role="status">{preferenceError}</p> : null}
+        <div className="sidebar__section sidebar__primary" aria-label="Everyday tools">
           <button aria-label="Chart library"
             type="button"
             className={workspaceView === "library" ? "is-active" : ""}
@@ -5268,15 +5275,6 @@ function StudioWorkspace() {
           >
             <SquaresFour size={19} aria-hidden="true" />
             <span>Chart editor</span>
-          </button>
-          <button aria-label="Accessible table"
-            type="button"
-            className={workspaceView === "table" ? "is-active" : ""}
-            onClick={() => setWorkspaceView("table")}
-            disabled={!activeChart}
-          >
-            <Table size={19} aria-hidden="true" />
-            <span>Accessible table</span>
           </button>
           <button aria-label="Review queue"
             type="button"
@@ -5300,7 +5298,18 @@ function StudioWorkspace() {
               <span className="nav-count nav-count--neutral">0</span>
             )}
           </button>
-          <SourceCheckProgress charts={charts} />
+          <button aria-label="History / Timeline"
+            type="button"
+            className={workspaceView === "history" ? "is-active" : ""}
+            onClick={showVersionHistory}
+            disabled={!activeChart}
+          >
+            <ClockCounterClockwise size={19} aria-hidden="true" />
+            <span>History / Timeline</span>
+            <span className="nav-count nav-count--neutral">
+              {versions.length || activeChart?.version || 0}
+            </span>
+          </button>
           <button aria-label="Monthly updates"
             type="button"
             className={workspaceView === "monthly" ? "is-active" : ""}
@@ -5308,25 +5317,6 @@ function StudioWorkspace() {
           >
             <ClockCounterClockwise size={19} aria-hidden="true" />
             <span>Monthly updates</span>
-          </button>
-          <button aria-label="Consistency & priorities"
-            type="button"
-            className={workspaceView === "consistency" ? "is-active" : ""}
-            onClick={() => setWorkspaceView("consistency")}
-          >
-            <ShieldWarning size={19} aria-hidden="true" />
-            <span>Consistency & priorities</span>
-            <span className="nav-count nav-count--warning">
-              {portfolioIssues.length}
-            </span>
-          </button>
-          <button aria-label="Sources & imports"
-            type="button"
-            className={workspaceView === "sources" ? "is-active" : ""}
-            onClick={() => setWorkspaceView("sources")}
-          >
-            <FileArrowUp size={19} aria-hidden="true" />
-            <span>Sources & imports</span>
           </button>
           <button aria-label="Backup & restore"
             type="button"
@@ -5346,9 +5336,40 @@ function StudioWorkspace() {
             <span>Publish & export</span>
           </button>
         </div>
-
-        <div className="sidebar__section">
-          <p className="sidebar__label">Change governance</p>
+        {advanced ? <details className="sidebar-tools" key="advanced-tools" open={workspaceView === "table" || workspaceView === "sources" || workspaceView === "consistency"}>
+          <summary>Advanced tools</summary><div className="sidebar__section">
+          <button aria-label="Accessible table"
+            type="button"
+            className={workspaceView === "table" ? "is-active" : ""}
+            onClick={() => setWorkspaceView("table")}
+            disabled={!activeChart}
+          >
+            <Table size={19} aria-hidden="true" />
+            <span>Accessible table</span>
+          </button>
+          <button aria-label="Sources & imports"
+            type="button"
+            className={workspaceView === "sources" ? "is-active" : ""}
+            onClick={() => setWorkspaceView("sources")}
+          >
+            <FileArrowUp size={19} aria-hidden="true" />
+            <span>Sources & imports</span>
+          </button>
+          <button aria-label="Consistency & priorities"
+            type="button"
+            className={workspaceView === "consistency" ? "is-active" : ""}
+            onClick={() => setWorkspaceView("consistency")}
+          >
+            <ShieldWarning size={19} aria-hidden="true" />
+            <span>Consistency & priorities</span>
+            <span className="nav-count nav-count--warning">
+              {portfolioIssues.length}
+            </span>
+          </button>
+          <SourceCheckProgress charts={charts}/>
+          </div>
+        </details> : null}
+        <div className="sidebar__section sidebar__utilities">
           <button aria-label={environment.kind === "browser" ? "Browser AI control" : "Local AI control"}
             type="button"
             className={workspaceView === "ai" ? "is-active" : ""}
@@ -5362,20 +5383,7 @@ function StudioWorkspace() {
             >
               {mcpControl?.paused ? "Paused" : "On"}
             </span>
-          </button>
-          <button aria-label="History / Timeline"
-            type="button"
-            className={workspaceView === "history" ? "is-active" : ""}
-            onClick={showVersionHistory}
-            disabled={!activeChart}
-          >
-            <ClockCounterClockwise size={19} aria-hidden="true" />
-            <span>History / Timeline</span>
-            <span className="nav-count nav-count--neutral">
-              {versions.length || activeChart?.version || 0}
-            </span>
-          </button>
-          <button aria-label="Tips & tour"
+          </button><button aria-label="Tips & tour"
             type="button"
             className="tour-nav-button"
             onClick={startOnboardingTour}
@@ -5385,25 +5393,11 @@ function StudioWorkspace() {
             <span>Tips &amp; tour</span>
           </button>
         </div>
-
-        <div className="sidebar__summary">
-          <p>
-            Active chart ·{" "}
-            {activeChart ? chartStatusLabels[activeChart.status] : "None"}
-          </p>
-          <strong>
-            {activeChart?.name ??
-              (libraryLoading ? "Loading" : "No chart selected")}
-          </strong>
-          <span>{charts.length} charts managed</span>
-          <span>{nodes.length} units</span>
-          <span>{edges.length} primary relationships</span>
-        </div>
       </aside>
 
       <main className="workspace">
         <RuntimeLibraryControls editorSaveState={saveState}/>
-        {environment.kind === "desktop" && storageMode === "desktop" && window.orgChartDesktop?.openFileWorkspace ? <section className="desktop-file-handoff"><button onClick={()=>void window.orgChartDesktop!.openFileWorkspace().catch(error=>setNotice(error.message))}>Open a portable file workspace</button><button disabled={saveState === "saving" || saveState === "error"} onClick={()=>void downloadStudioFile("/api/workspace","OrgChart-Library.orgchart-workspace").then(()=>setNotice("Complete unencrypted working library downloaded, including pending reviews and history. Open it in the web app or the separate file workspace.")).catch(error=>setNotice(error.message))}>Download full working library</button><span>Open web library files separately. Your desktop database stays in this window.</span></section> : null}
+        {workspaceView === "backups" && environment.kind === "desktop" && storageMode === "desktop" && window.orgChartDesktop?.openFileWorkspace ? <section className="desktop-file-handoff"><button onClick={()=>void window.orgChartDesktop!.openFileWorkspace().catch(error=>setNotice(error.message))}>Open a portable file workspace</button><button disabled={saveState === "saving" || saveState === "error"} onClick={()=>void downloadStudioFile("/api/workspace","OrgChart-Library.orgchart-workspace").then(()=>setNotice("Complete unencrypted working library downloaded, including pending reviews and history. Open it in the web app or the separate file workspace.")).catch(error=>setNotice(error.message))}>Download full working library</button><span>Open web library files separately. Your desktop database stays in this window.</span></section> : null}
         {nextPendingAiProposal && !pendingAiProposal ? (
           <section
             className="pending-review-banner"
@@ -5479,19 +5473,10 @@ function StudioWorkspace() {
             </div>
           </section>
         ) : null}
-        <section className="prototype-notice" aria-live="polite">
-          <span>
-            <Sparkle size={16} aria-hidden="true" /> Technical prototype
-          </span>
-          <p>{notice}</p>
-          <button
-            type="button"
-            onClick={() => setNotice("")}
-            aria-label="Dismiss notice"
-          >
-            <X size={16} aria-hidden="true" />
-          </button>
-        </section>
+        {notice ? <section className="prototype-notice" aria-live="polite">
+          <p>{notice}</p><button type="button" onClick={()=>setNotice("")} aria-label="Dismiss notice"><X size={16} aria-hidden="true"/></button>
+        </section> : null}
+        {pendingImportSummaries.length && workspaceView !== "sources" ? <section className="pending-import-shortcut" role="status"><span>{pendingImportSummaries.length} AI import{pendingImportSummaries.length === 1 ? "" : "s"} awaiting review. Nothing has been imported.</span><button className="button button--secondary" onClick={()=>setWorkspaceView("sources")}>Review imports</button></section> : null}
 
         {workspaceView === "canvas" ? (
           <section
@@ -5499,12 +5484,13 @@ function StudioWorkspace() {
             className="canvas-panel"
             aria-label="Interactive organizational chart"
           >
+            {advanced ? <details className="layout-options" key="layout-options"><summary>Appearance &amp; layout</summary>
             <div className="chart-appearance-toolbar">
               <label>Chart appearance <select aria-label="Chart appearance" value={chartAppearance} disabled={!libraryViewReady} onChange={e=>void chooseChartAppearance(e.target.value as ChartAppearance)}><option value="official">Official slide</option><option value="annotated">Editor annotations</option></select></label>
               <span>{chartFontAvailable === false ? "Century Gothic unavailable; using the system fallback" : "Century Gothic"} · source formatting where captured. Saved positions stay unchanged.</span>
               {environment.kind === "browser" ? <LocalChartFonts onLoaded={()=>setChartFontAvailable(true)} onNotice={setNotice}/> : null}
             </div>
-            <div className="canvas-toolbar">
+            <div className="layout-options__controls">
               <div className="canvas-toolbar__mode">
                 <div
                   className="presentation-control"
@@ -5697,6 +5683,8 @@ function StudioWorkspace() {
                   </button>
                 </div>
               )}
+            </div></details> : null}
+            <div className="canvas-toolbar canvas-toolbar--essentials">
               <div
                 className="toolbar-actions"
                 role="toolbar"
@@ -5738,14 +5726,9 @@ function StudioWorkspace() {
                   <ArrowsOut size={17} aria-hidden="true" />
                   Fit view
                 </button>
-                <button
-                  type="button"
-                  className="button button--secondary"
-                  onClick={() => setWorkspaceView("exports")}
-                >
-                  <DownloadSimple size={17} aria-hidden="true" />
-                  Publish & export
-                </button>
+                <button type="button" className="button button--secondary" onClick={()=>setWorkspaceView("table")}><Table size={17} aria-hidden="true"/>Table view</button>
+                {!advanced ? <span className="canvas-edit-hint">Select a card to update its details</span> : null}
+
               </div>
             </div>
 
@@ -5772,7 +5755,7 @@ function StudioWorkspace() {
               </section>
             ) : null}
 
-            {presentationMode === "individual" &&
+            {advanced && presentationMode === "individual" &&
             selectedCardCount > 1 &&
             !activeChartReadOnly ? (
               <div
@@ -5874,7 +5857,7 @@ function StudioWorkspace() {
               </div>
             ) : null}
 
-            {presentationMode === "individual" &&
+            {advanced && presentationMode === "individual" &&
             selectedEdge &&
             selectedEdgeRoute ? (
               <div
@@ -5929,7 +5912,7 @@ function StudioWorkspace() {
               </div>
             ) : null}
 
-            {activeChart ? (
+            {activeChart && (advanced || Boolean(activeChart.supportPanels?.length)) ? (
               <SupportPanelsEditor
                 key={activeChart.id}
                 chart={{ ...(canvasChart ?? activeChart), nodes, edges }}
@@ -5941,8 +5924,9 @@ function StudioWorkspace() {
                 onSaved={acceptSupplementSave}
               />
             ) : null}
+            {canvasChart?.sourceLayout?.presentation && !capturedPresentation ? <p className="source-formatting-warning" role="status">Captured source formatting is not active in this view. Open Source arrangement &amp; formatting to inspect it.</p> : null}
             {canvasChart?.sourceLayout ? (
-              <div className="source-layout-toolbar">
+              <details className="source-layout-details"><summary>Source arrangement &amp; formatting</summary><div className="source-layout-toolbar">
                 <strong>Official slide arrangement</strong>
                 <span>{canvasChart.sourceLayout.sourceLocator}</span>
                 {canvasChart.sourceLayout.presentation ? <small className="source-formatting-status">{capturedPresentation?"Captured source formatting in use":"Source formatting needs rechecking after edits; standard drawing is shown."}</small> : null}
@@ -5964,16 +5948,17 @@ function StudioWorkspace() {
                   Show source arrangement
                 </button>
                 <small>
+                  {chartFontAvailable === false ? "Century Gothic is unavailable; system fonts are being used. Load local chart fonts in Advanced → Appearance & layout. " : ""}
                   Compact views rearrange presentation only. Saved source
                   positions remain intact.
                 </small>
-              </div>
+              </div></details>
             ) : null}
             <div
               className={`flow-surface ${chartAppearance === "official" ? "is-official-appearance" : ""} ${marqueeSelectionEnabled ? "is-marquee-active" : ""} ${pendingAiProposal ? "is-ai-preview" : ""} ${activeChartReadOnly ? "is-read-only" : ""}`}
             >
               <p id="canvas-selection-help" className="sr-only">
-                {presentationMode === "compact"
+                {!advanced ? "Select a card to update its details. Drag the background to pan; use the zoom controls or Fit view to see the chart. Switch to Advanced for card positions and connector editing." : presentationMode === "compact"
                   ? `Compact groups is a presentation-only view. Terminal assignments are listed inside their parent cards. ${compactLayoutOrientation === "vertical" ? "The Vertical layout stacks lower cards in aligned columns with level 3 connectors entering from the left." : "The Horizontal layout spreads lower cards across hierarchy rows with connectors entering from the top."} Switch to Individual cards to move cards or edit connector routes.`
                   : marqueeSelectionEnabled
                     ? "Area selection is on. Drag on empty canvas to draw a selection rectangle. Cards touched by the rectangle become a movable group. Control-click or Command-click adds individual cards. Hold Space while dragging to pan."
@@ -5992,7 +5977,7 @@ function StudioWorkspace() {
                 edgeTypes={edgeTypes}
                 onNodesChange={(changes) =>
                   onNodesChange(
-                    presentationMode === "compact" || activeChartReadOnly
+                    presentationMode === "compact" || activeChartReadOnly || !advanced
                       ? changes.filter((change) => change.type === "select")
                       : changes,
                   )
@@ -6002,7 +5987,7 @@ function StudioWorkspace() {
                 onEdgeClick={(event, edge) => {
                   event.stopPropagation();
                   clearSelectedCard();
-                  setSelectedEdgeId(edge.id);
+                  if (advanced) setSelectedEdgeId(edge.id);
                 }}
                 onPaneClick={() => {
                   clearSelectedCard();
@@ -6152,21 +6137,21 @@ function StudioWorkspace() {
                 maxZoom={1.6}
                 nodesConnectable={false}
                 nodesDraggable={
-                  presentationMode === "individual" &&
+                  advanced && presentationMode === "individual" &&
                   !pendingAiProposal &&
                   !activeChartReadOnly
                 }
                 deleteKeyCode={null}
                 selectionKeyCode={null}
                 selectionOnDrag={
-                  presentationMode === "individual" &&
+                  advanced && presentationMode === "individual" &&
                   marqueeSelectionEnabled &&
                   !activeChartReadOnly
                 }
                 selectionMode={SelectionMode.Partial}
                 multiSelectionKeyCode={["Control", "Meta"]}
                 panOnDrag={
-                  presentationMode === "compact" || !marqueeSelectionEnabled
+                  !advanced || presentationMode === "compact" || !marqueeSelectionEnabled
                 }
                 aria-describedby="canvas-selection-help"
                 defaultEdgeOptions={{
@@ -6199,7 +6184,7 @@ function StudioWorkspace() {
                   </ViewportPortal>
                 ) : null}
                 <Controls showInteractive={false} onFitView={fitChartView} />
-                <MiniMap
+                {advanced ? <MiniMap
                   nodeColor={(flowNode) => {
                     const typedNode = flowNode as OrgFlowNode;
                     if (typedNode.data.unit.type === "laboratory")
@@ -6211,11 +6196,11 @@ function StudioWorkspace() {
                   maskColor="rgba(0, 69, 77, 0.08)"
                   pannable
                   zoomable
-                />
+                /> : null}
               </ReactFlow>
             </div>
 
-            <div className="canvas-legend" aria-label="Chart legend">
+            {advanced ? <details className="canvas-help"><summary>Chart controls help</summary><div className="canvas-legend" aria-label="Chart legend">
               {chartAppearance === "official" ? <span>Official slide appearance · Select a card for source and review details</span> : <>
               <span>
                 <i className="legend-dot legend-dot--filled" />
@@ -6273,7 +6258,7 @@ function StudioWorkspace() {
                   </span>
                 </>
               )}
-            </div>
+            </div></details> : null}
           </section>
         ) : workspaceView === "review" ? (
           <section
@@ -7156,6 +7141,7 @@ function StudioWorkspace() {
               className="library-status-filter"
               role="group"
               aria-label="Filter chart lifecycle"
+              title="Chart lifecycle is authoritative; names and descriptions do not determine whether a chart is Current."
             >
               {(
                 [
@@ -7177,10 +7163,6 @@ function StudioWorkspace() {
                   {label}
                 </button>
               ))}
-              <p>
-                Chart lifecycle is authoritative; names and descriptions do not
-                determine whether a chart is Current.
-              </p>
             </div>
 
             <div
@@ -7262,7 +7244,7 @@ function StudioWorkspace() {
                       <span>v{chart.version}</span>
                     </div>
                     <h2>{chart.name}</h2>
-                    <p>{chart.description}</p>
+                    <details className="chart-card__details"><summary>Chart details</summary><p>{chart.description}</p></details>
                     <dl>
                       <div>
                         <dt>Units</dt>
@@ -7277,7 +7259,7 @@ function StudioWorkspace() {
                         <dd>{chart.sources.length}</dd>
                       </div>
                     </dl>
-                    <div className="chart-card__updated">
+                    <details className="chart-card__history"><summary>Updated {new Date(chart.updatedAt).toLocaleDateString()}</summary><div className="chart-card__updated">
                       <span>
                         Updated {new Date(chart.updatedAt).toLocaleDateString()}
                       </span>
@@ -7307,6 +7289,7 @@ function StudioWorkspace() {
                         </>
                       ) : null}
                     </div>
+                    </details>
                     <div className="chart-card__actions">
                       <button
                         type="button"
@@ -7733,8 +7716,6 @@ function StudioWorkspace() {
           </section>
         ) : workspaceView === "history" ? (
           <section className="history-panel" aria-labelledby="history-title">
-            <EditHistoryPanel history={durableHistory} disabled={historyUnavailable} onNotice={setNotice} />
-            <HistoryTimeline charts={charts} initialQuery={searchQuery} />
             <div className="history-heading">
               <div>
                 <span className="eyebrow">Immutable working checkpoints</span>
@@ -7754,6 +7735,9 @@ function StudioWorkspace() {
               </button>
             </div>
 
+            <HistoryTimeline charts={charts} initialQuery={searchQuery} />
+            <details className="history-operation-details"><summary>Individual changes &amp; undo history</summary><EditHistoryPanel history={durableHistory} disabled={historyUnavailable} onNotice={setNotice} /></details>
+            <details className="history-operation-details"><summary>Named versions &amp; comparisons</summary>
             <div className="version-save-card">
               <div>
                 <span className="eyebrow">
@@ -7929,6 +7913,8 @@ function StudioWorkspace() {
               </div>
             )}
 
+            </details>
+            <details className="history-operation-details"><summary>AI Apply &amp; Reject decisions ({aiActivities.length})</summary>
             <section
               className="ai-activity-timeline"
               aria-labelledby="ai-activity-history-title"
@@ -7994,6 +7980,7 @@ function StudioWorkspace() {
                 </div>
               )}
             </section>
+            </details>
           </section>
         ) : workspaceView === "ai" ? (
           <section
@@ -8123,7 +8110,7 @@ function StudioWorkspace() {
               </div>
             </div>
 
-            <div className="ai-control-layout">
+            <details className="ai-access-details"><summary>AI access settings &amp; receipts</summary><div className="ai-control-layout">
               <fieldset className="ai-control-scope">
                 <legend>Chart access</legend>
                 <label>
@@ -8287,6 +8274,7 @@ function StudioWorkspace() {
                 )}
               </section>
             </div>
+            </details>
           </section>
         ) : (
           <section
@@ -9632,19 +9620,6 @@ function StudioWorkspace() {
                 className="unit-editor__fields"
                 disabled={activeChartReadOnly}
               >
-                <div className="unit-editor__identity">
-                  <span>Stable unit ID</span>
-                  <code>{selectedNode.id}</code>
-                </div>
-
-                <label className="editor-field">
-                  <span>Full unit name</span>
-                  <input
-                    name="name"
-                    required
-                    defaultValue={selectedNode.data.unit.name}
-                  />
-                </label>
                 <label className="editor-field">
                   <span>Card display name</span>
                   <input
@@ -9652,75 +9627,6 @@ function StudioWorkspace() {
                     required
                     defaultValue={selectedNode.data.unit.shortName}
                   />
-                </label>
-                <div className="editor-field-row">
-                  <label className="editor-field">
-                    <span>Unit type</span>
-                    <select
-                      name="type"
-                      defaultValue={selectedNode.data.unit.type}
-                    >
-                      <option value="laboratory">Laboratory</option>
-                      <option value="directorate">Directorate</option>
-                      <option value="division">Division</option>
-                      <option value="section">Section</option>
-                      <option value="group">Group</option>
-                      <option value="team">Team</option>
-                      <option value="program">Program</option>
-                      <option value="office">Office</option>
-                      <option value="project">Project organization</option>
-                      <option value="other">Other</option>
-                    </select>
-                  </label>
-                  <label className="editor-field">
-                    <span>Position status</span>
-                    <select
-                      name="positionStatus"
-                      defaultValue={selectedNode.data.unit.positionStatus}
-                    >
-                      <option value="filled">Filled</option>
-                      <option value="acting">Acting</option>
-                      <option value="vacant">Vacant</option>
-                      <option value="not_specified">
-                        Not specified in source
-                      </option>
-                    </select>
-                  </label>
-                </div>
-                <label className="editor-field">
-                  <span>Primary parent</span>
-                  <select
-                    name="parentId"
-                    defaultValue={selectedParentEdge?.source ?? ""}
-                    disabled={!selectedParentEdge}
-                  >
-                    {!selectedParentEdge ? (
-                      <option value="">Organization root</option>
-                    ) : null}
-                    {eligibleParents.map((flowNode) => (
-                      <option key={flowNode.id} value={flowNode.id}>
-                        {flowNode.data.unit.shortName}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="editor-field">
-                  <span>Compact presentation</span>
-                  <select
-                    name="compactDisplay"
-                    defaultValue={
-                      selectedNode.data.unit.compactDisplay ?? "auto"
-                    }
-                  >
-                    <option value="auto">Automatic by hierarchy level</option>
-                    <option value="list">List inside parent group</option>
-                    <option value="card">Keep as a separate card</option>
-                    <option value="sidecar">Leadership sidecar card</option>
-                  </select>
-                  <small>
-                    List applies only to terminal records. Sidecar applies to a
-                    terminal record directly below the chart root.
-                  </small>
                 </label>
                 <label className="editor-field">
                   <span>Position title</span>
@@ -9738,72 +9644,155 @@ function StudioWorkspace() {
                   />
                 </label>
                 <label className="editor-field">
+                  <span>Position status</span>
+                  <select
+                    name="positionStatus"
+                    defaultValue={selectedNode.data.unit.positionStatus}
+                  >
+                    <option value="filled">Filled</option>
+                    <option value="acting">Acting</option>
+                    <option value="vacant">Vacant</option>
+                    <option value="not_specified">
+                      Not specified in source
+                    </option>
+                  </select>
+                </label>
+                <label className="editor-field">
                   <span>Effective date or label</span>
                   <input
                     name="effectiveDate"
                     defaultValue={selectedNode.data.unit.effectiveDate}
                   />
                 </label>
-                <label className="editor-field">
-                  <span>Effective state</span>
-                  <select
-                    name="planningState"
-                    defaultValue={
-                      selectedNode.data.unit.planningState ?? "current"
-                    }
-                  >
-                    <option value="current">In effect now</option>
-                    <option value="planned">Planned / future</option>
-                  </select>
-                </label>
-                <label className="editor-field">
-                  <span>Publication visibility</span>
-                  <select
-                    name="publicationVisibility"
-                    defaultValue={selectedNode.data.unit.publicationVisibility}
-                  >
-                    <option value="internal">Internal</option>
-                    <option value="public">Public</option>
-                  </select>
-                </label>
-                <label className="editor-field">
-                  <span>Source or provenance note</span>
-                  <input
-                    name="source"
-                    defaultValue={selectedNode.data.unit.source}
-                  />
-                </label>
-                <label className="editor-field">
-                  <span>Source locator</span>
-                  <input
-                    name="sourceLocator"
-                    defaultValue={selectedNode.data.unit.sourceLocator ?? ""}
-                    placeholder="Slide, page, worksheet, or row"
-                  />
-                </label>
-                <label className="editor-field">
-                  <span>Source certainty</span>
-                  <select
-                    name="sourceCertainty"
-                    defaultValue={
-                      selectedNode.data.unit.sourceCertainty ?? "confirmed"
-                    }
-                  >
-                    <option value="confirmed">Confirmed</option>
-                    <option value="inferred">Inferred</option>
-                    <option value="needs_review">Needs review</option>
-                  </select>
-                </label>
-                <label className="editor-field">
-                  <span>Review note</span>
-                  <textarea
-                    name="reviewNote"
-                    rows={2}
-                    defaultValue={selectedNode.data.unit.reviewNote ?? ""}
-                    placeholder="Record the unresolved source question or reason for an inference"
-                  />
-                </label>
-
+                <details className="unit-more-details">
+                  <summary>Organization structure &amp; source details</summary>
+                  <div className="unit-more-details__body">
+                    <div className="unit-editor__identity">
+                      <span>Stable unit ID</span>
+                      <code>{selectedNode.id}</code>
+                    </div>
+                    <label className="editor-field">
+                      <span>Full unit name</span>
+                      <input
+                        name="name"
+                        required
+                        defaultValue={selectedNode.data.unit.name}
+                      />
+                    </label>
+                    <label className="editor-field">
+                      <span>Unit type</span>
+                      <select
+                        name="type"
+                        defaultValue={selectedNode.data.unit.type}
+                      >
+                        <option value="laboratory">Laboratory</option>
+                        <option value="directorate">Directorate</option>
+                        <option value="division">Division</option>
+                        <option value="section">Section</option>
+                        <option value="group">Group</option>
+                        <option value="team">Team</option>
+                        <option value="program">Program</option>
+                        <option value="office">Office</option>
+                        <option value="project">Project organization</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </label>
+                    <label className="editor-field">
+                      <span>Primary parent</span>
+                      <select
+                        name="parentId"
+                        defaultValue={selectedParentEdge?.source ?? ""}
+                        disabled={!selectedParentEdge}
+                      >
+                        {!selectedParentEdge ? (
+                          <option value="">Organization root</option>
+                        ) : null}
+                        {eligibleParents.map((flowNode) => (
+                          <option key={flowNode.id} value={flowNode.id}>
+                            {flowNode.data.unit.shortName}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="editor-field">
+                      <span>Compact presentation</span>
+                      <select
+                        name="compactDisplay"
+                        defaultValue={
+                          selectedNode.data.unit.compactDisplay ?? "auto"
+                        }
+                      >
+                        <option value="auto">Automatic by hierarchy level</option>
+                        <option value="list">List inside parent group</option>
+                        <option value="card">Keep as a separate card</option>
+                        <option value="sidecar">Leadership sidecar card</option>
+                      </select>
+                      <small>
+                        List applies only to terminal records. Sidecar applies to a
+                        terminal record directly below the chart root.
+                      </small>
+                    </label>
+                    <label className="editor-field">
+                      <span>Effective state</span>
+                      <select
+                        name="planningState"
+                        defaultValue={
+                          selectedNode.data.unit.planningState ?? "current"
+                        }
+                      >
+                        <option value="current">In effect now</option>
+                        <option value="planned">Planned / future</option>
+                      </select>
+                    </label>
+                    <label className="editor-field">
+                      <span>Publication visibility</span>
+                      <select
+                        name="publicationVisibility"
+                        defaultValue={selectedNode.data.unit.publicationVisibility}
+                      >
+                        <option value="internal">Internal</option>
+                        <option value="public">Public</option>
+                      </select>
+                    </label>
+                    <label className="editor-field">
+                      <span>Source or provenance note</span>
+                      <input
+                        name="source"
+                        defaultValue={selectedNode.data.unit.source}
+                      />
+                    </label>
+                    <label className="editor-field">
+                      <span>Source locator</span>
+                      <input
+                        name="sourceLocator"
+                        defaultValue={selectedNode.data.unit.sourceLocator ?? ""}
+                        placeholder="Slide, page, worksheet, or row"
+                      />
+                    </label>
+                    <label className="editor-field">
+                      <span>Source certainty</span>
+                      <select
+                        name="sourceCertainty"
+                        defaultValue={
+                          selectedNode.data.unit.sourceCertainty ?? "confirmed"
+                        }
+                      >
+                        <option value="confirmed">Confirmed</option>
+                        <option value="inferred">Inferred</option>
+                        <option value="needs_review">Needs review</option>
+                      </select>
+                    </label>
+                    <label className="editor-field">
+                      <span>Review note</span>
+                      <textarea
+                        name="reviewNote"
+                        rows={2}
+                        defaultValue={selectedNode.data.unit.reviewNote ?? ""}
+                        placeholder="Record the unresolved source question or reason for an inference"
+                      />
+                    </label>
+                  </div>
+                </details>
                 <button
                   type="submit"
                   className="button button--primary button--full"
@@ -9814,7 +9803,7 @@ function StudioWorkspace() {
               </fieldset>
             </form>
 
-            <div className="presentation-state">
+            {advanced ? <details className="unit-more-details"><summary>Card position</summary><div className="presentation-state">
               <div>
                 <span>Presentation state</span>
                 <strong>
@@ -9858,6 +9847,7 @@ function StudioWorkspace() {
               <PushPin size={17} aria-hidden="true" />
               {selectedNode.data.pinned ? "Unpin card" : "Pin card position"}
             </button>
+            </details> : null}
           </div>
         </aside>
       ) : null}

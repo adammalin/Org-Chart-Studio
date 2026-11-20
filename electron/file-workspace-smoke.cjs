@@ -11,13 +11,14 @@ module.exports.fileWorkspaceJourneyScript=`(async()=>{
  input.form.requestSubmit();
  const chartId=await wait(()=>document.querySelector('.chart-switcher select')?.value,'created chart');
  await wait(()=>document.querySelector('.library-file-bar')?.dataset.editorState==='saved','saved working state');
- document.querySelector('.library-file-actions details summary').click();button('Prepare download').click();
+ const options=await wait(()=>document.querySelector('.library-file-options summary'),'more file options');options.click();
+ (await wait(()=>button('Prepare download')||button('Prepare library download'),'prepare download action')).click();
  const download=await wait(()=>document.querySelector('.library-file-bar a[download]'),'prepared library file');
  const text=await fetch(download.href).then(r=>r.text());const file=JSON.parse(text);
  if(file.format!=='orgchart-studio-workspace'||file.library.charts[0].id!==chartId)throw Error('Portable file lost chart identity.');
  button('I saved this download').click();
  await wait(()=>document.querySelector('.library-file-bar').dataset.unsavedFile==='false','download confirmation');
- const picker=document.querySelector('.library-file-actions input[type="file"]'),transfer=new DataTransfer();
+ const picker=document.querySelector('.library-file-bar input[type="file"]'),transfer=new DataTransfer();
  transfer.items.add(new File([text],'Synthetic-Native-Library.orgchart-workspace',{type:'application/json'}));picker.files=transfer.files;picker.dispatchEvent(new Event('change',{bubbles:true}));
  await wait(()=>document.querySelector('.library-file-bar')?.textContent.includes('Synthetic-Native-Library.orgchart-workspace'),'working file open');
  if(document.querySelector('.chart-switcher select').value!==chartId)throw Error('Open cloned chart IDs instead of continuing the file.');

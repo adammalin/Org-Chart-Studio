@@ -6,6 +6,8 @@ This repository is a public technical preview. Public visibility does not resolv
 
 This repository implements a coherent local Phase 1 human-test slice:
 
+- shared [Simple and Advanced workspaces](docs/INTERFACE-MODES.md), with Simple as the default, routine editing and review in both modes, and on-demand layout and administration tools;
+
 - a persistent chart library for creating, switching, renaming, describing, status-tracking, duplicating, archiving, and deleting multiple independent charts;
 - a renderer-neutral organizational unit model with expanded unit levels, positions, assignments, status, current/planned state, effective labels, source locator, source certainty, provenance, audience visibility, and presentation state;
 - an interactive React Flow editor with unit add/edit/delete/reparent, search, branch collapse, pan, zoom, animated box selection, Control/Command-click multi-selection, Adobe-style alignment and distribution, reliable card-only or whole-branch dragging at every hierarchy level, obstacle-aware connector routing, optional same-parent sibling combs, manually pinned orthogonal connector corners with per-route reset, card pinning, undo, and redo;

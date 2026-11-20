@@ -33,6 +33,7 @@ module.exports.visualJourneyScript=`(${async function(createFixture,createSpineF
  await wait(()=>document.querySelector('.react-flow__node[data-id="synthetic-wrap-root"]'),'fixture editor');
  const fits=element=>element.scrollWidth<=element.clientWidth+1;
  const bar=await wait(()=>document.querySelector('.source-layout-toolbar'),'source metadata toolbar');
+ bar.closest('details').querySelector('summary').click();
  assert(fits(bar)&&[...bar.children].every(fits),'Source metadata must wrap inside the editor');
  assert(bar.getBoundingClientRect().height<180,'Source metadata should use the full row rather than crowding out the chart');
  document.querySelector('.react-flow__node[data-id="synthetic-wrap-child"]').click();
@@ -43,6 +44,7 @@ module.exports.visualJourneyScript=`(${async function(createFixture,createSpineF
  const close=document.querySelector('.detail-panel [aria-label*="Close"]');close?.click();
  [...document.querySelectorAll('.sidebar button')].find(b=>b.getAttribute('aria-label')==='Chart library').click();
  const card=await wait(()=>[...document.querySelectorAll('.chart-card')].find(c=>c.querySelector('h2')?.textContent===fixture.name),'library card');
+ card.querySelector('.chart-card__details summary').click();
  assert(card.querySelector('p').textContent===fixture.description,'Wrapping must preserve the complete source description');
  assert(fits(card)&&fits(card.querySelector('p'))&&fits(card.querySelector('h2')),'Long source URLs and headings must fit library cards');
  const library=document.querySelector('.library-panel');library.scrollTop=library.scrollHeight;
