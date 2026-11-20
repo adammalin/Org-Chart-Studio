@@ -27,6 +27,13 @@ export type CompactLayoutOrientation = "vertical" | "horizontal";
 
 export type CompactDisplay = "auto" | "card" | "list" | "sidecar";
 
+export const SOURCE_CONNECTION_TYPE = "source connection — authority unspecified";
+export const RELATIONSHIP_TYPES = ["primary supervisory", "secondary supervisory", SOURCE_CONNECTION_TYPE] as const;
+/** Only primary supervision establishes a reporting parent or a movable branch. */
+export function isPrimaryRelationship(edge: Edge): boolean {
+  return (edge.data?.relationshipType ?? "primary supervisory") === "primary supervisory";
+}
+
 export interface OrganizationalUnit {
   id: string;
   name: string;
@@ -42,6 +49,8 @@ export interface OrganizationalUnit {
   reviewNote?: string;
   planningState?: PlanningState;
   compactDisplay?: CompactDisplay;
+  /** The source shows this card without asserting a parent in this chart. */
+  reportingPlacement?: "hierarchy" | "standalone";
   publicationVisibility: "internal" | "public";
 }
 
@@ -345,6 +354,7 @@ export function hierarchyLevels(
   nodes: OrgFlowNode[],
   edges: Edge[],
 ): Map<string, number> {
+  edges = edges.filter(isPrimaryRelationship);
   const levels = new Map<string, number>();
   const nodeIds = new Set(nodes.map((flowNode) => flowNode.id));
   const targets = new Set(
@@ -395,6 +405,7 @@ export function deriveCompactPresentation(
   nodes: OrgFlowNode[],
   edges: Edge[],
 ): CompactPresentation {
+  edges = edges.filter(isPrimaryRelationship);
   const nodeById = new Map(nodes.map((flowNode) => [flowNode.id, flowNode]));
   const levels = hierarchyLevels(nodes, edges);
   const parentById = new Map<string, string>();
@@ -465,6 +476,7 @@ export function arrangeCompactPresentation(
   presentation = deriveCompactPresentation(nodes, edges),
   orientation: CompactLayoutOrientation = "vertical",
 ): OrgFlowNode[] {
+  edges = edges.filter(isPrimaryRelationship);
   const visibleNodes = nodes.filter(
     (flowNode) => !presentation.listedNodeIds.has(flowNode.id),
   );
@@ -693,6 +705,7 @@ export async function runElkLayout(
   edges: Edge[],
   preservePinned = false,
 ): Promise<OrgFlowNode[]> {
+  edges = edges.filter(isPrimaryRelationship);
   const { default: ELK } = await import("elkjs/lib/elk.bundled.js");
   const elk = new ELK();
   const graph = {
@@ -739,6 +752,7 @@ export function descendantIds(rootId: string, edges: Edge[]): Set<string> {
   const descendants = new Set<string>([rootId]);
   const childrenByParent = new Map<string, string[]>();
   edges.forEach((edge) => {
+    if (!isPrimaryRelationship(edge)) return;
     const children = childrenByParent.get(edge.source) ?? [];
     children.push(edge.target);
     childrenByParent.set(edge.source, children);
@@ -933,6 +947,9 @@ export function validateHierarchy(
   }
 
   edges.forEach((edge) => {
+    if (!RELATIONSHIP_TYPES.includes((edge.data?.relationshipType ?? "primary supervisory") as typeof RELATIONSHIP_TYPES[number])) {
+      findings.push({code:"INVALID_RELATIONSHIP_TYPE",severity:"blocking",message:`Relationship ${edge.id} has an unsupported meaning.`});
+    }
     if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) {
       findings.push({
         code: "MISSING_ENDPOINT",
@@ -972,14 +989,23 @@ export function validateHierarchy(
   }
 
   if (nodes.length) {
+    for (const flowNode of nodes) {
+      const placement = flowNode.data.unit.reportingPlacement;
+      if (placement !== undefined && placement !== "hierarchy" && placement !== "standalone") {
+        findings.push({code:"INVALID_REPORTING_PLACEMENT",severity:"blocking",message:`Unit ${flowNode.id} has an unsupported reporting placement.`});
+      }
+      if (placement === "standalone" && parentCounts.has(flowNode.id)) {
+        findings.push({code:"STANDALONE_HAS_PRIMARY_PARENT",severity:"blocking",message:`Standalone card ${flowNode.id} cannot also have a primary parent. Choose its source-supported placement.`});
+      }
+    }
     const roots = nodes.filter(
-      (flowNode) => (parentCounts.get(flowNode.id) ?? 0) === 0,
+      (flowNode) => (parentCounts.get(flowNode.id) ?? 0) === 0 && flowNode.data.unit.reportingPlacement !== "standalone",
     );
     if (roots.length !== 1) {
       findings.push({
         code: "INVALID_ROOT_COUNT",
         severity: "blocking",
-        message: `A chart must contain exactly one root unit; found ${roots.length}.`,
+        message: `A chart must contain exactly one hierarchy root; found ${roots.length}. Cards with no parent shown must be explicitly marked standalone.`,
       });
     }
   }

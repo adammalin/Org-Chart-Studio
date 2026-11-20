@@ -99,6 +99,7 @@ const unitFields: Array<{
   { key: "assignmentLabel", label: "Assignment or vacancy label" },
   { key: "positionStatus", label: "Position status" },
   { key: "compactDisplay", label: "Compact presentation" },
+  { key: "reportingPlacement", label: "Reporting placement" },
   { key: "effectiveDate", label: "Effective date or label" },
   { key: "publicationVisibility", label: "Publication visibility" },
   { key: "source", label: "Source or provenance note" },
@@ -157,7 +158,14 @@ function edgeLabel(edge: Edge, nodes: Map<string, OrgFlowNode>): string {
 }
 
 function jsonEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+  // JSON property order can change after import or transport without changing
+  // the chart. Keep array order meaningful while comparing objects by value.
+  const canonical = (value: unknown) => JSON.stringify(value ?? null, (_, item) =>
+    item && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)))
+      : item,
+  );
+  return canonical(left) === canonical(right);
 }
 
 export function diffChartDocuments(

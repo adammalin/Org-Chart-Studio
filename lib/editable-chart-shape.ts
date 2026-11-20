@@ -18,7 +18,8 @@ export function editableChartShapeError(chart: ChartDocument): string | null {
         ['name','shortName','positionTitle','assignmentLabel','effectiveDate','source'].some(
           key => typeof (unit as unknown as Record<string,unknown>)[key] !== 'string') ||
         !['filled','acting','vacant','not_specified'].includes(unit.positionStatus) ||
-        !['internal','public'].includes(unit.publicationVisibility))
+        !['internal','public'].includes(unit.publicationVisibility) ||
+        (unit.reportingPlacement !== undefined && !['hierarchy','standalone'].includes(unit.reportingPlacement)))
       return 'A chart unit is malformed. No chart changes were saved.';
   }
   const ids = new Set<string>();

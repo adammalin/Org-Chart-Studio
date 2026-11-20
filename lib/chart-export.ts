@@ -11,6 +11,8 @@ import {
   cleanOrgChartDisplayText,
   compactNodeDimensions,
   deriveCompactPresentation,
+  isPrimaryRelationship,
+  SOURCE_CONNECTION_TYPE,
   type ChartPresentationMode,
   type CompactLayoutOrientation,
   type OrgFlowNode,
@@ -329,7 +331,7 @@ function assertAudienceHierarchyClosed(
 ) {
   if (audience !== "public") return;
   const detachedEdge = chart.edges.find(
-    (edge) => includedIds.has(edge.target) && !includedIds.has(edge.source),
+    (edge) => isPrimaryRelationship(edge) && includedIds.has(edge.target) && !includedIds.has(edge.source),
   );
   if (!detachedEdge) return;
   const detachedNode = chart.nodes.find(
@@ -1004,7 +1006,7 @@ export function buildAccessibleTableCsv(
   const parentById = new Map(
     chart.edges
       .filter(
-        (edge) => includedIds.has(edge.source) && includedIds.has(edge.target),
+        (edge) => isPrimaryRelationship(edge) && includedIds.has(edge.source) && includedIds.has(edge.target),
       )
       .map((edge) => [edge.target, edge.source]),
   );
@@ -1017,6 +1019,7 @@ export function buildAccessibleTableCsv(
     "lastCurrentAt",
     "lastCurrentBy",
   ];
+  const explicitSourcePlacement = includedNodes.some(node => node.data.unit.reportingPlacement === "standalone") || chart.edges.some(edge => edge.data?.relationshipType === SOURCE_CONNECTION_TYPE);
   const publicHeaders = [
     ...lifecycleHeaders,
     "unit",
@@ -1025,6 +1028,7 @@ export function buildAccessibleTableCsv(
     "positionTitle",
     "positionStatus",
     "effectiveDate",
+    ...(explicitSourcePlacement ? ["reportingPlacement", "sourceConnections"] : []),
   ];
   const internalHeaders = [
     "unitId",
@@ -1042,11 +1046,12 @@ export function buildAccessibleTableCsv(
       chart.lifecycle.lastCurrentAt ?? "",
       chart.lifecycle.lastCurrentBy,
       unit.name,
-      nameById.get(parentById.get(node.id) ?? "") ?? "Root",
+      nameById.get(parentById.get(node.id) ?? "") ?? (unit.reportingPlacement === "standalone" ? "No parent shown in source" : "Root"),
       unit.type,
       unit.positionTitle,
       unit.positionStatus,
       unit.effectiveDate,
+      ...(explicitSourcePlacement ? [unit.reportingPlacement ?? "hierarchy", chart.edges.filter(edge => !isPrimaryRelationship(edge) && includedIds.has(edge.source) && includedIds.has(edge.target) && (edge.source === node.id || edge.target === node.id)).map(edge=>`${String(edge.data?.relationshipType)}: ${nameById.get(edge.source === node.id ? edge.target : edge.source)}`).join("; ")] : []),
     ];
     return audience === "public"
       ? publicValues
@@ -1085,6 +1090,7 @@ export function buildAccessibleTableCsv(
           e.role,
           e.positionStatus,
           e.effectiveDate,
+          ...(explicitSourcePlacement ? ["", ""] : []),
         ];
         rows.push(
           audience === "public"

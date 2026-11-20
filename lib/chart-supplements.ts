@@ -460,6 +460,7 @@ export async function contentFingerprint(
             "publicationVisibility",
           ].map((k) => [k, n.data.unit[k as keyof typeof n.data.unit] ?? ""]),
         ),
+        ...(n.data.unit.reportingPlacement === "standalone" ? {reportingPlacement:"standalone"} : {}),
       }))
       .sort((a, b) => a.id.localeCompare(b.id)),
     edges: chart.edges

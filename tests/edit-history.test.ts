@@ -8,10 +8,37 @@ import { join } from "node:path";
 import { supportFixture } from "./helpers/support-fixture";
 import { editBackupError } from "../lib/edit-history-backup";
 import { inverseEdit, readEditChart } from "../lib/edit-history";
+import { SOURCE_CONNECTION_TYPE, validateHierarchy } from "../lib/org-chart";
 const charts = await import("../app/api/charts/route"),
   edits = await import("../app/api/edit-history/route"),
   proposals = await import("../app/api/ai-proposals/route"),
   backups = await import("../app/api/backups/route");
+
+test('neutral connections and standalone placement survive saved undo/redo and complete backup restore',async()=>{
+  const db=testDatabase();
+  try {
+    const blank=await create('Synthetic neutral history');
+    let chart=await save({...supportFixture(blank.id),version:blank.version,createdAt:blank.createdAt,updatedAt:blank.updatedAt});
+    const original=structuredClone(chart);
+    chart.nodes[1].data.unit.reportingPlacement='standalone';
+    chart.edges[0].data.relationshipType=SOURCE_CONNECTION_TYPE;
+    chart=await save(chart,'Record source authority as unspecified');
+    const undone=await replay(chart.id);
+    assert.deepEqual(undone.chart.nodes,original.nodes);
+    assert.deepEqual(undone.chart.edges,original.edges);
+    await replay(chart.id,'redo');
+    const exported=await backups.GET(new Request(`http://localhost/api/backups?chartId=${chart.id}`)).then(r=>r.json()) as any;
+    const imported=await post(backups,exported);
+    assert.equal(imported.status,201,imported.data.error);
+    const copy=await readEditChart(db.db,imported.data.restoredCharts[0].id);
+    assert.equal(copy.nodes[1].data.unit.reportingPlacement,'standalone');
+    assert.equal(copy.edges[0].data?.relationshipType,SOURCE_CONNECTION_TYPE);
+    assert.deepEqual(validateHierarchy(copy.nodes,copy.edges),[]);
+    const restoredUndo=await replay(copy.id);
+    assert.equal(restoredUndo.chart.nodes[1].data.unit.reportingPlacement,undefined);
+    assert.equal(restoredUndo.chart.edges[0].data.relationshipType,'primary supervisory');
+  } finally {db.sql.close();}
+});
 async function post(
   route: { POST: (r: Request) => Promise<Response> },
   body: unknown,

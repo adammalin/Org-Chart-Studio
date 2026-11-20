@@ -3,6 +3,17 @@ import test from "node:test";
 import { diffChartDocuments } from "../lib/ai-change-review";
 import { createBlankChart } from "../lib/chart-library";
 
+test("AI review ignores object property order but retains real layout changes", () => {
+  const current = createBlankChart("Synthetic property-order review", "chart-synthetic-order");
+  current.nodes[0].style = { width: 240, height: 100 };
+  const proposed = structuredClone(current);
+  proposed.nodes[0].style = { height: 100, width: 240 };
+  proposed.nodes[0].position = { y: current.nodes[0].position.y, x: current.nodes[0].position.x };
+  assert.equal(diffChartDocuments(current, proposed).summary.total, 0);
+  proposed.nodes[0].style.width = 260;
+  assert.ok(diffChartDocuments(current, proposed).changes.some(change => change.fieldLabel === "Card dimensions"));
+});
+
 test("AI proposal diff identifies content, structure, and layout fields", () => {
   const current = createBlankChart("Synthetic review chart", "chart-synthetic-review");
   current.createdAt = "2026-08-03T12:00:00.000Z";
