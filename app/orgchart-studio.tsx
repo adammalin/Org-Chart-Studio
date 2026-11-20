@@ -1,5 +1,8 @@
 "use client";
 import { useInterfaceMode } from "./interface-mode";
+import { StudioTutorial } from "./studio-tutorial";
+import { TUTORIAL_WELCOME_KEY } from "../lib/studio-tutorial";
+import type { InterfaceMode } from "../lib/interface-mode";
 import { RuntimeLibraryControls, useStudioEnvironment } from "../runtime/ui";
 import { studioRequest, downloadStudioFile } from "../runtime/request";
 import { SourcePresentationDrawing } from "./source-presentation";
@@ -59,7 +62,6 @@ import { AlignLeft } from "@phosphor-icons/react/AlignLeft";
 import { AlignRight } from "@phosphor-icons/react/AlignRight";
 import { AlignTop } from "@phosphor-icons/react/AlignTop";
 import { CaretDown } from "@phosphor-icons/react/CaretDown";
-import { CaretLeft } from "@phosphor-icons/react/CaretLeft";
 import { CaretRight } from "@phosphor-icons/react/CaretRight";
 import { Check } from "@phosphor-icons/react/Check";
 import { ClockCounterClockwise } from "@phosphor-icons/react/ClockCounterClockwise";
@@ -241,26 +243,6 @@ interface ChartSourceReviewSummary {
   total: number;
 }
 
-interface OnboardingTourStep {
-  eyebrow: string;
-  title: string;
-  body: string;
-  target:
-    | "navigation"
-    | "presentation"
-    | "workspace-mode"
-    | "chart-status"
-    | "ai-control"
-    | "tips"
-    | null;
-  placement: "center" | "right" | "bottom";
-}
-
-interface TourGeometry {
-  target: { top: number; left: number; width: number; height: number } | null;
-  panel: { top: number; left: number };
-}
-
 interface BackupHealthState {
   reminderDays: 7 | 14 | 30 | 90;
   lastBackupAt: string | null;
@@ -272,54 +254,8 @@ interface BackupHealthState {
 const CONNECTOR_ROUTING_STORAGE_KEY = "orgchart-studio-connector-routing-mode";
 const CONNECTOR_ROUTING_EVENT = "orgchart-studio-connector-routing-change";
 const BACKUP_HEALTH_STORAGE_KEY = "orgchart-studio-backup-health";
-const ONBOARDING_STORAGE_KEY = "orgchart-studio-onboarding-v1";
 const PRESENTATION_STORAGE_KEY = "orgchart-studio-presentation-v1";
 const COMPACT_LAYOUT_STORAGE_KEY = "orgchart-studio-compact-layout-v1";
-
-const ONBOARDING_TOUR_STEPS: OnboardingTourStep[] = [
-  {
-    eyebrow: "Welcome",
-    title: "Know what is saved—and what still needs you",
-    body: "This short tour shows where to open charts, check save state, review AI proposals, and return for help. You remain in control of every applied change.",
-    target: null,
-    placement: "center",
-  },
-  {
-    eyebrow: "Step 1",
-    title: "Move through the chart workflow",
-    body: "Use the workspace navigation to open the chart library, edit the selected chart, resolve imported cards and reporting lines in Review queue, make backups, export, and inspect version history.",
-    target: "navigation",
-    placement: "right",
-  },
-  {
-    eyebrow: "Step 2",
-    title: "Choose Simple or Advanced",
-    body: "Simple keeps routine editing, AI review, files, exports, and history close at hand. Advanced adds layout, connector, import, and consistency tools in expandable sections. Switching modes keeps your chart and unfinished card edits intact.",
-    target: "workspace-mode",
-    placement: "bottom",
-  },
-  {
-    eyebrow: "Step 3",
-    title: "Follow the chart lifecycle",
-    body: "The top bar shows Draft, In review, Current, or Archived alongside the saved version and validation result. Current means designated as the working chart; Archived is historical and read-only. “Not applied” means an AI proposal is still only a preview.",
-    target: "chart-status",
-    placement: "bottom",
-  },
-  {
-    eyebrow: "Step 4",
-    title: "AI proposals always wait for your decision",
-    body: "Open AI control to manage access and receipts. When a proposal arrives, compare Before and After, then apply it, reject it, or choose Review later. A pending banner keeps unsaved proposals easy to find.",
-    target: "ai-control",
-    placement: "right",
-  },
-  {
-    eyebrow: "Step 5",
-    title: "Replay these tips anytime",
-    body: "Choose Tips & tour whenever you want this walkthrough again. Nothing in the tour edits, applies, publishes, or exports a chart.",
-    target: "tips",
-    placement: "right",
-  },
-];
 
 const defaultBackupHealth: BackupHealthState = {
   reminderDays: 30,
@@ -844,7 +780,10 @@ function StudioWorkspace() {
     return () => document.removeEventListener("pointerdown", close);
   }, []);
   const [searchArchives, setSearchArchives] = useState(false);
-  const {interfaceMode, advanced, chooseInterfaceMode, preferenceError} = useInterfaceMode();
+  const {interfaceMode: preferredInterfaceMode, chooseInterfaceMode, preferenceError} = useInterfaceMode();
+  const [tutorialMode, setTutorialMode] = useState<InterfaceMode | null>(null);
+  const interfaceMode = tutorialMode ?? preferredInterfaceMode;
+  const advanced = interfaceMode === "advanced";
   const [libraryView, setLibraryView] = useState<"flat" | "tree">("flat");
   const [libraryViewReady, setLibraryViewReady] = useState(false);
   const [chartAppearance,setChartAppearance] = useState<ChartAppearance>("official");
@@ -1020,11 +959,10 @@ function StudioWorkspace() {
     useState<TableQualityFilter>("all");
   const [sourceReviewFilter, setSourceReviewFilter] =
     useState<SourceReviewFilter>("all");
-  const [onboardingStep, setOnboardingStep] = useState<number | null>(null);
-  const [tourGeometry, setTourGeometry] = useState<TourGeometry>({
-    target: null,
-    panel: { top: 0, left: 0 },
-  });
+  const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [tutorialPreservesEditor, setTutorialPreservesEditor] = useState(false);
+  const tutorialReturnView = useRef<WorkspaceView>("library");
+  const tutorialReturnSelection = useRef("");
   const hydratedChartRef = useRef<string | null>(null);
   const selectedChartIdRef = useRef(activeChartId);
   useLayoutEffect(() => {
@@ -1041,7 +979,6 @@ function StudioWorkspace() {
   const routeCornerDragRef = useRef<RouteCornerDragState | null>(null);
   const dismissedSelectionIdsRef = useRef<Set<string>>(new Set());
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const onboardingDialogRef = useRef<HTMLElement | null>(null);
   const onboardingInitializedRef = useRef(false);
   const handledMcpCompletionRevisionRef = useRef("");
   const mcpCompletionRefreshInFlightRef = useRef("");
@@ -1385,107 +1322,15 @@ function StudioWorkspace() {
     let completed = false;
     try {
       completed =
-        window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === "complete";
+        window.localStorage.getItem(TUTORIAL_WELCOME_KEY) === "complete";
     } catch {
       completed = false;
     }
     if (completed) return;
-    const timer = window.setTimeout(() => setOnboardingStep(0), 500);
+    tutorialReturnView.current = "library";
+    const timer = window.setTimeout(() => setTutorialOpen(true), 500);
     return () => window.clearTimeout(timer);
   }, [libraryLoading]);
-
-  useEffect(() => {
-    if (onboardingStep === null) return;
-    const step = ONBOARDING_TOUR_STEPS[onboardingStep];
-    const updateGeometry = () => {
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-      const panelWidth = Math.min(390, viewportWidth - 32);
-      const panelHeight = 300;
-      const clamp = (value: number, minimum: number, maximum: number) =>
-        Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
-      const targetElement = step.target
-        ? [
-            ...document.querySelectorAll<HTMLElement>(
-              `[data-tour-target="${step.target}"]`,
-            ),
-          ].find((candidate) => {
-            const candidateRect = candidate.getBoundingClientRect();
-            return (
-              candidateRect.width > 0 &&
-              candidateRect.height > 0 &&
-              candidateRect.right > 0 &&
-              candidateRect.bottom > 0 &&
-              candidateRect.left < viewportWidth &&
-              candidateRect.top < viewportHeight
-            );
-          })
-        : null;
-      const rect = targetElement?.getBoundingClientRect();
-      const hasVisibleTarget = Boolean(
-        rect && rect.width > 0 && rect.height > 0,
-      );
-      if (!rect || !hasVisibleTarget || step.placement === "center") {
-        setTourGeometry({
-          target: null,
-          panel: {
-            top: Math.max(16, (viewportHeight - panelHeight) / 2),
-            left: Math.max(16, (viewportWidth - panelWidth) / 2),
-          },
-        });
-        return;
-      }
-      const padding = 8;
-      const target = {
-        top: Math.max(4, rect.top - padding),
-        left: Math.max(4, rect.left - padding),
-        width: Math.min(viewportWidth - 8, rect.width + padding * 2),
-        height: Math.min(viewportHeight - 8, rect.height + padding * 2),
-      };
-      const fitsRight = rect.right + 18 + panelWidth <= viewportWidth - 16;
-      const panelLeft =
-        step.placement === "right" && fitsRight
-          ? rect.right + 18
-          : clamp(rect.left, 16, viewportWidth - panelWidth - 16);
-      const panelTop =
-        step.placement === "bottom" || !fitsRight
-          ? clamp(rect.bottom + 18, 16, viewportHeight - panelHeight - 16)
-          : clamp(rect.top, 16, viewportHeight - panelHeight - 16);
-      setTourGeometry({ target, panel: { top: panelTop, left: panelLeft } });
-    };
-    updateGeometry();
-    window.addEventListener("resize", updateGeometry);
-    window.addEventListener("scroll", updateGeometry, true);
-    window.requestAnimationFrame(() => onboardingDialogRef.current?.focus());
-    return () => {
-      window.removeEventListener("resize", updateGeometry);
-      window.removeEventListener("scroll", updateGeometry, true);
-    };
-  }, [onboardingStep, workspaceView]);
-
-  useEffect(() => {
-    if (onboardingStep === null) return;
-    const handleTourKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "complete");
-        setOnboardingStep(null);
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        setOnboardingStep((current) =>
-          current === null
-            ? null
-            : Math.min(current + 1, ONBOARDING_TOUR_STEPS.length - 1),
-        );
-      } else if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        setOnboardingStep((current) =>
-          current === null ? null : Math.max(current - 1, 0),
-        );
-      }
-    };
-    window.addEventListener("keydown", handleTourKeyDown);
-    return () => window.removeEventListener("keydown", handleTourKeyDown);
-  }, [onboardingStep]);
 
   useEffect(() => {
     const reviewNeedsAttention =
@@ -1494,7 +1339,7 @@ function StudioWorkspace() {
       (mcpActivity.phase === "succeeded" &&
         mcpActivity.completionKind === "review_ready");
     if (!reviewNeedsAttention) return;
-    const timer = window.setTimeout(() => setOnboardingStep(null), 0);
+    const timer = window.setTimeout(() => { setTutorialOpen(false); setTutorialMode(null); }, 0);
     return () => window.clearTimeout(timer);
   }, [
     mcpActivity.completionKind,
@@ -1855,21 +1700,22 @@ function StudioWorkspace() {
   ]);
 
   const startOnboardingTour = useCallback(() => {
-    setOnboardingStep(0);
-  }, []);
+    tutorialReturnView.current = workspaceView;
+    tutorialReturnSelection.current = selectedId;
+    setTutorialPreservesEditor(workspaceView === "canvas");
+    setTutorialOpen(true);
+  }, [workspaceView, selectedId]);
 
-  const finishOnboardingTour = useCallback(
-    (noticeMessage: string) => {
-      try {
-        window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "complete");
-      } catch {
-        // The tour can still close when local preference storage is unavailable.
-      }
-      setOnboardingStep(null);
-      setNotice(noticeMessage);
-    },
-    [setNotice],
-  );
+  const finishOnboardingTour = useCallback(() => {
+    try { window.localStorage.setItem(TUTORIAL_WELCOME_KEY, "complete"); }
+    catch { /* Tutorials remain available when device preferences cannot be stored. */ }
+    setTutorialOpen(false);
+    setTutorialPreservesEditor(false);
+    setTutorialMode(null);
+    setWorkspaceView(tutorialReturnView.current);
+    setSelectedId(tutorialReturnSelection.current);
+    setNotice("Tutorial closed. Your previous workspace is restored. Replay either mode from Tips & tour.");
+  }, [setNotice, setWorkspaceView]);
 
   const loadMcpReview = useCallback(
     async (activity: McpActivitySnapshot) => {
@@ -3093,7 +2939,7 @@ function StudioWorkspace() {
     return () => window.removeEventListener("keydown", handleDialogKeyDown);
   }, [editorDialog]);
 
-  const loadVersions = async (chartId: string) => {
+  const loadVersions = useCallback(async (chartId: string) => {
     setHistoryBusy("load");
     try {
       const [response, activityResponse] = await Promise.all([
@@ -3125,7 +2971,13 @@ function StudioWorkspace() {
     } finally {
       setHistoryBusy(null);
     }
-  };
+  }, [setNotice]);
+
+  const navigateTutorial = useCallback((view: WorkspaceView) => {
+    setWorkspaceView(view);
+    if (view === "canvas" && !selectedId && nodes[0]) setSelectedId(nodes[0].id);
+    if (view === "history" && activeChartId) void loadVersions(activeChartId);
+  }, [activeChartId, loadVersions, setWorkspaceView, selectedId, nodes]);
 
   const showVersionHistory = () => {
     setWorkspaceView("history");
@@ -4910,10 +4762,6 @@ function StudioWorkspace() {
     pendingAiImportProposal !== null ||
     (mcpActivity.phase === "succeeded" &&
       mcpActivity.completionKind === "review_ready");
-  const currentTourStep =
-    onboardingStep === null || reviewNeedsAttention
-      ? null
-      : ONBOARDING_TOUR_STEPS[onboardingStep];
   const visibleSourceReviewNodes =
     sourceReviewFilter === "relationships" ? [] : sourceReviewNodes;
   const visibleSourceReviewEdges =
@@ -4931,6 +4779,8 @@ function StudioWorkspace() {
     : null;
   const detailPanelVisible =
     workspaceView === "canvas" && Boolean(selectedNode);
+  // Keep the uncontrolled card form mounted while a tour previews other sections.
+  const preserveTutorialEditor = tutorialOpen && tutorialPreservesEditor;
 
   return (
     <div
@@ -7074,6 +6924,7 @@ function StudioWorkspace() {
           />
         ) : workspaceView === "library" ? (
           <section key="library" className="library-panel" aria-labelledby="library-title">
+            <div className="library-panel__content">
             <div className="library-heading">
               <div>
                 <span className="eyebrow">Governed chart portfolio</span>
@@ -7366,6 +7217,7 @@ function StudioWorkspace() {
                 </p>
               </div>
             )}
+            </div>
           </section>
         ) : workspaceView === "exports" ? (
           <section className="export-panel" aria-labelledby="export-title">
@@ -9558,8 +9410,8 @@ function StudioWorkspace() {
         )}
       </main>
 
-      {detailPanelVisible && selectedNode ? (
-        <aside className="detail-panel" aria-label="Selected unit details">
+      {selectedNode && (detailPanelVisible || preserveTutorialEditor) ? (
+        <aside className="detail-panel" aria-label="Selected unit details" hidden={!detailPanelVisible}>
           <div className="detail-panel__top">
             <div className="detail-panel__heading">
               <span className="eyebrow">
@@ -10210,112 +10062,9 @@ function StudioWorkspace() {
         </div>
       ) : null}
 
-      {currentTourStep ? (
-        <div className="onboarding-tour">
-          {tourGeometry.target ? (
-            <div
-              className="onboarding-tour__spotlight"
-              aria-hidden="true"
-              style={{
-                top: tourGeometry.target.top,
-                left: tourGeometry.target.left,
-                width: tourGeometry.target.width,
-                height: tourGeometry.target.height,
-              }}
-            />
-          ) : (
-            <div className="onboarding-tour__shade" aria-hidden="true" />
-          )}
-          <section
-            ref={onboardingDialogRef}
-            className="onboarding-tour__panel"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="onboarding-tour-title"
-            tabIndex={-1}
-            style={{
-              top: tourGeometry.panel.top,
-              left: tourGeometry.panel.left,
-            }}
-          >
-            <header>
-              <span className="eyebrow">{currentTourStep.eyebrow}</span>
-              <span className="onboarding-tour__progress">
-                {(onboardingStep ?? 0) + 1} of {ONBOARDING_TOUR_STEPS.length}
-              </span>
-            </header>
-            <h2 id="onboarding-tour-title">{currentTourStep.title}</h2>
-            <p>{currentTourStep.body}</p>
-            <div className="onboarding-tour__steps" aria-hidden="true">
-              {ONBOARDING_TOUR_STEPS.map((step, index) => (
-                <span
-                  key={step.title}
-                  className={index === onboardingStep ? "is-active" : ""}
-                />
-              ))}
-            </div>
-            <footer>
-              <button
-                type="button"
-                className="onboarding-tour__skip"
-                onClick={() =>
-                  finishOnboardingTour(
-                    "Tour closed. Choose Tips & tour whenever you want to replay it.",
-                  )
-                }
-              >
-                Skip tour
-              </button>
-              <span>
-                {(onboardingStep ?? 0) > 0 ? (
-                  <button
-                    type="button"
-                    className="button button--secondary"
-                    onClick={() =>
-                      setOnboardingStep((current) =>
-                        current === null ? null : Math.max(current - 1, 0),
-                      )
-                    }
-                  >
-                    <CaretLeft size={16} aria-hidden="true" />
-                    Back
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="button button--primary"
-                  onClick={() => {
-                    if (
-                      (onboardingStep ?? 0) ===
-                      ONBOARDING_TOUR_STEPS.length - 1
-                    ) {
-                      finishOnboardingTour(
-                        "Tour complete. Choose Tips & tour whenever you want to replay it.",
-                      );
-                    } else {
-                      setOnboardingStep((current) =>
-                        current === null
-                          ? null
-                          : Math.min(
-                              current + 1,
-                              ONBOARDING_TOUR_STEPS.length - 1,
-                            ),
-                      );
-                    }
-                  }}
-                >
-                  {(onboardingStep ?? 0) === ONBOARDING_TOUR_STEPS.length - 1
-                    ? "Finish tour"
-                    : "Next tip"}
-                  {(onboardingStep ?? 0) ===
-                  ONBOARDING_TOUR_STEPS.length - 1 ? null : (
-                    <CaretRight size={16} aria-hidden="true" />
-                  )}
-                </button>
-              </span>
-            </footer>
-          </section>
-        </div>
+      {tutorialOpen && !reviewNeedsAttention ? (
+        <StudioTutorial runtime={environment.kind} hasChart={Boolean(activeChart)} view={workspaceView}
+          onNavigate={navigateTutorial} onPreviewMode={setTutorialMode} onClose={finishOnboardingTour}/>
       ) : null}
 
       {lifecycleDialog && lifecycleDialogChart ? (

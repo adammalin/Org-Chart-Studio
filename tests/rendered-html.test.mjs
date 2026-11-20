@@ -36,7 +36,7 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.match(bundle, /Review later/);
   assert.match(bundle, /awaiting review/);
   assert.match(bundle, /Tips & tour/);
-  assert.match(bundle, /Know what is saved/);
+  assert.match(bundle, /Choose your walkthrough/);
   assert.match(bundle, /data-ai-proposal-action/);
   assert.match(bundle, /did not answer within 15 seconds/);
   assert.match(bundle, /AI-assisted change timeline/);
