@@ -1,3 +1,7 @@
+import {sourcePresentationActive,sourceCardPresentation,unitPresentationKey,panelPresentationKey,type SourcePresentation} from "./source-presentation";
+import {officialCard,officialSupport,officialScale,type OfficialCard,type ChartAppearance,type ChartFonts} from "./chart-appearance";
+import {officialCardSvg,officialFontStyle} from "./official-export";
+import { audienceSupportPanels, panelGeometry } from "./chart-supplements";
 import type { Edge } from "@xyflow/react";
 import type { ChartDocument } from "./chart-library";
 import {
@@ -21,10 +25,7 @@ import {
 
 export type ExportAudience = "internal" | "public";
 export type ExportPresetId =
-  | "natural"
-  | "presentation-wide"
-  | "tabloid-landscape"
-  | "tabloid-portrait";
+  "natural" | "presentation-wide" | "tabloid-landscape" | "tabloid-portrait";
 
 export interface ExportPreset {
   id: ExportPresetId;
@@ -40,7 +41,8 @@ export const EXPORT_PRESETS: ExportPreset[] = [
   {
     id: "natural",
     label: "SVG master / natural bounds",
-    description: "Uses the complete chart bounds without forcing a paper or slide ratio.",
+    description:
+      "Uses the complete chart bounds without forcing a paper or slide ratio.",
     width: null,
     height: null,
     pageWidthInches: null,
@@ -49,7 +51,8 @@ export const EXPORT_PRESETS: ExportPreset[] = [
   {
     id: "presentation-wide",
     label: "16:9 presentation",
-    description: "Fits the complete chart onto a widescreen presentation canvas.",
+    description:
+      "Fits the complete chart onto a widescreen presentation canvas.",
     width: 1_600,
     height: 900,
     pageWidthInches: 13.333,
@@ -85,6 +88,7 @@ export interface ExportViewport {
 }
 
 export interface ExportSceneNode {
+  official?: OfficialCard;
   id: string;
   x: number;
   y: number;
@@ -131,7 +135,26 @@ export interface ExportSceneEdge {
   points: Array<{ x: number; y: number }>;
 }
 
+export interface ExportSceneSupportPanel {
+  official?: OfficialCard;
+  id: string;
+  title: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  lines: string[];
+  fontSize: number;
+  lineHeight: number;
+  assignmentCount: number;
+  connector?: { points: { x: number; y: number }[]; style: "solid" | "dashed" };
+}
+
 export interface ChartExportScene {
+  sourcePresentation?: Pick<SourcePresentation,"strokes"|"annotations">;
+  appearance?: ChartAppearance;
+  connectorWidth?: number;
+  supportPanels?: ExportSceneSupportPanel[];
   chartId: string;
   chartName: string;
   chartStatus: ChartDocument["status"];
@@ -170,6 +193,7 @@ const STATUS_LABELS: Record<PositionStatus, string> = {
   filled: "Filled",
   acting: "Acting",
   vacant: "Vacant",
+  not_specified: "Not specified",
 };
 
 const HEADER_HEIGHT = 74;
@@ -210,7 +234,10 @@ function wrapExportText(
       let segment = "";
       for (const character of word) {
         const candidate = `${segment}${character}`;
-        if (segment && estimateExportTextWidth(candidate, fontSize, bold) > maximumWidth) {
+        if (
+          segment &&
+          estimateExportTextWidth(candidate, fontSize, bold) > maximumWidth
+        ) {
           lines.push(segment);
           segment = character;
         } else {
@@ -221,7 +248,10 @@ function wrapExportText(
       continue;
     }
     const candidate = current ? `${current} ${word}` : word;
-    if (current && estimateExportTextWidth(candidate, fontSize, bold) > maximumWidth) {
+    if (
+      current &&
+      estimateExportTextWidth(candidate, fontSize, bold) > maximumWidth
+    ) {
       lines.push(current);
       current = word;
     } else {
@@ -254,27 +284,6 @@ function layoutExportStatus(
   };
 }
 
-function mergeExportLines(lines: string[], maximumLines: number, fontSize: number): string[] {
-  const merged = [...lines];
-  while (merged.length > maximumLines) {
-    let mergeIndex = 0;
-    let smallestPairWidth = Number.POSITIVE_INFINITY;
-    for (let index = 0; index < merged.length - 1; index += 1) {
-      const pairWidth = estimateExportTextWidth(
-        `${merged[index]} ${merged[index + 1]}`,
-        fontSize,
-        true,
-      );
-      if (pairWidth < smallestPairWidth) {
-        smallestPairWidth = pairWidth;
-        mergeIndex = index;
-      }
-    }
-    merged.splice(mergeIndex, 2, `${merged[mergeIndex]} ${merged[mergeIndex + 1]}`);
-  }
-  return merged;
-}
-
 function layoutExportName(
   value: string,
   maximumWidth: number,
@@ -286,22 +295,31 @@ function layoutExportName(
   for (let fontSize = preferredFontSize; fontSize >= 10; fontSize -= 1) {
     const lineHeight = fontSize * 1.14;
     const lines = wrapExportText(text, maximumWidth, fontSize, true);
-    if (lines.length <= maximumLines && lines.length * lineHeight <= maximumHeight) {
+    if (
+      lines.length <= maximumLines &&
+      lines.length * lineHeight <= maximumHeight
+    ) {
       return { text, lines, fontSize, lineHeight };
     }
   }
-  const fontSize = 10;
-  const lineHeight = fontSize * 1.14;
-  const lines = mergeExportLines(
-    wrapExportText(text, maximumWidth, fontSize, true),
-    maximumLines,
-    fontSize,
-  );
-  return { text, lines, fontSize, lineHeight };
+  // Merging overflow into three lines can create text wider than the card.
+  // Preserve every word and fit the full block within both card dimensions.
+  for (let fontSize = 9.5; fontSize >= 3; fontSize -= 0.5) {
+    const lineHeight = fontSize * 1.14;
+    const lines = wrapExportText(text, maximumWidth, fontSize, true);
+    if (lines.length * lineHeight <= maximumHeight)
+      return { text, lines, fontSize, lineHeight };
+  }
+  throw new Error("The card name needs more space for export. Shorten its display name or enlarge the card.");
 }
 
-function visibleForAudience(node: OrgFlowNode, audience: ExportAudience): boolean {
-  return audience === "internal" || node.data.unit.publicationVisibility === "public";
+function visibleForAudience(
+  node: OrgFlowNode,
+  audience: ExportAudience,
+): boolean {
+  return (
+    audience === "internal" || node.data.unit.publicationVisibility === "public"
+  );
 }
 
 function assertAudienceHierarchyClosed(
@@ -314,7 +332,9 @@ function assertAudienceHierarchyClosed(
     (edge) => includedIds.has(edge.target) && !includedIds.has(edge.source),
   );
   if (!detachedEdge) return;
-  const detachedNode = chart.nodes.find((node) => node.id === detachedEdge.target);
+  const detachedNode = chart.nodes.find(
+    (node) => node.id === detachedEdge.target,
+  );
   throw new Error(
     `The public profile would detach ${detachedNode?.data.unit.shortName ?? detachedEdge.target} from an internal-only parent. Mark its full ancestor path public or keep this unit internal before exporting.`,
   );
@@ -334,7 +354,9 @@ export function resolveExportViewport(
   scene: ChartExportScene,
   presetId: ExportPresetId,
 ): ExportViewport {
-  const preset = EXPORT_PRESETS.find((candidate) => candidate.id === presetId) ?? EXPORT_PRESETS[0];
+  const preset =
+    EXPORT_PRESETS.find((candidate) => candidate.id === presetId) ??
+    EXPORT_PRESETS[0];
   if (!preset.width || !preset.height) {
     return {
       width: scene.width,
@@ -367,8 +389,12 @@ export function buildChartExportScene(
   connectorRoutingMode: ConnectorRoutingMode = "separate",
   presentationMode: ChartPresentationMode = "individual",
   compactLayoutOrientation: CompactLayoutOrientation = "vertical",
+  appearance: ChartAppearance = "official",
 ): ChartExportScene {
-  const audienceNodes = chart.nodes.filter((node) => visibleForAudience(node, audience));
+  const official = appearance === "official";
+  const audienceNodes = chart.nodes.filter((node) =>
+    visibleForAudience(node, audience),
+  );
   if (!audienceNodes.length) {
     throw new Error("This publication audience does not include any units.");
   }
@@ -378,7 +404,10 @@ export function buildChartExportScene(
   const audienceEdges = chart.edges.filter(
     (edge) => audienceIds.has(edge.source) && audienceIds.has(edge.target),
   );
-  const compactPresentation = deriveCompactPresentation(audienceNodes, audienceEdges);
+  const compactPresentation = deriveCompactPresentation(
+    audienceNodes,
+    audienceEdges,
+  );
   const includedNodes =
     presentationMode === "compact"
       ? arrangeCompactPresentation(
@@ -407,38 +436,121 @@ export function buildChartExportScene(
               entries.length,
               compactPresentation.sidecarNodeIds.has(node.id),
             )
-          : { width: NODE_WIDTH, height: NODE_HEIGHT },
+          : {
+              width: Number(node.style?.width) || NODE_WIDTH,
+              height: Number(node.style?.height) || NODE_HEIGHT,
+            },
       ] as const;
     }),
   );
-  const minX = Math.min(...includedNodes.map((node) => node.position.x));
-  const minY = Math.min(...includedNodes.map((node) => node.position.y));
-  const maxX = Math.max(
+  const organizationMaxY = Math.max(
     ...includedNodes.map(
-      (node) => node.position.x + (dimensionsById.get(node.id)?.width ?? NODE_WIDTH),
+      (n) => n.position.y + (dimensionsById.get(n.id)?.height ?? NODE_HEIGHT),
     ),
   );
-  const maxY = Math.max(
-    ...includedNodes.map(
-      (node) => node.position.y + (dimensionsById.get(node.id)?.height ?? NODE_HEIGHT),
-    ),
-  );
+  const panels = audienceSupportPanels(chart, audience).map((p, index) => {
+    const geometry =
+      presentationMode === "compact"
+        ? {
+            x: Math.min(...includedNodes.map((n) => n.position.x)),
+            y: organizationMaxY + 72 + index * 520,
+            width: p.geometry?.width ?? 520,
+            height: p.geometry?.height ?? 100 + p.entries.length * 48,
+          }
+        : panelGeometry(p, chart);
+    let fontSize = 16,
+      lines: string[] = [];
+    for (; fontSize >= 8; fontSize--) {
+      lines = p.entries.flatMap((e) =>
+        wrapExportText(
+          `${e.role}: ${e.person ? e.person + (e.positionStatus === "acting" && !/interim|acting/i.test(e.person) ? " (Interim)" : "") : STATUS_LABELS[e.positionStatus]}`,
+          geometry.width - 40,
+          fontSize,
+        ),
+      );
+      if (lines.length * fontSize * 1.5 + 70 <= geometry.height) break;
+    }
+    if (fontSize < 8)
+      throw Error(
+        `Support panel ${p.title} needs more space for legible export. Enlarge its saved bounds.`,
+      );
+    return {
+      id: p.id,
+      title: p.title,
+      ...geometry,
+      connector: presentationMode === "compact" ? undefined : p.connector,
+      lines,
+      fontSize,
+      lineHeight: fontSize * 1.5,
+      assignmentCount: p.entries.length,
+      ...(official?{official:(audience === "internal" && presentationMode === "individual" && sourceCardPresentation(chart.sourceLayout?.presentation?.panels[p.id],panelPresentationKey(p),geometry.width,geometry.height)) || officialSupport(p.title,p.entries,geometry.width,geometry.height,officialScale(presentationMode === "compact"?undefined:chart.sourceLayout?.width,geometry.width))}:{}),
+    };
+  });
+  const rectangles = [
+    ...includedNodes.map((n) => ({
+      x: n.position.x,
+      y: n.position.y,
+      width: dimensionsById.get(n.id)!.width,
+      height: dimensionsById.get(n.id)!.height,
+    })),
+    ...panels,
+  ];
+  if (chart.sourceLayout && presentationMode === "individual")
+    rectangles.push({
+      x: 0,
+      y: 0,
+      width: chart.sourceLayout.width,
+      height: chart.sourceLayout.height,
+    });
+  const minX = Math.min(...rectangles.map((r) => r.x)),
+    minY = Math.min(...rectangles.map((r) => r.y)),
+    maxX = Math.max(...rectangles.map((r) => r.x + r.width)),
+    maxY = Math.max(...rectangles.map((r) => r.y + r.height));
   const offsetX = PADDING - minX;
-  const offsetY = HEADER_HEIGHT + PADDING - minY;
+  const offsetY = (official ? 0 : HEADER_HEIGHT) + PADDING - minY;
   const includedEdges = sourceEdges.map((edge) => {
-    const manualRoute = presentationMode === "compact" ? undefined : manualEdgeRouteForEdge(edge);
-    if (!manualRoute) return edge;
+    const manualRoute =
+      presentationMode === "compact" ? undefined : manualEdgeRouteForEdge(edge);
+    const sourceRoute =
+      presentationMode === "compact"
+        ? undefined
+        : (edge.data?.sourceRoute as
+            | {
+                points: { x: number; y: number }[];
+                sourceBounds: {
+                  x: number;
+                  y: number;
+                  width: number;
+                  height: number;
+                };
+                targetBounds: {
+                  x: number;
+                  y: number;
+                  width: number;
+                  height: number;
+                };
+              }
+            | undefined);
+    const shift = (p: { x: number; y: number }) => ({
+      ...p,
+      x: p.x + offsetX,
+      y: p.y + offsetY,
+    });
     return {
       ...edge,
       data: {
         ...edge.data,
-        manualRoute: {
-          ...manualRoute,
-          points: manualRoute.points.map((point) => ({
-            x: point.x + offsetX,
-            y: point.y + offsetY,
-          })),
-        },
+        manualRoute: manualRoute
+          ? { ...manualRoute, points: manualRoute.points.map(shift) }
+          : undefined,
+        sourceRoute: sourceRoute
+          ? {
+              ...sourceRoute,
+              points: sourceRoute.points.map(shift),
+              sourceBounds: shift(sourceRoute.sourceBounds),
+              targetBounds: shift(sourceRoute.targetBounds),
+            }
+          : undefined,
       },
     };
   });
@@ -446,22 +558,29 @@ export function buildChartExportScene(
   const baseNodes = includedNodes.map((node) => {
     const unit = node.data.unit;
     const hierarchyLevel = compactPresentation.levels.get(node.id) ?? 1;
-    const dimensions = dimensionsById.get(node.id) ?? { width: NODE_WIDTH, height: NODE_HEIGHT };
+    const dimensions = dimensionsById.get(node.id) ?? {
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
+    };
     const compactEntries =
       presentationMode === "compact"
-        ? (compactPresentation.entriesByParent.get(node.id) ?? []).map((entry) => ({
-            id: entry.id,
-            name: cleanOrgChartDisplayText(entry.unit.shortName || entry.unit.name),
-            positionTitle: cleanOrgChartDisplayText(entry.unit.positionTitle),
-            status: entry.unit.positionStatus,
-            statusText: cleanOrgChartDisplayText(
-              audience === "public"
-                ? STATUS_LABELS[entry.unit.positionStatus]
-                : entry.unit.positionStatus === "filled"
-                  ? entry.unit.assignmentLabel
-                  : STATUS_LABELS[entry.unit.positionStatus],
-            ),
-          }))
+        ? (compactPresentation.entriesByParent.get(node.id) ?? []).map(
+            (entry) => ({
+              id: entry.id,
+              name: cleanOrgChartDisplayText(
+                entry.unit.shortName || entry.unit.name,
+              ),
+              positionTitle: cleanOrgChartDisplayText(entry.unit.positionTitle),
+              status: entry.unit.positionStatus,
+              statusText: cleanOrgChartDisplayText(
+                audience === "public"
+                  ? STATUS_LABELS[entry.unit.positionStatus]
+                  : entry.unit.positionStatus === "filled"
+                    ? entry.unit.assignmentLabel
+                    : STATUS_LABELS[entry.unit.positionStatus],
+              ),
+            }),
+          )
         : [];
     const rawStatusText =
       audience === "public"
@@ -486,6 +605,7 @@ export function buildChartExportScene(
       Math.max(18, (compactListStartY ?? dimensions.height) - 110),
     );
     return {
+      ...(official?{official:(audience === "internal" && presentationMode === "individual" && sourceCardPresentation(chart.sourceLayout?.presentation?.cards[node.id],unitPresentationKey(unit),dimensions.width,dimensions.height)) || officialCard(unit,dimensions.width,dimensions.height,hierarchyLevel,officialScale(presentationMode === "compact"?undefined:chart.sourceLayout?.width,dimensions.width),audience === "public",compactEntries.map(e=>({id:e.id,title:e.name,assignment:e.statusText})),chart.sourceLayout?.cardFills?.[node.id])}:{}),
       id: node.id,
       x: node.position.x + offsetX,
       y: node.position.y + offsetY,
@@ -553,7 +673,8 @@ export function buildChartExportScene(
   });
   const edges: ExportSceneEdge[] = includedEdges.flatMap((edge: Edge) => {
     const route = routedEdges.get(edge.id);
-    if (!route || !nodeById.has(edge.source) || !nodeById.has(edge.target)) return [];
+    if (!route || !nodeById.has(edge.source) || !nodeById.has(edge.target))
+      return [];
     return [
       {
         id: edge.id,
@@ -564,7 +685,11 @@ export function buildChartExportScene(
     ];
   });
 
+  const sourceDrawing = official && audience === "internal" && presentationMode === "individual" && sourcePresentationActive(chart) ? chart.sourceLayout?.presentation : undefined;
   return {
+    ...(sourceDrawing ? {sourcePresentation:{strokes:sourceDrawing.strokes.map(s=>({...s,points:s.points.map(p=>({x:p.x+offsetX,y:p.y+offsetY}))})),annotations:sourceDrawing.annotations.map(a=>({...a,bounds:{...a.bounds,x:a.bounds.x+offsetX,y:a.bounds.y+offsetY}}))}} : {}),
+    appearance,
+    connectorWidth: official ? 1.5*(presentationMode === "compact"?1:(chart.sourceLayout?.width??960)/960) : 2,
     chartId: chart.id,
     chartName: chart.name,
     chartStatus: chart.status,
@@ -577,12 +702,28 @@ export function buildChartExportScene(
     presentationMode,
     compactLayoutOrientation,
     width: Math.max(760, maxX - minX + PADDING * 2),
-    height: maxY - minY + HEADER_HEIGHT + FOOTER_HEIGHT + PADDING * 2,
+    height: maxY - minY + (official ? 0 : HEADER_HEIGHT) + FOOTER_HEIGHT + PADDING * 2,
     nodes,
     edges,
+    supportPanels: panels.map((p) => ({
+      ...p,
+      x: p.x + offsetX,
+      y: p.y + offsetY,
+      connector: p.connector
+        ? {
+            ...p.connector,
+            points: p.connector.points.map((point) => ({
+              x: point.x + offsetX,
+              y: point.y + offsetY,
+            })),
+          }
+        : undefined,
+    })),
     excludedNodeCount: chart.nodes.length - audienceNodes.length,
     groupedNodeCount:
-      presentationMode === "compact" ? compactPresentation.listedNodeIds.size : 0,
+      presentationMode === "compact"
+        ? compactPresentation.listedNodeIds.size
+        : 0,
   };
 }
 
@@ -629,31 +770,46 @@ function fitExportFontSize(
   preferredFontSize: number,
   bold = false,
 ): number {
-  const estimatedWidth = estimateExportTextWidth(value, preferredFontSize, bold);
+  const estimatedWidth = estimateExportTextWidth(
+    value,
+    preferredFontSize,
+    bold,
+  );
   if (estimatedWidth <= maximumWidth) return preferredFontSize;
   return Math.max(3, preferredFontSize * (maximumWidth / estimatedWidth) * 0.9);
 }
 
 function statusColor(status: PositionStatus): string {
+  if (status === "not_specified") return EXPORT_COLORS.ink;
   if (status === "vacant") return EXPORT_COLORS.orange;
   if (status === "acting") return EXPORT_COLORS.blue;
   return EXPORT_COLORS.green;
 }
 
 export function exportLifecycleLabel(scene: ChartExportScene): string {
-  const status = scene.chartStatus === "in_review"
-    ? "IN REVIEW"
-    : scene.chartStatus.toUpperCase();
-  const audience = scene.audience === "public" ? "PUBLIC-SAFE DRAFT" : "INTERNAL";
+  const status =
+    scene.chartStatus === "in_review"
+      ? "IN REVIEW"
+      : scene.chartStatus.toUpperCase();
+  const audience =
+    scene.audience === "public" ? "PUBLIC-SAFE DRAFT" : "INTERNAL";
   return `${audience} • ${status} • VERSION ${scene.chartVersion}`;
 }
 
 export function buildChartSvg(
   scene: ChartExportScene,
   presetId: ExportPresetId = "natural",
+  fonts?: ChartFonts | null,
 ): string {
   const viewport = resolveExportViewport(scene, presetId);
   const audienceLabel = exportLifecycleLabel(scene);
+  if(scene.appearance === "official") {
+    const connectors=scene.sourcePresentation ? scene.sourcePresentation.strokes.map(s=>`<polyline points="${s.points.map(p=>`${p.x},${p.y}`).join(' ')}" fill="none" stroke="#${s.color}" stroke-width="${s.width}"${s.dash?` stroke-dasharray="${s.dash.join(' ')}"`:''}/>`).join('')+scene.sourcePresentation.annotations.map((a,i)=>officialCardSvg(a.card,a.bounds.x,a.bounds.y,a.bounds.width,a.bounds.height,`source-annotation-${i}`)).join('') : scene.edges.map(e=>`<polyline points="${e.points.map(p=>`${p.x},${p.y}`).join(' ')}" fill="none" stroke="#595959" stroke-width="${scene.connectorWidth??1.5}"/>`).join('');
+    const cards=scene.nodes.map(n=>officialCardSvg(n.official!,n.x,n.y,n.width,n.height,n.id)).join('');
+    const panels=(scene.supportPanels??[]).map(p=>`${p.connector&&!scene.sourcePresentation?`<polyline points="${p.connector.points.map(v=>`${v.x},${v.y}`).join(' ')}" fill="none" stroke="#595959" stroke-width="${scene.connectorWidth??1.5}"${p.connector.style==='dashed'?` stroke-dasharray="${(scene.connectorWidth??1.5)*3} ${(scene.connectorWidth??1.5)*2}"`:''}/>`:''}${officialCardSvg(p.official!,p.x,p.y,p.width,p.height,p.id).replace('data-unit-id=','data-support-panel-id=')}`).join('');
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${viewport.width}" height="${viewport.height}" viewBox="0 0 ${viewport.width} ${viewport.height}" role="img" aria-labelledby="title description"><title id="title">${escapeXml(scene.chartName)} organizational chart</title><desc id="description">${escapeXml(audienceLabel)}; official slide appearance; saved arrangement.</desc><defs>${officialFontStyle(fonts)}</defs><rect width="100%" height="100%" fill="#FFFFFF"/><g transform="translate(${viewport.offsetX} ${viewport.offsetY}) scale(${viewport.scale})">${connectors}${cards}${panels}<text x="${PADDING}" y="${scene.height-12}" font-family="Arial,sans-serif" font-size="10" fill="#595959">${escapeXml(audienceLabel)} · Generated ${escapeXml(scene.generatedAt)}</text></g></svg>`;
+  }
+
   const edgeMarkup = scene.edges
     .map((edge) => {
       const path = edge.points
@@ -680,10 +836,15 @@ export function buildChartSvg(
           return `<tspan x="${textX}" dy="${index ? node.nameLineHeight : 0}" font-size="${lineFontSize}">${escapeXml(line)}</tspan>`;
         })
         .join("");
-      const titleY = node.y + Math.min(
-        98,
-        Math.max(78, 51 + (node.nameLines.length - 1) * node.nameLineHeight + 18),
-      );
+      const titleY =
+        node.y +
+        Math.min(
+          98,
+          Math.max(
+            78,
+            51 + (node.nameLines.length - 1) * node.nameLineHeight + 18,
+          ),
+        );
       const statusMaximumWidth = Math.max(56, node.width - (compact ? 56 : 48));
       const positionTitleFontSize = fitExportFontSize(
         node.positionTitle,
@@ -693,7 +854,12 @@ export function buildChartSvg(
       const statusFontSize = Math.min(
         node.statusFontSize,
         ...node.statusLines.map((line) =>
-          fitExportFontSize(line, statusMaximumWidth, node.statusFontSize, true),
+          fitExportFontSize(
+            line,
+            statusMaximumWidth,
+            node.statusFontSize,
+            true,
+          ),
         ),
       );
       const statusTextWidth = Math.max(
@@ -712,47 +878,54 @@ export function buildChartSvg(
             `<tspan x="${statusTextX}" dy="${index ? node.statusLineHeight : 0}">${escapeXml(line)}</tspan>`,
         )
         .join("");
-      const compactEntryMarkup = node.compactListStartY === null
-        ? ""
-        : `<g class="compact-roster">
+      const compactEntryMarkup =
+        node.compactListStartY === null
+          ? ""
+          : `<g class="compact-roster">
             <rect x="${node.x}" y="${node.y + node.compactListStartY}" width="${node.width}" height="34" fill="#${EXPORT_COLORS.green}" fill-opacity="0.08"/>
             <text x="${node.x + 12}" y="${node.y + node.compactListStartY + 21}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="8" font-weight="700" letter-spacing="0.8" fill="#${EXPORT_COLORS.darkTeal}">${node.compactEntries.length} LISTED ASSIGNMENT${node.compactEntries.length === 1 ? "" : "S"}</text>
-            ${node.compactEntries.map((entry, index) => {
-              const rowY = node.y + node.compactListStartY! + 34 + index * 54;
-              const entryStatusRight = node.x + node.width - 12;
-              const entryNameMaximumWidth = Math.max(48, node.width - 138);
-              const entryStatusMaximumWidth = Math.min(96, Math.max(56, node.width * 0.36));
-              const entryNameFontSize = fitExportFontSize(
-                entry.name,
-                entryNameMaximumWidth,
-                10,
-                true,
-              );
-              const entryRoleFontSize = fitExportFontSize(
-                entry.positionTitle,
-                entryNameMaximumWidth,
-                8,
-              );
-              const entryStatusFontSize = fitExportFontSize(
-                entry.statusText,
-                entryStatusMaximumWidth,
-                8,
-                true,
-              );
-              const entryStatusTextWidth = estimateExportTextWidth(
-                entry.statusText,
-                entryStatusFontSize,
-                true,
-              );
-              const entryStatusMarkerX = entryStatusRight - entryStatusTextWidth - 5 - 4;
-              return `<g data-compact-entry-id="${escapeXml(entry.id)}">
+            ${node.compactEntries
+              .map((entry, index) => {
+                const rowY = node.y + node.compactListStartY! + 34 + index * 54;
+                const entryStatusRight = node.x + node.width - 12;
+                const entryNameMaximumWidth = Math.max(48, node.width - 138);
+                const entryStatusMaximumWidth = Math.min(
+                  96,
+                  Math.max(56, node.width * 0.36),
+                );
+                const entryNameFontSize = fitExportFontSize(
+                  entry.name,
+                  entryNameMaximumWidth,
+                  10,
+                  true,
+                );
+                const entryRoleFontSize = fitExportFontSize(
+                  entry.positionTitle,
+                  entryNameMaximumWidth,
+                  8,
+                );
+                const entryStatusFontSize = fitExportFontSize(
+                  entry.statusText,
+                  entryStatusMaximumWidth,
+                  8,
+                  true,
+                );
+                const entryStatusTextWidth = estimateExportTextWidth(
+                  entry.statusText,
+                  entryStatusFontSize,
+                  true,
+                );
+                const entryStatusMarkerX =
+                  entryStatusRight - entryStatusTextWidth - 5 - 4;
+                return `<g data-compact-entry-id="${escapeXml(entry.id)}">
                 <line x1="${node.x}" y1="${rowY}" x2="${node.x + node.width}" y2="${rowY}" stroke="#${EXPORT_COLORS.graphite}" stroke-width="1"/>
                 <text x="${node.x + 12}" y="${rowY + 19}" data-full-text="${escapeXml(entry.name)}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="${entryNameFontSize}" font-weight="700" fill="#${EXPORT_COLORS.darkTeal}">${escapeXml(entry.name)}</text>
                 <text x="${node.x + 12}" y="${rowY + 35}" data-full-text="${escapeXml(entry.positionTitle)}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="${entryRoleFontSize}" fill="#${EXPORT_COLORS.ink}">${escapeXml(entry.positionTitle)}</text>
                 <circle cx="${entryStatusMarkerX}" cy="${rowY + 27}" r="4" fill="#${statusColor(entry.status)}"/>
                 <text x="${entryStatusRight}" y="${rowY + 31}" data-full-text="${escapeXml(entry.statusText)}" text-anchor="end" font-family="Mulish, Aptos, Arial, sans-serif" font-size="${entryStatusFontSize}" font-weight="700" fill="#${EXPORT_COLORS.ink}">${escapeXml(entry.statusText)}</text>
               </g>`;
-            }).join("")}
+              })
+              .join("")}
           </g>`;
       const connectionPointMarkup = connectionPointsForNode(node)
         .map(
@@ -760,19 +933,23 @@ export function buildChartSvg(
             `<circle class="org-connection-point org-connection-point--${point.kind}" data-port-kind="${point.kind}" cx="${point.x}" cy="${point.y}" r="${EXPORT_CONNECTION_POINT_RADIUS}" fill="#${EXPORT_COLORS.darkTeal}" stroke="#${EXPORT_COLORS.white}" stroke-width="${EXPORT_CONNECTION_POINT_STROKE_WIDTH}"/>`,
         )
         .join("");
-      const cardFill = compact && node.hierarchyLevel === 2
-        ? node.unitType === "DIVISION" || node.unitType === "DIRECTORATE"
-          ? EXPORT_COLORS.energy
-          : EXPORT_COLORS.graphite
-        : EXPORT_COLORS.white;
-      const cardFillOpacity = compact && node.hierarchyLevel === 2 ? "0.18" : "1";
+      const cardFill =
+        compact && node.hierarchyLevel === 2
+          ? node.unitType === "DIVISION" || node.unitType === "DIRECTORATE"
+            ? EXPORT_COLORS.energy
+            : EXPORT_COLORS.graphite
+          : EXPORT_COLORS.white;
+      const cardFillOpacity =
+        compact && node.hierarchyLevel === 2 ? "0.18" : "1";
       return `<g data-unit-id="${escapeXml(node.id)}">
         <title>${escapeXml(`${node.name} — ${node.positionTitle} — ${node.statusText}`)}</title>
         <rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="#${cardFill}" fill-opacity="${cardFillOpacity}" stroke="#${EXPORT_COLORS.darkTeal}" stroke-width="1.5"/>
         <g clip-path="url(#export-card-content-${nodeIndex})">
-        ${compact
-          ? `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.hierarchyLevel === 1 ? 8 : 5}" fill="#${node.hierarchyLevel === 2 ? EXPORT_COLORS.darkTeal : EXPORT_COLORS.green}"/>`
-          : `<rect x="${node.x}" y="${node.y}" width="6" height="${node.height}" fill="#${EXPORT_COLORS.green}"/>`}
+        ${
+          compact
+            ? `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.hierarchyLevel === 1 ? 8 : 5}" fill="#${node.hierarchyLevel === 2 ? EXPORT_COLORS.darkTeal : EXPORT_COLORS.green}"/>`
+            : `<rect x="${node.x}" y="${node.y}" width="6" height="${node.height}" fill="#${EXPORT_COLORS.green}"/>`
+        }
         <text x="${textX}" y="${node.y + 24}"${textAnchor} font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" font-weight="700" letter-spacing="1.2" fill="#${EXPORT_COLORS.green}">${escapeXml(node.unitType)}</text>
         <text x="${textX}" y="${node.y + 51}" data-full-text="${escapeXml(node.name)}"${textAnchor} font-family="Mulish, Aptos, Arial, sans-serif" font-size="${node.nameFontSize}" font-weight="700" fill="#${EXPORT_COLORS.ink}">${nameMarkup}</text>
         <text x="${textX}" y="${titleY}" data-full-text="${escapeXml(node.positionTitle)}"${textAnchor} font-family="Mulish, Aptos, Arial, sans-serif" font-size="${positionTitleFontSize}" fill="#${EXPORT_COLORS.ink}">${escapeXml(node.positionTitle)}</text>
@@ -804,6 +981,8 @@ export function buildChartSvg(
     <text x="30" y="31" font-family="Mulish, Aptos, Arial, sans-serif" font-size="20" font-weight="700" fill="#${EXPORT_COLORS.ink}">${escapeXml(scene.chartName)}</text>
     <text x="30" y="53" font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" font-weight="700" letter-spacing="1.1" fill="#${EXPORT_COLORS.darkTeal}">${audienceLabel}</text>
     ${edgeMarkup}${nodeMarkup}
+    ${(scene.supportPanels ?? []).map((p) => `<g data-support-panel-id="${escapeXml(p.id)}">${p.connector ? `<polyline points="${p.connector.points.map((point) => `${point.x},${point.y}`).join(" ")}" fill="none" stroke="#65756B" stroke-width="1.5"${p.connector.style === "dashed" ? ` stroke-dasharray="6 4"` : ""}/>` : ""}<title>${escapeXml(p.title)} — support assignments</title><rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" fill="#E7E9E7" stroke="#6C7571" stroke-width="1.5"/><text x="${p.x + p.width / 2}" y="${p.y + 32}" text-anchor="middle" font-family="Mulish,Aptos,Arial,sans-serif" font-weight="700" font-size="20" fill="#273C36">${escapeXml(p.title)}</text>${p.lines.map((line, i) => `<text x="${p.x + 20}" y="${p.y + 62 + i * p.lineHeight}" font-family="Mulish,Aptos,Arial,sans-serif" font-size="${p.fontSize}" fill="#273C36">${escapeXml(line)}</text>`).join("")}</g>`).join("")}
+
     <text x="${PADDING}" y="${scene.height - 15}" font-family="Mulish, Aptos, Arial, sans-serif" font-size="10" fill="#${EXPORT_COLORS.ink}">Generated ${escapeXml(generatedLabel)} • ${scene.nodes.length} cards${scene.groupedNodeCount ? ` • ${scene.groupedNodeCount} grouped entries` : ""}${scene.excludedNodeCount ? ` • ${scene.excludedNodeCount} excluded by audience profile` : ""}${scene.lastCurrentAt ? ` • Last Current v${scene.lastCurrentVersion ?? scene.chartVersion} ${escapeXml(new Date(scene.lastCurrentAt).toLocaleDateString("en-US"))}${scene.lastCurrentBy ? ` by ${escapeXml(scene.lastCurrentBy)}` : ""}` : ""}</text>
     </g>
   </svg>`;
@@ -817,19 +996,36 @@ export function buildAccessibleTableCsv(
   chart: ChartDocument,
   audience: ExportAudience,
 ): string {
-  const includedNodes = chart.nodes.filter((node) => visibleForAudience(node, audience));
+  const includedNodes = chart.nodes.filter((node) =>
+    visibleForAudience(node, audience),
+  );
   const includedIds = new Set(includedNodes.map((node) => node.id));
   assertAudienceHierarchyClosed(chart, audience, includedIds);
   const parentById = new Map(
     chart.edges
-      .filter((edge) => includedIds.has(edge.source) && includedIds.has(edge.target))
+      .filter(
+        (edge) => includedIds.has(edge.source) && includedIds.has(edge.target),
+      )
       .map((edge) => [edge.target, edge.source]),
   );
   const nameById = new Map(
     includedNodes.map((node) => [node.id, node.data.unit.name]),
   );
-  const lifecycleHeaders = ["chartLifecycle", "chartVersion", "lastCurrentAt", "lastCurrentBy"];
-  const publicHeaders = [...lifecycleHeaders, "unit", "parent", "unitType", "positionTitle", "positionStatus", "effectiveDate"];
+  const lifecycleHeaders = [
+    "chartLifecycle",
+    "chartVersion",
+    "lastCurrentAt",
+    "lastCurrentBy",
+  ];
+  const publicHeaders = [
+    ...lifecycleHeaders,
+    "unit",
+    "parent",
+    "unitType",
+    "positionTitle",
+    "positionStatus",
+    "effectiveDate",
+  ];
   const internalHeaders = [
     "unitId",
     ...publicHeaders,
@@ -862,6 +1058,52 @@ export function buildAccessibleTableCsv(
           unit.source,
         ];
   });
+  const panels = audienceSupportPanels(chart, audience);
+  if (panels.length) {
+    headers.push("recordType", "supportPanelId");
+    if (audience === "internal")
+      headers.push("sourceLocator", "sourceCertainty", "reviewNote");
+    for (const row of rows)
+      row.push(
+        "organization",
+        "",
+        ...(audience === "internal" ? ["", "", ""] : []),
+      );
+    for (const p of panels)
+      for (const e of p.entries) {
+        const anchor =
+          chart.nodes.find((n) => n.id === p.anchorUnitId)?.data.unit.name ??
+          chart.name;
+        const publicValues = [
+          chart.status,
+          chart.version,
+          chart.lifecycle.lastCurrentAt ?? "",
+          chart.lifecycle.lastCurrentBy,
+          p.title,
+          anchor,
+          "support_assignment",
+          e.role,
+          e.positionStatus,
+          e.effectiveDate,
+        ];
+        rows.push(
+          audience === "public"
+            ? [...publicValues, "support_assignment", p.id]
+            : [
+                e.id,
+                ...publicValues,
+                e.person,
+                e.publicationVisibility,
+                e.source || p.source,
+                "support_assignment",
+                p.id,
+                e.sourceLocator || p.sourceLocator,
+                e.sourceCertainty,
+                e.reviewNote,
+              ],
+        );
+      }
+  }
   return [headers, ...rows]
     .map((row) => row.map((value) => csvCell(String(value))).join(","))
     .join("\r\n");

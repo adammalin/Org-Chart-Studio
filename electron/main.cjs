@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
+const {startFileWorkspaceServer}=require("./file-workspaces.cjs");
 const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
@@ -15,6 +16,7 @@ const {
   shell,
 } = require("electron");
 const squirrelStartup = require("electron-squirrel-startup");
+const { prepareRuntimeBuild, writeDiagnostic, saveRecoveryDraft, readRecoveryDraft, ServiceRecovery } = require("./runtime-recovery.cjs");
 const { installLocalOnlyNetworkPolicy } = require("./network-policy.cjs");
 const {
   applyPendingDataMigration,
@@ -43,7 +45,10 @@ if (smokeUserDataPath) {
   fs.mkdirSync(smokeUserDataPath, { recursive: true });
   app.setPath("userData", smokeUserDataPath);
   app.once("quit", () => {
-    fs.rmSync(smokeUserDataPath, { recursive: true, force: true });
+    // Chromium can still hold cache files during the Windows quit event.
+    // A disposable-profile cleanup error must not open a blocking error dialog.
+    try { fs.rmSync(smokeUserDataPath, { recursive: true, force: true }); }
+    catch { console.error("ORGCHART_ELECTRON_SMOKE_SHUTDOWN disposable-profile cleanup deferred"); }
   });
 }
 
@@ -56,6 +61,16 @@ let requestedExitCode = 0;
 let storageRuntime = null;
 let rendererSaveState = "saved";
 let quitDialogOpen = false;
+let runtimeBuild = null;
+let recovery = null;
+let lastSavedAt = null;
+function diagnostic(event){return writeDiagnostic(app.getPath("userData"),{...event,version:app.getVersion()});}
+function broadcastRecovery(state){if(mainWindow&&!mainWindow.isDestroyed())mainWindow.webContents.send("app:service-state",{...state,lastSavedAt});}
+function initializeRecovery(){recovery=new ServiceRecovery({
+  start:async()=>{try{const url=await startLocalServer(serverUrl?Number(new URL(serverUrl).port):null);serverUrl=url;publishMcpRuntime(url);}catch(error){await stopLocalServer();throw error;}},
+  onState:broadcastRecovery,diagnostic,
+});}
+
 
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_ID);
@@ -75,8 +90,10 @@ if (!hasSingleInstanceLock) {
 
 app.whenReady().then(async () => {
   try {
-    installLocalOnlyNetworkPolicy(session.defaultSession, desktopToken);
+    installLocalOnlyNetworkPolicy(session.defaultSession, desktopToken, () => serverUrl);
     storageRuntime = initializeStorageLocations();
+    runtimeBuild = prepareRuntimeBuild(app.getAppPath(), app.getPath("userData"));
+    initializeRecovery();
     registerStorageHandlers();
     registerMcpConfigurationHandlers();
     await refreshManagedMcpRegistration();
@@ -129,13 +146,13 @@ async function availablePort() {
   });
 }
 
-async function startLocalServer() {
+async function startLocalServer(reusePort = null) {
   const projectRoot = app.getAppPath();
   const configuredNodeExecutable = process.env.ORGCHART_NODE_BIN;
   const nodeExecutable = configuredNodeExecutable || process.execPath;
   const runElectronAsNode = !configuredNodeExecutable;
   const wranglerCli = path.join(projectRoot, "scripts", "run-packaged-wrangler.cjs");
-  const wranglerConfig = path.join(projectRoot, "dist", "server", "wrangler.json");
+  const wranglerConfig = path.join(runtimeBuild.root, "dist", "server", "wrangler.json");
   const dataPath = storageRuntime.dataDirectory;
   const logsPath = path.join(app.getPath("userData"), "logs");
 
@@ -148,10 +165,11 @@ async function startLocalServer() {
   fs.mkdirSync(dataPath, { recursive: true });
   fs.mkdirSync(logsPath, { recursive: true });
 
-  const port = await availablePort();
+  const port = reusePort || await availablePort();
   const url = `http://127.0.0.1:${port}/`;
   let stderr = "";
   let exited = false;
+  let ready = false;
 
   serverProcess = spawn(
     nodeExecutable,
@@ -175,7 +193,7 @@ async function startLocalServer() {
       `ORGCHART_DESKTOP_TOKEN:${desktopToken}`,
     ],
     {
-      cwd: projectRoot,
+      cwd: runtimeBuild.root,
       detached: process.platform !== "win32",
       env: {
         ...process.env,
@@ -196,18 +214,14 @@ async function startLocalServer() {
     if (stderr.length > 12_000) stderr = stderr.slice(-12_000);
     process.stderr.write(chunk);
   });
-  serverProcess.once("exit", (code) => {
+  const launchedProcess=serverProcess;
+  serverProcess.once("exit", (code,signal) => {
     exited = true;
-    serverProcess = null;
-    if (!quitting && serverUrl) {
-      requestedExitCode = code === 0 ? 0 : 1;
-      if (!smokeTest) {
-        dialog.showErrorBox(
-          `${APP_NAME} stopped`,
-          "Its private local data service stopped unexpectedly. Reopen the app to continue.",
-        );
-      }
-      void beginQuit();
+    if(serverProcess===launchedProcess)serverProcess=null;
+    if(!quitting&&ready&&serverUrl){
+      removeMcpRuntime();
+      diagnostic({event:"local-service-exit",code,reason:signal?"killed":"abnormal-exit"});
+      void recovery.recover("local-service-exit");
     }
   });
 
@@ -221,7 +235,7 @@ async function startLocalServer() {
         headers: { "X-OrgChart-Desktop-Token": desktopToken },
         signal: AbortSignal.timeout(750),
       });
-      if (response.ok) return url;
+      if (response.ok) {ready=true;return url;}
     } catch {
       // The local Worker is still starting.
     }
@@ -260,7 +274,56 @@ function initializeStorageLocations() {
   return settings;
 }
 
+let fileWorkspaceServer, fileWorkspaceWindow;
+async function openFileWorkspace(){
+ if(fileWorkspaceWindow&&!fileWorkspaceWindow.isDestroyed()){fileWorkspaceWindow.show();fileWorkspaceWindow.focus();return true;}
+ if(!fileWorkspaceServer){
+  const configPath=path.join(app.getPath('userData'),'file-workspace-port.json');
+  let port=0;try{const saved=JSON.parse(fs.readFileSync(configPath,'utf8'));if(Number.isInteger(saved.port)&&saved.port>1024&&saved.port<65536)port=saved.port;}catch{}
+  fileWorkspaceServer=await startFileWorkspaceServer({publicDirectory:path.join(app.getAppPath(),'public'),port});
+  fs.writeFileSync(configPath,JSON.stringify({port:Number(new URL(fileWorkspaceServer.origin).port)}),{mode:0o600});
+ }
+ const partition='persist:orgchart-file-workspaces';
+ const fileSession=require('electron').session.fromPartition(partition);
+ require('./network-policy.cjs').installLocalOnlyNetworkPolicy(fileSession,'',fileWorkspaceServer.origin);
+ fileWorkspaceWindow=new BrowserWindow({show:!smokeTest,title:'OrgChart Studio — File workspace',width:1500,height:980,minWidth:1040,minHeight:720,
+   webPreferences:{partition,sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true,navigateOnDragDrop:false}});
+ fileWorkspaceWindow.removeMenu();
+ let closingFileDialog=false;
+ fileWorkspaceWindow.on('close',event=>{
+  if(quitting)return;
+  event.preventDefault();if(closingFileDialog)return;closingFileDialog=true;
+  void (async()=>{
+   const target=fileWorkspaceWindow;
+   const state=await target.webContents.executeJavaScript(`(()=>{const bar=document.querySelector('.library-file-bar');return {editor:bar?.dataset.editorState,dirty:bar?.dataset.unsavedFile==='true'};})()`);
+   if(['saving','error'].includes(state.editor)){
+    await dialog.showMessageBox(target,{type:'warning',message:'Finish saving the working state first.',buttons:['Keep file workspace open']});return;
+   }
+   if(state.dirty){const decision=await dialog.showMessageBox(target,{type:'warning',message:'The portable library file has unsaved changes.',detail:'Browser recovery remains on this computer. Keep this window open to save an independent library file.',buttons:['Keep open','Close with recovery only'],defaultId:0,cancelId:0});if(decision.response!==1)return;}
+   target.destroy();
+  })().catch(error=>console.error('File workspace close check failed.',error)).finally(()=>{closingFileDialog=false;});
+ });
+ fileWorkspaceWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+ fileWorkspaceWindow.webContents.on('will-navigate',(event,url)=>{if(new URL(url).origin!==fileWorkspaceServer.origin)event.preventDefault();});
+ await fileWorkspaceWindow.loadURL(fileWorkspaceServer.origin);return true;
+}
 function registerStorageHandlers() {
+  ipcMain.handle('app:open-file-workspace',async event=>{
+    if(!mainWindow||event.sender!==mainWindow.webContents||event.senderFrame!==mainWindow.webContents.mainFrame||new URL(event.senderFrame.url).origin!==new URL(serverUrl).origin)throw Error('Invalid file workspace launcher.');
+    return openFileWorkspace();
+  });
+  if(smokeTest)ipcMain.handle("app:test-interrupt-service",()=>{if(serverProcess?.pid){if(process.platform==="win32")spawnSync("taskkill.exe",["/pid",String(serverProcess.pid),"/T","/F"],{windowsHide:true,stdio:"ignore",timeout:SERVER_STOP_TIMEOUT_MS});else process.kill(-serverProcess.pid,"SIGTERM");}return true;});
+  ipcMain.handle("app:chart-fonts", (event) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame || !serverUrl || new URL(event.senderFrame.url).origin !== new URL(serverUrl).origin) throw Error("Font request is not from the Studio window.");
+    return require("./chart-fonts.cjs").readChartFonts();
+  });
+  ipcMain.handle("app:service-state",()=>({...recovery.state,lastSavedAt}));
+  ipcMain.handle("app:retry-service",()=>recovery.recover("manual-retry",true));
+  ipcMain.handle("app:reopen-workspace",async()=>{if(recovery.state.phase!=="ready")await recovery.recover("manual-reopen",true);if(recovery.state.phase==="ready"&&!quitting)await mainWindow.loadURL(serverUrl);return recovery.state.phase==="ready";});
+  ipcMain.handle("app:open-diagnostics",()=>shell.openPath(path.join(app.getPath("userData"),"logs")));
+  ipcMain.handle("app:recovery-draft",()=>readRecoveryDraft(app.getPath("userData")));
+  ipcMain.handle("app:save-recovery-draft",(_event,draft)=>saveRecoveryDraft(app.getPath("userData"),draft));
+  ipcMain.on("app:last-saved",(_event,at)=>{if(typeof at==="string"&&Number.isFinite(Date.parse(at)))lastSavedAt=at;});
   ipcMain.on("app:save-state", (_event, state) => {
     if (["saved", "saving", "proposal", "error"].includes(state)) {
       rendererSaveState = state;
@@ -454,13 +517,21 @@ function createMainWindow(url) {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      preload: path.join(__dirname, "preload.cjs"),
+      preload: path.join(runtimeBuild.root, "electron", "preload.cjs"),
       sandbox: true,
       webSecurity: true,
       navigateOnDragDrop: false,
+      ...(smokeTest?{additionalArguments:["--orgchart-smoke"]}:{}),
     },
   });
 
+  mainWindow.webContents.on("render-process-gone",(_event,details)=>{
+    if(quitting||details.reason==="clean-exit")return;
+    diagnostic({event:"renderer-gone",reason:details.reason,code:details.exitCode});
+    const html=`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"><title>Recover OrgChart Studio</title><style>body{font:17px Arial;color:#373a36;max-width:650px;margin:12vh auto;padding:30px;border-top:6px solid #00662c}button{font:inherit;padding:12px;margin:8px;background:white;border:1px solid #00662c;color:#00662c}</style></head><body><h1>Reopen your saved workspace</h1><p>The window stopped responding. Saved charts, pending reviews and historical checkpoints remain in local storage. A recovery copy of the latest editor state may also be available.</p><p>Last saved state: ${lastSavedAt?new Date(lastSavedAt).toISOString():"Check the saved library after reopening"}</p><button id="reopen">Reopen workspace</button><button id="logs">Open local diagnostics</button><button id="quit">Quit</button><script>document.getElementById('reopen').onclick=()=>window.orgChartDesktop.reopenWorkspace();document.getElementById('logs').onclick=()=>window.orgChartDesktop.openDiagnostics();document.getElementById('quit').onclick=()=>window.orgChartDesktop.requestQuit();</script></body></html>`;
+    void mainWindow.loadURL("data:text/html;charset=utf-8,"+encodeURIComponent(html));mainWindow.show();
+  });
+  app.on("child-process-gone",(_event,details)=>{if(!quitting)diagnostic({event:"electron-child-exit",reason:details.reason,code:details.exitCode});});
   mainWindow.removeMenu();
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     if (isAllowedExternalUrl(targetUrl)) void shell.openExternal(targetUrl);
@@ -547,6 +618,7 @@ function createMainWindow(url) {
           () => !document.querySelector('.onboarding-tour'),
           'the first-run tour to close'
         );
+        const interfaceModes = await ${require("./interface-modes-smoke.cjs").interfaceModesJourneyScript};
         const created = await fetch('/api/charts', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -685,6 +757,7 @@ function createMainWindow(url) {
             versionId: initialVersion.id
           })
         }).then((response) => response.json());
+        if (!restored.chart) throw new Error("Synthetic version restore failed: " + (restored.error || "no chart returned"));
         const chartValidation = await fetch(
           '/api/charts?resource=validate&chartId=' + encodeURIComponent(created.chart.id),
           { cache: 'no-store' }
@@ -1017,13 +1090,6 @@ function createMainWindow(url) {
         );
         const unencryptedProtectionInput = unencryptedProtectionLabel?.querySelector('input[type="radio"]');
         unencryptedProtectionInput.click();
-        const readableBackupConfirmation = await waitFor(
-          () => [...document.querySelectorAll('.backup-unencrypted-warning label')].find(
-            (label) => label.textContent.includes('will not be protected by a passphrase')
-          )?.querySelector('input[type="checkbox"]'),
-          'the readable backup confirmation'
-        );
-        readableBackupConfirmation.click();
         const backupRunButton = await waitFor(
           () => [...document.querySelectorAll('.backup-action button')].find(
             (button) => button.textContent.trim() === 'Run backup now' &&
@@ -1041,7 +1107,7 @@ function createMainWindow(url) {
           !backupRunButton.disabled &&
           buttonReceivesPointer(backupRunButton);
         const optionalBackupProtectionVisible =
-          document.body.textContent.includes('Encrypted or explicitly confirmed unencrypted') &&
+          document.body.textContent.includes('Encrypted or unencrypted') &&
           !document.body.textContent.includes('Choose a local folder or turn encryption on');
         await archiveChartForDeletion(imported.chart.id);
         const importedDeleted = await fetch('/api/charts', {
@@ -1170,17 +1236,17 @@ function createMainWindow(url) {
           return state.control.paused ? null : state.control;
         }, 'local AI access to resume');
         const sourceAccessLabel = [...document.querySelectorAll('.ai-control-panel label')].find(
-          (label) => label.textContent.includes('Allow retained-source extraction for this session')
+          (label) => label.textContent.includes('Allow retained-source extraction')
         );
         const sourceAccessCheckbox = sourceAccessLabel?.querySelector('input[type="checkbox"]');
-        sourceAccessCheckbox.click();
+        if(!sourceAccessCheckbox.checked)sourceAccessCheckbox.click();
         const sourceEnabledControl = await waitFor(async () => {
           const state = await fetch('/api/mcp-control', { cache: 'no-store' }).then((response) => response.json());
           return state.control.sourceAccessEnabled ? state.control : null;
         }, 'retained-source extraction to enable');
         const enabledSourceAccessCheckbox = await waitFor(() => {
           const currentLabel = [...document.querySelectorAll('.ai-control-panel label')].find(
-            (label) => label.textContent.includes('Allow retained-source extraction for this session')
+            (label) => label.textContent.includes('Allow retained-source extraction')
           );
           const currentCheckbox = currentLabel?.querySelector('input[type="checkbox"]');
           return currentCheckbox?.checked && !currentCheckbox.disabled ? currentCheckbox : null;
@@ -1288,7 +1354,8 @@ function createMainWindow(url) {
             unencryptedBackupSave.fileName === 'orgchart-studio-backup-unencrypted-electron-smoke.orgchart-backup' &&
             unencryptedBackupSave.bytes > 0,
           backupRunActionReady,
-          optionalBackupProtectionVisible
+          optionalBackupProtectionVisible,
+          ...interfaceModes
         };
       })().catch((error) => ({
         __smokeError: String(error?.message ?? error),
@@ -1299,6 +1366,39 @@ function createMainWindow(url) {
           `${capabilities.__smokeError}${capabilities.__smokeStack ? `\n${capabilities.__smokeStack}` : ""}`,
         );
       }
+      const monthlyCapabilities=await mainWindow.webContents.executeJavaScript(require("./monthly-smoke.cjs").monthlyJourneyScript);
+      Object.assign(capabilities,monthlyCapabilities);
+      Object.assign(capabilities,await mainWindow.webContents.executeJavaScript(require("./edit-history-smoke.cjs").editHistoryJourneyScript));
+      if(process.env.ORGCHART_SMOKE_OUTPUT_DIR){fs.mkdirSync(process.env.ORGCHART_SMOKE_OUTPUT_DIR,{recursive:true});fs.writeFileSync(path.join(process.env.ORGCHART_SMOKE_OUTPUT_DIR,"Durable-History-Desktop.png"),(await mainWindow.webContents.capturePage()).toPNG());}
+      Object.assign(capabilities,await mainWindow.webContents.executeJavaScript(require("./support-panels-smoke.cjs").supportPanelsJourneyScript));
+      if(process.env.ORGCHART_SMOKE_OUTPUT_DIR){fs.mkdirSync(process.env.ORGCHART_SMOKE_OUTPUT_DIR,{recursive:true});fs.writeFileSync(path.join(process.env.ORGCHART_SMOKE_OUTPUT_DIR,"Support-Panels-Desktop.png"),(await mainWindow.webContents.capturePage()).toPNG());}
+      Object.assign(capabilities,await mainWindow.webContents.executeJavaScript(require("./appearance-smoke.cjs").appearanceJourneyScript));
+      if(process.env.ORGCHART_SMOKE_OUTPUT_DIR)fs.writeFileSync(path.join(process.env.ORGCHART_SMOKE_OUTPUT_DIR,"Official-Appearance-Desktop.png"),(await mainWindow.webContents.capturePage()).toPNG());
+      Object.assign(capabilities,await mainWindow.webContents.executeJavaScript(require("./visual-regression-smoke.cjs").visualJourneyScript));
+      if(process.env.ORGCHART_SMOKE_OUTPUT_DIR)fs.writeFileSync(path.join(process.env.ORGCHART_SMOKE_OUTPUT_DIR,"Visual-Wrapping-Desktop.png"),(await mainWindow.webContents.capturePage()).toPNG());
+      const originalSize = mainWindow.getContentSize();
+      await mainWindow.webContents.executeJavaScript(`(() => {
+        const later = document.querySelector('[data-ai-proposal-action="later"]') || [...document.querySelectorAll('.ai-review-panel button')].find(b => b.textContent.includes('Review later'));
+        if (later) later.click();
+        [...document.querySelectorAll('.sidebar button')].find(b => b.textContent.includes('History / Timeline'))?.click();
+      })()`);
+      for (const width of [1500, 1280, 1040]) {
+        mainWindow.setContentSize(width, 980);
+        await new Promise(resolve => setTimeout(resolve, 150));
+        const fits = await mainWindow.webContents.executeJavaScript(`(() => {
+          const rect = selector => document.querySelector(selector).getBoundingClientRect();
+          const search = rect('.global-search'), status = rect('.topbar__status');
+          const progress = document.querySelector('.source-check-progress');
+          const compactFits = !progress || !progress.getClientRects().length || innerWidth > 1220 || (progress.getBoundingClientRect().height < 60 && progress.scrollWidth <= progress.clientWidth);
+          const controls = [...document.querySelector('.topbar__status').children].filter(el => getComputedStyle(el).display !== 'none');
+          return compactFits && search.right <= status.left + 1 && controls.every(el => {
+            const r = el.getBoundingClientRect(); return r.left >= status.left - 1 && r.right <= innerWidth + 1;
+          }) && getComputedStyle(document.querySelector('.save-status')).display !== 'none';
+        })()`);
+        capabilities[`headerFits${width}`] = fits;
+        if(process.env.ORGCHART_SMOKE_OUTPUT_DIR)fs.writeFileSync(path.join(process.env.ORGCHART_SMOKE_OUTPUT_DIR,`Header-${width}.png`),(await mainWindow.webContents.capturePage()).toPNG());
+      }
+      mainWindow.setContentSize(...originalSize);
       const runtimeFile = mcpRuntimePath();
       const runtimeDescriptor = JSON.parse(fs.readFileSync(runtimeFile, "utf8"));
       capabilities.mcpRuntimePublished =
@@ -1308,11 +1408,27 @@ function createMainWindow(url) {
         runtimeDescriptor.token === desktopToken &&
         (process.platform === "win32" ||
           (fs.statSync(runtimeFile).mode & 0o077) === 0);
+      const originalChartIds=await mainWindow.webContents.executeJavaScript("fetch('/api/charts').then(r=>r.json()).then(d=>d.charts.map(c=>c.id).sort().join(','))");
+      capabilities.nativeDesktopWorkingFileExport=await mainWindow.webContents.executeJavaScript("fetch('/api/workspace').then(r=>r.json()).then(file=>file.format==='orgchart-studio-workspace'&&file.library.charts.length>0&&file.pendingProposals.length>0&&!!file.continuity)");
+      await mainWindow.webContents.executeJavaScript('window.orgChartDesktop.openFileWorkspace()');
+      console.log('ORGCHART_FILE_WORKSPACE_SMOKE beginning isolated file journey');
+      const fileJourney=await fileWorkspaceWindow.webContents.executeJavaScript(require('./file-workspace-smoke.cjs').fileWorkspaceJourneyScript);
+      fs.writeFileSync(path.join(app.getPath('userData'),'Synthetic-Native-Library.orgchart-workspace'),fileJourney.fileText,{mode:0o600});
+      const reloaded=new Promise(resolve=>fileWorkspaceWindow.webContents.once('did-finish-load',resolve));
+      fileWorkspaceWindow.webContents.reload();await reloaded;
+      capabilities.nativePortableFileReload=await fileWorkspaceWindow.webContents.executeJavaScript(`(async()=>{const until=Date.now()+30000;while(Date.now()<until){if(document.querySelector('.chart-switcher select')?.value===${JSON.stringify(fileJourney.chartId)})return true;await new Promise(r=>setTimeout(r,80));}return false;})()`);
+      capabilities.nativePortableFileOpen=!!fileJourney.workspaceId;
+      const finalChartIds=await mainWindow.webContents.executeJavaScript("fetch('/api/charts').then(r=>r.json()).then(d=>d.charts.map(c=>c.id).sort().join(','))");
+      capabilities.nativeFileWorkspaceIsolation=originalChartIds===finalChartIds;
+      capabilities.nativeFileWorkspaceNetworkIsolation=await fileWorkspaceWindow.webContents.executeJavaScript(`fetch(${JSON.stringify(serverUrl)}).then(()=>false,()=>true)`);
+      if(process.env.ORGCHART_SMOKE_OUTPUT_DIR)fs.writeFileSync(path.join(process.env.ORGCHART_SMOKE_OUTPUT_DIR,'Portable-File-Workspace.png'),(await fileWorkspaceWindow.webContents.capturePage()).toPNG());
+      fileWorkspaceWindow.destroy();
       const passed = Object.values(capabilities).every(Boolean);
       console.log(`ORGCHART_ELECTRON_SMOKE ${JSON.stringify({ passed, ...capabilities })}`);
       if (!passed) requestedExitCode = 1;
     } catch (error) {
       requestedExitCode = 1;
+      if(process.env.ORGCHART_SMOKE_OUTPUT_DIR){fs.mkdirSync(process.env.ORGCHART_SMOKE_OUTPUT_DIR,{recursive:true});fs.writeFileSync(path.join(process.env.ORGCHART_SMOKE_OUTPUT_DIR,"Desktop-Failure.png"),(await mainWindow.webContents.capturePage()).toPNG());}
       console.error("Electron smoke test failed.", error);
     }
     await beginQuit();
@@ -1361,6 +1477,14 @@ async function requestUserQuit() {
       return false;
     }
 
+    let fileWarning='';
+    if(fileWorkspaceWindow&&!fileWorkspaceWindow.isDestroyed()){
+      const fileState=await fileWorkspaceWindow.webContents.executeJavaScript(`(()=>{const bar=document.querySelector('.library-file-bar');return {editor:bar?.dataset.editorState,dirty:bar?.dataset.unsavedFile==='true'};})()`);
+      if(['saving','error'].includes(fileState.editor)){
+        await dialog.showMessageBox(mainWindow,{type:'warning',message:'Finish saving the portable workspace first.',detail:'Return to the file workspace and wait for its working state to be saved, or resolve the save issue.',buttons:['Return to file workspace']});fileWorkspaceWindow.show();fileWorkspaceWindow.focus();return false;
+      }
+      if(fileState.dirty)fileWarning='The portable library file has unsaved changes. Its browser recovery copy remains on this computer, but the independent library file may be older. Cancel and save it first if needed. ';
+    }
     const hasSaveIssue = rendererSaveState === "error";
     const result = await dialog.showMessageBox(mainWindow, {
       type: hasSaveIssue ? "error" : "warning",
@@ -1368,9 +1492,9 @@ async function requestUserQuit() {
       message: hasSaveIssue
         ? "The latest change may not be saved."
         : `Quit ${APP_NAME}?`,
-      detail: hasSaveIssue
+      detail: fileWarning + (hasSaveIssue
         ? "The top bar shows Save issue. Keep the app open to retry or resolve the problem. Quitting now may require redoing the latest unsaved change; previously saved charts remain on this computer."
-        : "The app window, its local MCP connection, and its private local server will close. Changes already showing Saved, pending review proposals, and existing backups will remain on this computer.",
+        : "The app window, its local MCP connection, and its private local server will close. Changes already showing Saved, pending review proposals, and existing backups will remain on this computer."),
       buttons: hasSaveIssue ? ["Keep app open", "Quit without latest change"] : ["Cancel", "Quit"],
       defaultId: 0,
       cancelId: 0,
@@ -1387,17 +1511,24 @@ async function requestUserQuit() {
 async function beginQuit() {
   if (quitting) return;
   quitting = true;
+  if(fileWorkspaceWindow&&!fileWorkspaceWindow.isDestroyed())fileWorkspaceWindow.destroy();
+  fileWorkspaceServer?.server.close();
+  recovery?.stop();
   if (smokeTest) {
     setTimeout(
-      () => process.exit(requestedExitCode),
+      () => {
+        console.error("ORGCHART_ELECTRON_SMOKE_SHUTDOWN exit watchdog");
+        app.exit(requestedExitCode);
+      },
       SERVER_STOP_TIMEOUT_MS + 2_000,
     );
   }
   removeMcpRuntime();
+  if (smokeTest) console.log("ORGCHART_ELECTRON_SMOKE_SHUTDOWN stopping local service");
   await stopLocalServer();
   allowWindowClose = true;
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
-  if (smokeTest) process.exit(requestedExitCode);
+  if (smokeTest) console.log("ORGCHART_ELECTRON_SMOKE_SHUTDOWN exiting Electron");
   app.exit(requestedExitCode);
 }
 

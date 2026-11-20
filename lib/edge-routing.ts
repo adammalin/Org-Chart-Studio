@@ -95,7 +95,9 @@ function isFinitePoint(value: unknown): value is Point {
   );
 }
 
-export function manualEdgeRouteForEdge(edge: Edge): ManualEdgeRoute | undefined {
+export function manualEdgeRouteForEdge(
+  edge: Edge,
+): ManualEdgeRoute | undefined {
   const candidate = edge.data?.manualRoute;
   if (!candidate || typeof candidate !== "object") return undefined;
   const manualRoute = candidate as Partial<ManualEdgeRoute>;
@@ -134,7 +136,8 @@ export function moveManualEdgeRouteLane(
   axis: Exclude<RouteCornerAxis, "both" | "none">,
   value: number,
 ): ManualEdgeRoute {
-  if (!Number.isFinite(value) || !manualRoute.points[pointIndex]) return manualRoute;
+  if (!Number.isFinite(value) || !manualRoute.points[pointIndex])
+    return manualRoute;
   const points = manualRoute.points.map((point) => ({ ...point }));
   const coordinate = axis;
   const originalValue = points[pointIndex][coordinate];
@@ -164,13 +167,21 @@ export function sourcePortOffset(
   return (siblingIndex - (siblingCount - 1) / 2) * spacing;
 }
 
-function targetPortCandidates(nodeWidth: number): number[] {
+function targetPortCandidates(nodeWidth: number, alignedOffset?: number): number[] {
   const maximumOffset = Math.min(
     TARGET_PORT_MAX_OFFSET,
     Math.max(0, nodeWidth / 2 - SOURCE_PORT_SIDE_MARGIN),
   );
   const candidates = [0];
-  for (let offset = TARGET_PORT_SPACING; offset <= maximumOffset; offset += TARGET_PORT_SPACING) {
+  // A small difference in card centers should not force a two-corner jog.
+  // Keep the source lane and land at its exact x within the permitted port band.
+  if (alignedOffset !== undefined && Math.abs(alignedOffset) <= maximumOffset)
+    candidates.push(alignedOffset);
+  for (
+    let offset = TARGET_PORT_SPACING;
+    offset <= maximumOffset;
+    offset += TARGET_PORT_SPACING
+  ) {
     candidates.push(-offset, offset);
   }
   return candidates;
@@ -232,7 +243,8 @@ function orthogonalizedPoints(points: Point[]): Point[] {
 
 function routeCornerAxis(points: Point[], pointIndex: number): RouteCornerAxis {
   const point = points[pointIndex];
-  if (!point || pointIndex <= 0 || pointIndex >= points.length - 1) return "none";
+  if (!point || pointIndex <= 0 || pointIndex >= points.length - 1)
+    return "none";
   let canMoveX = false;
   let canMoveY = false;
   for (const neighborIndex of [pointIndex - 1, pointIndex + 1]) {
@@ -288,7 +300,9 @@ function rangesOverlap(
   first: [number, number],
   second: [number, number],
 ): boolean {
-  return Math.min(first[1], second[1]) - Math.max(first[0], second[0]) > EPSILON;
+  return (
+    Math.min(first[1], second[1]) - Math.max(first[0], second[0]) > EPSILON
+  );
 }
 
 function collinearOverlap(first: Segment, second: Segment): boolean {
@@ -312,8 +326,14 @@ function perpendicularCrossing(first: Segment, second: Segment): boolean {
   if (isVertical(first) === isVertical(second)) return false;
   const vertical = isVertical(first) ? first : second;
   const horizontal = isVertical(first) ? second : first;
-  const [verticalTop, verticalBottom] = sortedRange(vertical.start.y, vertical.end.y);
-  const [horizontalLeft, horizontalRight] = sortedRange(horizontal.start.x, horizontal.end.x);
+  const [verticalTop, verticalBottom] = sortedRange(
+    vertical.start.y,
+    vertical.end.y,
+  );
+  const [horizontalLeft, horizontalRight] = sortedRange(
+    horizontal.start.x,
+    horizontal.end.x,
+  );
   return (
     vertical.start.x > horizontalLeft + EPSILON &&
     vertical.start.x < horizontalRight - EPSILON &&
@@ -322,7 +342,10 @@ function perpendicularCrossing(first: Segment, second: Segment): boolean {
   );
 }
 
-function segmentIntersectsObstacle(segment: Segment, obstacle: Obstacle): boolean {
+function segmentIntersectsObstacle(
+  segment: Segment,
+  obstacle: Obstacle,
+): boolean {
   if (isVertical(segment)) {
     const [top, bottom] = sortedRange(segment.start.y, segment.end.y);
     return (
@@ -348,7 +371,13 @@ function routeScore(
   bundleKey?: string,
 ): number | null {
   const segments = segmentsForPoints(points, bundleKey);
-  if (segments.some((segment) => obstacles.some((obstacle) => segmentIntersectsObstacle(segment, obstacle)))) {
+  if (
+    segments.some((segment) =>
+      obstacles.some((obstacle) =>
+        segmentIntersectsObstacle(segment, obstacle),
+      ),
+    )
+  ) {
     return null;
   }
 
@@ -387,8 +416,10 @@ function laneCandidates(
   const candidates = [midpoint];
   if (preferredY >= lower && preferredY <= upper) candidates.push(preferredY);
   obstacles.forEach((obstacle) => {
-    if (obstacle.top >= lower && obstacle.top <= upper) candidates.push(obstacle.top);
-    if (obstacle.bottom >= lower && obstacle.bottom <= upper) candidates.push(obstacle.bottom);
+    if (obstacle.top >= lower && obstacle.top <= upper)
+      candidates.push(obstacle.top);
+    if (obstacle.bottom >= lower && obstacle.bottom <= upper)
+      candidates.push(obstacle.bottom);
   });
   for (
     let offset = LANE_SPACING;
@@ -400,8 +431,12 @@ function laneCandidates(
   }
   candidates.push(lower, upper);
 
-  return [...new Set(candidates.map((candidate) => Number(candidate.toFixed(3))))].sort(
-    (left, right) => Math.abs(left - preferredY) - Math.abs(right - preferredY) || left - right,
+  return [
+    ...new Set(candidates.map((candidate) => Number(candidate.toFixed(3)))),
+  ].sort(
+    (left, right) =>
+      Math.abs(left - preferredY) - Math.abs(right - preferredY) ||
+      left - right,
   );
 }
 
@@ -410,7 +445,8 @@ function sideChannelCandidates(
   preferredX: number,
 ): number[] {
   const left = Math.min(...nodes.map((node) => node.x)) - NODE_CLEARANCE * 3;
-  const right = Math.max(...nodes.map((node) => node.x + node.width)) + NODE_CLEARANCE * 3;
+  const right =
+    Math.max(...nodes.map((node) => node.x + node.width)) + NODE_CLEARANCE * 3;
   const candidates = nodes.flatMap((node) => [
     node.x - NODE_CLEARANCE,
     node.x + node.width + NODE_CLEARANCE,
@@ -418,16 +454,16 @@ function sideChannelCandidates(
   for (let index = 0; index < 8; index += 1) {
     candidates.push(left - index * LANE_SPACING, right + index * LANE_SPACING);
   }
-  const ordered = [...new Set(candidates.map((candidate) => Number(candidate.toFixed(3))))].sort(
+  const ordered = [
+    ...new Set(candidates.map((candidate) => Number(candidate.toFixed(3)))),
+  ].sort(
     (first, second) =>
       Math.abs(first - preferredX) - Math.abs(second - preferredX) ||
       first - second,
   );
-  return [
-    ...ordered.slice(0, 12),
-    left,
-    right,
-  ].filter((candidate, index, values) => values.indexOf(candidate) === index);
+  return [...ordered.slice(0, 12), left, right].filter(
+    (candidate, index, values) => values.indexOf(candidate) === index,
+  );
 }
 
 function routeIndependentEdge(
@@ -442,15 +478,25 @@ function routeIndependentEdge(
   const sourceY = source.y + source.height;
   const targetY = target.y;
   const excludedIds = new Set([source.id, target.id]);
-  const obstacles = allNodes
-    .filter((node) => !excludedIds.has(node.id))
-    .map(asObstacle);
+  const obstacles = allNodes.map((node) => {
+    const obstacle = asObstacle(node);
+    // Endpoints may touch their own cards, but a detour must never reenter them.
+    return excludedIds.has(node.id)
+      ? {id:node.id,left:node.x,right:node.x+node.width,top:node.y,bottom:node.y+node.height}
+      : obstacle;
+  });
   let best: { points: Point[]; score: number } | null = null;
   const preferredLaneY = (sourceY + targetY) / 2 + laneOffset;
 
-  for (const targetOffset of targetPortCandidates(target.width)) {
+  const targetOffsets = targetPortCandidates(target.width, sourceX - (target.x + target.width / 2));
+  for (const targetOffset of targetOffsets) {
     const targetX = target.x + target.width / 2 + targetOffset;
-    for (const laneY of laneCandidates(sourceY, targetY, obstacles, preferredLaneY)) {
+    for (const laneY of laneCandidates(
+      sourceY,
+      targetY,
+      obstacles,
+      preferredLaneY,
+    )) {
       const points = compressedPoints([
         { x: sourceX, y: sourceY },
         { x: sourceX, y: laneY },
@@ -460,17 +506,21 @@ function routeIndependentEdge(
       const score = routeScore(points, obstacles, reserved, bundleKey);
       if (score === null) continue;
       const adjustedScore = score + Math.abs(targetOffset) * 2;
-      if (!best || adjustedScore < best.score) best = { points, score: adjustedScore };
+      if (!best || adjustedScore < best.score)
+        best = { points, score: adjustedScore };
     }
   }
   if (best) return best.points;
 
-  const direction = targetY >= sourceY ? 1 : -1;
-  for (const targetOffset of targetPortCandidates(target.width)) {
+  for (const targetOffset of targetOffsets) {
     const targetX = target.x + target.width / 2 + targetOffset;
-    for (const lead of [MIN_LEAD, MIN_LEAD + LANE_SPACING, MIN_LEAD + LANE_SPACING * 2]) {
-      const sourceLeadY = sourceY + direction * lead;
-      const targetLeadY = targetY - direction * lead;
+    for (const lead of [
+      MIN_LEAD,
+      MIN_LEAD + LANE_SPACING,
+      MIN_LEAD + LANE_SPACING * 2,
+    ]) {
+      const sourceLeadY = sourceY + lead;
+      const targetLeadY = targetY - lead;
       for (const sideX of sideChannelCandidates(allNodes, sourceX)) {
         const points = compressedPoints([
           { x: sourceX, y: sourceY },
@@ -483,7 +533,8 @@ function routeIndependentEdge(
         const score = routeScore(points, obstacles, reserved, bundleKey);
         if (score === null) continue;
         const adjustedScore = score + Math.abs(targetOffset) * 2;
-        if (!best || adjustedScore < best.score) best = { points, score: adjustedScore };
+        if (!best || adjustedScore < best.score)
+          best = { points, score: adjustedScore };
       }
     }
   }
@@ -537,19 +588,27 @@ function buildRouteGroups(
   nodes: EdgeRoutingNode[],
   edges: Edge[],
   mode: ConnectorRoutingMode,
+  captured: Map<string, Point[]>,
 ): RouteGroup[] {
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const edgesBySource = new Map<string, Edge[]>();
   edges.forEach((edge) => {
-    edgesBySource.set(edge.source, [...(edgesBySource.get(edge.source) ?? []), edge]);
+    edgesBySource.set(edge.source, [
+      ...(edgesBySource.get(edge.source) ?? []),
+      edge,
+    ]);
   });
 
   const groups: RouteGroup[] = [];
   edgesBySource.forEach((sourceEdges, sourceId) => {
     const source = nodeById.get(sourceId);
     if (!source) return;
-    const manualEdges = sourceEdges.filter((edge) => manualEdgeRouteForEdge(edge));
-    const automaticEdges = sourceEdges.filter((edge) => !manualEdgeRouteForEdge(edge));
+    const manualEdges = sourceEdges.filter((edge) =>
+      manualEdgeRouteForEdge(edge) || captured.has(edge.id),
+    );
+    const automaticEdges = sourceEdges.filter(
+      (edge) => !manualEdgeRouteForEdge(edge) && !captured.has(edge.id),
+    );
     const leftTargetEdges = automaticEdges.filter(
       (edge) => nodeById.get(edge.target)?.targetSide === "left",
     );
@@ -558,8 +617,9 @@ function buildRouteGroups(
     );
     const topTargetGroups =
       mode === "combed"
-        ? clusterEdgesByTargetRow(topTargetEdges, nodeById).flatMap((cluster) =>
-            cluster.length > 1 ? [cluster] : cluster.map((edge) => [edge]),
+        ? clusterEdgesByTargetRow(topTargetEdges, nodeById).flatMap(
+            (cluster) =>
+              cluster.length > 1 ? [cluster] : cluster.map((edge) => [edge]),
           )
         : topTargetEdges.map((edge) => [edge]);
     const automaticGroups = [
@@ -579,9 +639,15 @@ function buildRouteGroups(
       }))
       .filter((group) => group.targets.length === group.edges.length)
       .sort((left, right) => {
-        const leftX = left.targets.reduce((total, target) => total + target.x, 0) / left.targets.length;
-        const rightX = right.targets.reduce((total, target) => total + target.x, 0) / right.targets.length;
-        return leftX - rightX || left.edges[0].id.localeCompare(right.edges[0].id);
+        const leftX =
+          left.targets.reduce((total, target) => total + target.x, 0) /
+          left.targets.length;
+        const rightX =
+          right.targets.reduce((total, target) => total + target.x, 0) /
+          right.targets.length;
+        return (
+          leftX - rightX || left.edges[0].id.localeCompare(right.edges[0].id)
+        );
       });
 
     orderedGroups.forEach((group, portIndex) => {
@@ -597,10 +663,10 @@ function buildRouteGroups(
           sourcePortOffset(portIndex, orderedGroups.length, source.width),
         sourceY: source.y + source.height,
         bundleKey:
-          group.edges.length > 1
-            ? `${source.id}:comb-${portIndex}`
-            : undefined,
-        manual: group.edges.some((edge) => Boolean(manualEdgeRouteForEdge(edge))),
+          group.edges.length > 1 ? `${source.id}:comb-${portIndex}` : undefined,
+        manual: group.edges.some((edge) =>
+          Boolean(manualEdgeRouteForEdge(edge)) || captured.has(edge.id),
+        ),
       });
     });
   });
@@ -616,7 +682,10 @@ function buildRouteGroups(
 }
 
 function routeLeftRailGroup(group: RouteGroup): Point[][] | null {
-  if (!group.targets.length || group.targets.some((target) => target.targetSide !== "left")) {
+  if (
+    !group.targets.length ||
+    group.targets.some((target) => target.targetSide !== "left")
+  ) {
     return null;
   }
   const railX = Math.min(...group.targets.map((target) => target.x)) - 18;
@@ -650,14 +719,19 @@ function routeCombedGroup(
     .filter((node) => node.id !== group.source.id && !targetIds.has(node.id))
     .map(asObstacle);
   const averageTargetY =
-    group.targets.reduce((total, target) => total + target.y, 0) / group.targets.length;
+    group.targets.reduce((total, target) => total + target.y, 0) /
+    group.targets.length;
   let best: { routes: Point[][]; score: number } | null = null;
 
   const trunkCandidates = [
     group.sourceX,
     ...sideChannelCandidates(allNodes, group.sourceX),
   ];
-  for (const laneY of laneCandidates(group.sourceY, averageTargetY, obstacles)) {
+  for (const laneY of laneCandidates(
+    group.sourceY,
+    averageTargetY,
+    obstacles,
+  )) {
     for (const trunkX of trunkCandidates) {
       const direction = averageTargetY >= group.sourceY ? 1 : -1;
       const sourceLeadY = group.sourceY + direction * MIN_LEAD;
@@ -685,8 +759,12 @@ function routeCombedGroup(
         routeScore(points, obstacles, reserved, group.bundleKey),
       );
       if (scores.some((score) => score === null)) continue;
-      const totalScore = (scores as number[]).reduce((total, score) => total + score, 0);
-      if (!best || totalScore < best.score) best = { routes, score: totalScore };
+      const totalScore = (scores as number[]).reduce(
+        (total, score) => total + score,
+        0,
+      );
+      if (!best || totalScore < best.score)
+        best = { routes, score: totalScore };
     }
   }
   return best?.routes ?? null;
@@ -713,6 +791,57 @@ function reserveRoutes(
   });
 }
 
+// Source geometry is fixed presentation evidence while its card bounds match.
+// Resolve it before automatic routing so only visible paths reserve lanes.
+function capturedSourceRoutes(nodes: EdgeRoutingNode[], edges: Edge[]): Map<string, Point[]> {
+  const captured = new Map<string, Point[]>();
+  const nodeById = new Map(nodes.map(node => [node.id, node]));
+  const matches = (node: EdgeRoutingNode, bounds: EdgeRoutingNode) => bounds &&
+    (["x", "y", "width", "height"] as const).every(key =>
+      Math.abs(node[key] - bounds[key]) < EPSILON);
+  for (const edge of edges) {
+    if (manualEdgeRouteForEdge(edge)) continue;
+    const capture = edge.data?.sourceRoute as {sourceBounds: EdgeRoutingNode; targetBounds: EdgeRoutingNode; points: Point[]} | undefined;
+    const source = nodeById.get(edge.source), target = nodeById.get(edge.target);
+    if (!capture || !source || !target || !Array.isArray(capture.points) ||
+        capture.points.length < 2 || capture.points.length > 100 ||
+        !capture.points.every(isFinitePoint) || !matches(source, capture.sourceBounds) ||
+        !matches(target, capture.targetBounds)) continue;
+    if (capture.points.some((point, index) => index > 0 &&
+        Math.abs(point.x - capture.points[index - 1].x) > EPSILON &&
+        Math.abs(point.y - capture.points[index - 1].y) > EPSILON)) continue;
+    captured.set(edge.id, capture.points.map(point => ({...point})));
+  }
+  return captured;
+}
+
+// A captured side spine is source evidence for how its aligned siblings join.
+// Complete only missing branches of that same parent/column. Never infer a
+// reporting relationship, replace a captured/manual path, or move a card.
+function completeSourceSpines(nodes: EdgeRoutingNode[], edges: Edge[], captured: Map<string, Point[]>) {
+  const nodeById = new Map(nodes.map(node => [node.id, node]));
+  for (const anchor of edges) {
+    const points = captured.get(anchor.id);
+    const parent = nodeById.get(anchor.source), child = nodeById.get(anchor.target);
+    if (!points || points.length !== 3 || !parent || !child) continue;
+    const [start, corner, end] = points;
+    if (Math.abs(start.x-corner.x)>EPSILON || Math.abs(corner.y-end.y)>EPSILON ||
+        corner.x >= child.x || Math.abs(end.x-child.x)>EPSILON ||
+        Math.abs(start.y-(parent.y+parent.height))>4 ||
+        start.x < parent.x || start.x > parent.x+parent.width ||
+        Math.abs(end.y-(child.y+child.height/2))>child.height*.05) continue;
+    for (const edge of edges) {
+      if (edge.source!==anchor.source || captured.has(edge.id) || manualEdgeRouteForEdge(edge)) continue;
+      const target = nodeById.get(edge.target);
+      if (!target || Math.abs(target.x-child.x)>2 || target.y<parent.y+parent.height) continue;
+      const branch = [ {...start}, {x:start.x,y:target.y+target.height/2}, {x:target.x,y:target.y+target.height/2} ];
+      const obstacles = nodes.filter(node=>node.id!==parent.id && node.id!==target.id).map(node=>({id:node.id,left:node.x,right:node.x+node.width,top:node.y,bottom:node.y+node.height}));
+      if (segmentsForPoints(branch).some(segment=>obstacles.some(obstacle=>segmentIntersectsObstacle(segment,obstacle)))) continue;
+      captured.set(edge.id,branch);
+    }
+  }
+}
+
 export function buildOrthogonalEdgeRoutes(
   nodes: EdgeRoutingNode[],
   edges: Edge[],
@@ -720,7 +849,9 @@ export function buildOrthogonalEdgeRoutes(
 ): Map<string, OrthogonalEdgeRoute> {
   const routes = new Map<string, OrthogonalEdgeRoute>();
   const reserved: Segment[] = [];
-  const groups = buildRouteGroups(nodes, edges, mode);
+  const captured = capturedSourceRoutes(nodes, edges);
+  completeSourceSpines(nodes, edges, captured);
+  const groups = buildRouteGroups(nodes, edges, mode, captured);
 
   groups.forEach((group) => {
     const sourceHandleId = `route-${group.portIndex}`;
@@ -728,31 +859,32 @@ export function buildOrthogonalEdgeRoutes(
     const groupRoutes = group.edges.map((edge, edgeIndex) => {
       const target = group.targets[edgeIndex];
       const manualRoute = manualEdgeRouteForEdge(edge);
-      const automaticPoints =
-        manualRoute
-          ? undefined
-          : combedRoutes?.[edgeIndex] ??
-            routeIndependentEdge(
-              group.source,
-              target,
-              group.sourceX,
-              nodes,
-              reserved,
-              (group.portIndex - (group.portCount - 1) / 2) * LANE_SPACING,
-              group.bundleKey,
-            );
+      const capturedPoints = captured.get(edge.id);
+      const automaticPoints = manualRoute
+        ? undefined
+        : (capturedPoints ?? combedRoutes?.[edgeIndex] ??
+          routeIndependentEdge(
+            group.source,
+            target,
+            group.sourceX,
+            nodes,
+            reserved,
+            (group.portIndex - (group.portCount - 1) / 2) * LANE_SPACING,
+            group.bundleKey,
+          ));
+      const targetSide = capturedPoints && Math.abs(capturedPoints.at(-1)!.x-target.x)<=EPSILON
+        ? "left" : target.targetSide ?? "top";
       const targetPortOffset = manualRoute
         ? Math.max(
             -TARGET_PORT_MAX_OFFSET,
             Math.min(TARGET_PORT_MAX_OFFSET, manualRoute.targetPortOffset),
           )
-        : target.targetSide === "left"
+        : targetSide === "left"
           ? (automaticPoints?.at(-1)?.y ?? target.y + target.height / 2) -
             (target.y + target.height / 2)
           : (automaticPoints?.at(-1)?.x ?? target.x + target.width / 2) -
             (target.x + target.width / 2);
       const sourcePoint = { x: group.sourceX, y: group.sourceY };
-      const targetSide = target.targetSide ?? "top";
       const targetPoint =
         targetSide === "left"
           ? { x: target.x, y: target.y + target.height / 2 + targetPortOffset }
@@ -764,8 +896,11 @@ export function buildOrthogonalEdgeRoutes(
         ? manualRoutePoints(sourcePoint, targetPoint, manualRoute)
         : automaticPoints!;
       const controls = manualRoute
-        ? cornerControls([sourcePoint, ...manualRoute.points, targetPoint], true)
-        : cornerControls(points, false);
+        ? cornerControls(
+            [sourcePoint, ...manualRoute.points, targetPoint],
+            true,
+          )
+        : capturedPoints ? [] : cornerControls(points, false);
       const route: OrthogonalEdgeRoute = {
         edgeId: edge.id,
         sourceId: edge.source,
@@ -776,8 +911,8 @@ export function buildOrthogonalEdgeRoutes(
         sourcePortCount: group.portCount,
         targetPortOffset,
         targetSide,
-        bundleKey: manualRoute ? undefined : group.bundleKey,
-        manual: Boolean(manualRoute),
+        bundleKey: manualRoute || capturedPoints ? undefined : group.bundleKey,
+        manual: Boolean(manualRoute || capturedPoints),
         points,
         controls,
       };
@@ -786,6 +921,7 @@ export function buildOrthogonalEdgeRoutes(
     });
     reserveRoutes(reserved, groupRoutes);
   });
+
 
   return routes;
 }

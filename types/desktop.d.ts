@@ -1,3 +1,5 @@
+interface DesktopServiceState {phase:"ready"|"recovering"|"offline";attempt:number;maxAttempts:number;reason?:string;lastSavedAt:string|null;}
+interface DesktopRecoveryDraft {chartId:string;chartName:string;version:number;updatedAt:string;capturedAt:string;nodes:import("../lib/org-chart").OrgFlowNode[];edges:import("@xyflow/react").Edge[];}
 interface DesktopStorageMigration {
   completedAt: string;
   from: string;
@@ -34,6 +36,8 @@ interface DesktopMcpConfigurationStatus {
 interface Window {
   orgChartDesktop?: {
     isDesktop: true;
+    openFileWorkspace():Promise<boolean>;
+    getChartFonts():Promise<import("../lib/chart-appearance").ChartFonts|null>;
     platform: string;
     versions: Readonly<{ chrome: string; electron: string }>;
     getStorageSettings(): Promise<DesktopStorageSettings>;
@@ -53,6 +57,14 @@ interface Window {
       backupJson: string,
       encrypted: boolean,
     ): Promise<DesktopBackupSaveResult>;
+    getServiceState():Promise<DesktopServiceState>;
+    onServiceState(callback:(state:DesktopServiceState)=>void):()=>void;
+    retryService():Promise<boolean>;
+    reopenWorkspace():Promise<boolean>;
+    openDiagnostics():Promise<string>;
+    getRecoveryDraft():Promise<DesktopRecoveryDraft|null>;
+    saveRecoveryDraft(draft:Omit<DesktopRecoveryDraft,"capturedAt">):Promise<string>;
+    reportLastSaved(at:string):void;
     reportSaveState(state: "saved" | "saving" | "proposal" | "error"): void;
     requestQuit(): Promise<boolean>;
   };

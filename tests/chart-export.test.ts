@@ -10,7 +10,7 @@ import {
 import { seedChartDocuments } from "../lib/chart-library";
 import {
   buildAccessibleTableCsv,
-  buildChartExportScene,
+  buildChartExportScene as buildScene,
   buildChartSvg,
   connectionPointsForNode,
   estimateExportTextWidth,
@@ -26,6 +26,8 @@ import {
 import { NODE_HEIGHT, NODE_WIDTH } from "../lib/org-chart";
 
 const generatedAt = "2026-07-31T20:00:00.000Z";
+
+const buildChartExportScene = (...args:Parameters<typeof buildScene>) => { args[6] ??= "annotated";return buildScene(...args); };
 
 test("export text keeps complete long metadata in SVG and editable PowerPoint text boxes", async () => {
   const chart = seedChartDocuments()[0];

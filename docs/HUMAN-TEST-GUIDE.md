@@ -128,7 +128,7 @@ Pass when all outputs derive from the same data and geometry, public-safe output
 
 ## Test 6: optional encryption and merge-only recovery
 
-1. From **Backup & restore**, choose a separate backup folder, select **Entire library** and **Encrypted (recommended)**, enter a passphrase of at least 12 characters, and confirm it.
+1. From **Backup & restore**, choose a separate backup folder, select **Entire library** and **Encrypted (optional)**, enter a passphrase of at least 12 characters, and confirm it.
 2. Save the encrypted library backup. In the desktop app it should appear as one file in the configured folder; browser development mode uses a download.
 3. Create a second backup with **Selected charts** and confirm only the checked charts are reported in the completed backup summary.
 4. Add or change a disposable chart.
@@ -136,7 +136,7 @@ Pass when all outputs derive from the same data and geometry, public-safe output
 6. Confirm restored charts, source records, and saved versions appear as new drafts with new identifiers.
 7. Confirm existing charts were not overwritten or deleted.
 8. Try a wrong passphrase and confirm restore fails without creating partial charts.
-9. Choose **Unencrypted**, acknowledge the readable-file warning, select **Run backup now**, and restore the result without entering a passphrase.
+9. Choose **Unencrypted**, select **Run backup now**, and restore the result without entering a passphrase.
 10. Configure a OneDrive or Dropbox backup folder, choose **Unencrypted**, select **Run backup now**, and confirm the readable package is saved there. Repeat with **Encrypted** and confirm both formats use the configured destination.
 11. In **Backup health**, set a reminder interval, confirm the latest backup records its time, included-chart count, and encryption status, then perform a successful restore and confirm **Last verified restore** updates. Reopen the app and confirm these device-local indicators remain without asking for or displaying a passphrase.
 
@@ -158,11 +158,11 @@ Pass when both formats can be written to the configured local or cloud-synced ba
 12. Open **Version history**. Confirm both review decisions appear in the AI-assisted timeline, the accepted item says it is awaiting a named version, then save a named version and confirm the item links to it.
 13. Trigger a synthetic failed write and confirm the receipt uses **AI edit needs attention** without changing chart data. Make a deliberately stale proposal and confirm it is rejected rather than overwriting newer work.
 14. Create and restore a selected-chart backup. Confirm the related AI review timeline is restored with its version links.
-15. Confirm **Allow retained-source extraction for this session** is off. Confirm `extract_import_intake` and `extract_chart_sources` are refused. Enable it only for the synthetic or cleared files, call both tools, and verify they return extracted text/cells/PowerPoint geometry plus checksums, never raw source bytes. Confirm image-only evidence is reported as metadata-only when OCR is unavailable.
+15. Confirm **Allow retained-source extraction** starts on. Turn it off and confirm `extract_import_intake` and `extract_chart_sources` are refused. Enable it only for the synthetic or cleared files, call both tools, and verify they return extracted text/cells/PowerPoint geometry plus checksums, never raw source bytes. Confirm image-only evidence is reported as metadata-only when OCR is unavailable.
 16. Modify a copy of the current chart to correct one source-backed field, set that card to `needs_review`, and add a precise source locator and actionable review note. Call `stage_source_recheck` with the exact checksums from extraction. Confirm the result reports a private rollback backup, the saved chart remains unchanged, and the proposal preserves all layout, pins, card IDs, and reporting endpoints. Reject once; stage again and Apply, then resolve the item in **Source review queue**.
 17. Confirm `stage_source_recheck` refuses added/removed cards, relationship rewiring, layout movement, missing notes/locators, `confirmed` changes, and stale or incomplete source checksums.
 18. Confirm write tools request approval and that delete, backup restore, raw source-file download, storage, passphrase, and publication tools are absent.
-19. Quit OrgChart Studio and confirm a tool reports that the desktop app must be opened. Reopen it and confirm tools reconnect with the new session and pause, scope, and retained-source permission have reset.
+19. Quit OrgChart Studio and confirm a tool reports that the desktop app must be opened. Reopen it and confirm tools reconnect with the new session and saved pause, scope, and retained-source preferences remain effective.
 20. Choose **Remove integration**, restart ChatGPT Desktop or Codex, and confirm only the OrgChart Studio server was removed. Choose **Install local AI integration** to restore it. Source developers may use `npm run mcp:remove` and `npm run mcp:configure` for the same check.
 
 Pass when MCP is local and on-demand, proposals cannot change saved data before Apply, field-level review is accurate, timeline/version links survive backup restore, stale writes are rejected, and no tool bypasses the normal chart/version workflow.
@@ -197,3 +197,28 @@ A blocking issue is data loss, cross-chart overwrite, a silent structural error,
 - a signed and notarized `/Applications` package.
 
 Those items require owners, approved systems, policies, and reviews that cannot be inferred or safely simulated by this source-test build.
+
+
+## Monthly history, discovery and Current designation
+
+1. In Chart library, choose Organization tree. Expand a directorate, open a division, correct a parent using its selector, and reopen the app to verify the chosen view and placement persist. Ambiguous placements must remain unassigned.
+2. Search for a person, an organization and a role that are not in the open chart. Open each result and verify the chart and card focus. Include archives explicitly and use Search historical checkpoints for past states.
+3. In History / Timeline, start a monthly update with a month, label and a synthetic change list. Confirm previous states exist before making changes. Apply a reviewed MCP proposal or a manual edit, then compare the before and after checkpoints including names, roles and reporting lines.
+4. Attempt to complete a monthly batch with a pending proposal; completion must be blocked. Resolve proposals, complete the batch, and verify the final checkpoint and original change list. Restart mid-batch to verify recovery.
+5. Export the full database with the default Unencrypted choice. Restore copies into an isolated test library and verify historical dates/content, batch summaries, archived status, retained sources, navigation parents and Current metadata. Repeat with optional encryption and with a legacy v4 file. Original charts must not be overwritten.
+6. Mark a Draft chart Current directly. Structural blockers must be explained. If source notes remain, acknowledgment is required and the notes must remain after designation. Confirm that both previous and designated states appear in history.
+7. Turn off source extraction or choose a limited MCP scope. Restart and verify the preference remains effective; a new installation should start connected with source extraction on.
+
+
+## Recovery, consistency and guided monthly workspace (0.2.0)
+
+Use synthetic charts in an isolated test profile. Do not intentionally interrupt the real working library.
+
+1. Open **Consistency & priorities** with two related chart appearances that disagree. Verify both evidence locations, titles and assignments. A similar label must remain a candidate match; planned rows and generic team-lead labels must not become false leadership conflicts.
+2. Open each priority category. Follow a card or connector question into its source review; verify the relevant occurrence is focused.
+3. In **Monthly updates**, begin a scoped month, copy the AI handoff, stage proposals, inspect every Before/After review, and select reviewed items. Apply a group and verify receipts/checkpoints. Make one proposal stale and confirm the whole selected group stays unchanged.
+4. Interrupt and reopen the isolated app mid-update. Refresh saved progress and continue without selecting already decided proposals. Complete the update and make a later change; the completed report must retain its final checkpoint states.
+5. Ask a dated role question and a change question in **History / Timeline**. Follow evidence into the read-only checkpoint. Ask for a date before the first saved state; coverage must be explicit and no earlier appointment inferred.
+6. Run the isolated desktop smoke (`npm run desktop:smoke`), which stops its owned test service and checks reconnection, durable monthly progress and editor recovery. The open window should survive an unexpected service exit. Normal Quit must cancel recovery.
+7. Recover an unsaved draft against an unchanged saved version. Change the saved version and repeat: only comparison download should be available. A malformed recovery file must not replace saved data.
+8. Repeat the packaged smoke on each native platform. Record Mac and Windows results separately. Verify a full unencrypted database round trip preserves Current metadata, source flags, dates and both monthly checkpoints; repeat optional encryption when required.

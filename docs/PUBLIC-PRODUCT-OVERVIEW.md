@@ -17,7 +17,7 @@ The repository intentionally contains no operational organizational charts, pers
 - Arrange chart cards with branch movement, area selection, alignment, distribution, pinning, undo, and redo.
 - Route connectors in separate lanes or optional same-parent sibling combs, then pin and manually move individual orthogonal lanes when a chart needs visual judgment. A per-connector reset returns the relationship to automatic routing, and diagonal segments are never created.
 - Export SVG, PNG, vector PDF, editable PowerPoint, and accessible CSV from one shared scene model.
-- Use a dedicated Backup & restore workspace to create one encrypted-by-default or explicitly unencrypted package for the full library or selected charts, then restore merge-only copies.
+- Use a dedicated Backup & restore workspace to create one unencrypted-by-default or optionally encrypted package for the full library or selected charts, then restore merge-only copies.
 - Choose separate desktop folders for local working data and recovery packages, with encryption available per backup.
 
 ## Data boundary
@@ -32,7 +32,7 @@ Repository hooks and automated scans reject common database files, chart-shaped 
 
 Existing PowerPoint, Word, PDF, image, roster, and spreadsheet files are treated as source evidence rather than as authoritative databases. A reviewed structured CSV or JSON document becomes the editable source of truth after import.
 
-The application has no live AI endpoint. An external assistant may help normalize a cleared source into canonical CSV or JSON, but a person must review the result and explicitly confirm the import preview. The command-line desktop app can optionally register a bounded local MCP companion for deliberate chart listing, reading, validation, import, draft editing, and version saves while the app is running. A separate session-only permission, off by default, can expose bounded locally extracted text, worksheet cells, and PowerPoint structure from retained sources; it never returns raw file bytes. A source-recheck tool creates a private rollback package and stages only `needs_review` corrections while preserving layout, card identities, and reporting endpoints. The MCP does not expose deletion, backup restore, raw source downloads, storage changes, passphrases, or publication. Material returned by any assistant tool enters that AI conversation and must not be used unless the environment and material are approved for one another.
+The application has no live AI endpoint. An external assistant may help normalize a cleared source into canonical CSV or JSON, but a person must review the result and explicitly confirm the import preview. The command-line desktop app can optionally register a bounded local MCP companion for deliberate chart listing, reading, validation, import, draft editing, and version saves while the app is running. A separate session-only control, enabled by default and switchable off in Local AI control, can expose bounded locally extracted text, worksheet cells, and PowerPoint structure from retained sources; it never returns raw file bytes. A source-recheck tool creates a private rollback package and stages only `needs_review` corrections while preserving layout, card identities, and reporting endpoints. The MCP does not expose deletion, backup restore, raw source downloads, storage changes, passphrases, or publication. Material returned by any assistant tool enters that AI conversation and must not be used unless the environment and material are approved for one another.
 
 ## Desktop distribution
 

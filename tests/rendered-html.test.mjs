@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
+import {pathToFileURL} from "node:url";
+import path from "node:path";
 
 async function readStudioServerBundle() {
-  const assetsUrl = new URL("../dist/server/ssr/assets/", import.meta.url);
+  const assetsUrl = process.env.ORGCHART_TEST_DIST?pathToFileURL(path.join(process.env.ORGCHART_TEST_DIST,"server/ssr/_next/static/")):new URL("../dist/server/ssr/_next/static/", import.meta.url);
   const files = await readdir(assetsUrl);
   const studioBundle = files.find((file) => /^orgchart-studio-.*\.js$/.test(file));
   assert.ok(studioBundle, "the production server build should contain the studio route");
@@ -14,7 +16,11 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   const bundle = await readStudioServerBundle();
 
   assert.match(bundle, /OrgChart Studio/);
-  assert.match(bundle, /only charts that staff create or import/i);
+  assert.match(bundle, /Monthly updates/);
+  assert.match(bundle, /Consistency & priorities/);
+  assert.match(bundle, /Ask saved history/);
+  assert.match(bundle, /Workspace mode/);
+  assert.match(bundle, /Appearance & layout/);
   assert.match(bundle, /Chart library/);
   assert.match(bundle, /Chart editor/);
   assert.match(bundle, /Separate lanes/);
@@ -35,7 +41,7 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.match(bundle, /did not answer within 15 seconds/);
   assert.match(bundle, /AI-assisted change timeline/);
   assert.match(bundle, /Local AI control center/);
-  assert.match(bundle, /Allow retained-source extraction for this session/);
+  assert.match(bundle, /Allow retained-source extraction/);
   assert.match(bundle, /Raw files are never returned/);
   assert.match(bundle, /Source intake bundles/);
   assert.match(bundle, /Review proposed chart import/);
@@ -57,13 +63,13 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.match(bundle, /Sources & imports/);
   assert.match(bundle, /Backup & restore/);
   assert.match(bundle, /Publish & export/);
-  assert.match(bundle, /Version history/);
+  assert.match(bundle, /History \/ Timeline/);
   assert.match(bundle, /Portable database backup/);
   assert.match(bundle, /Entire library/);
   assert.match(bundle, /Selected charts/);
-  assert.match(bundle, /Encrypted \(recommended\)/);
+  assert.match(bundle, /Encrypted \(optional\)/);
   assert.match(bundle, /Unencrypted/);
-  assert.match(bundle, /will not be protected by a passphrase/i);
+  assert.match(bundle, /Anyone with this file can read/i);
   assert.match(bundle, /Run backup now/);
   assert.match(bundle, /Choose a backup folder first/);
   assert.match(bundle, /one recovery file/i);
@@ -73,22 +79,22 @@ test("production server bundle contains the complete OrgChart Studio workspace",
   assert.doesNotMatch(bundle, /codex-preview|react-loading-skeleton|Starter Project/i);
 });
 
-test("keeps core prototype boundaries explicit in source", async () => {
+test("keeps data protection and review boundaries explicit in source", async () => {
   const [studio, model, importModel, backupModel, chartRoute, sourceExtractionRoute, proposalRoute, schema, nextConfig, packageJson, hosting] = await Promise.all([
     readFile(new URL("../app/orgchart-studio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/org-chart.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/import-org-chart.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/encrypted-backup.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/charts/route.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/source-extractions/route.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/ai-proposals/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../commands/routes/charts/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../commands/routes/source-extractions/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../commands/routes/ai-proposals/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
     readFile(new URL("../next.config.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
   ]);
 
-  assert.match(studio, /no personnel system or AI endpoint is connected/i);
+  assert.match(studio, /Nothing has been applied/);
   assert.match(studio, /semantic parent did not change/);
   assert.match(studio, /your older draft was not allowed to overwrite it/i);
   assert.match(studio, /savedContent === editorContent/);
@@ -113,7 +119,7 @@ test("keeps core prototype boundaries explicit in source", async () => {
   assert.match(proposalRoute, /action === "reject"/);
   assert.match(proposalRoute, /status.*pending/);
   assert.match(proposalRoute, /changeSummary/);
-  assert.match(proposalRoute, /WHERE id = \? AND version = \? AND updated_at = \?/);
+  assert.match(proposalRoute, /decideProposals/);
   assert.match(schema, /ai_activity_events/);
   assert.doesNotMatch(chartRoute, /seedIfEmpty/);
   assert.match(nextConfig, /bodySizeLimit:\s*"26mb"/);

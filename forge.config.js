@@ -48,7 +48,7 @@ const forgeConfig = {
       /^\/db(?:\/|$)/,
       /^\/lib(?:\/|$)/,
       /^\/types(?:\/|$)/,
-      /^\/public(?:\/|$)/,
+      /^\/(?:web|runtime|commands)(?:\/|$)/,
       /^\/scripts\/(?!configure-orgchart-mcp\.mjs$|run-packaged-wrangler\.cjs$)/,
       /^\/packaging(?:\/|$)/,
       /^\/forge\.config\.js$/,

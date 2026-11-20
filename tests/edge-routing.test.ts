@@ -287,3 +287,54 @@ test("a pinned sibling route is kept separate from automatic combs", () => {
   assert.equal(routes.get("b")?.bundleKey, undefined);
   assertOrthogonal(routes.get("b")!.points);
 });
+
+test('nearly aligned cards use a straight connector through a valid target port', () => {
+  const nodes = [node('parent', 0, 0), node('child', 9, 176)];
+  const routes = buildOrthogonalEdgeRoutes(nodes, [{id:'aligned',source:'parent',target:'child'}]);
+  assert.deepEqual(routes.get('aligned')!.points, [{x:124,y:132},{x:124,y:176}]);
+});
+
+test('upward connectors leave the source below and enter the target from above without crossing either card', () => {
+  const nodes = [node('source',0,320),node('target',320,0)];
+  const route = buildOrthogonalEdgeRoutes(nodes,[{id:'upward',source:'source',target:'target'}]).get('upward')!;
+  assertOrthogonal(route.points);
+  for(const card of nodes)for(let i=1;i<route.points.length;i++){
+    const a=route.points[i-1],b=route.points[i];
+    const enters= a.x===b.x
+      ? a.x>card.x && a.x<card.x+card.width && Math.max(a.y,b.y)>card.y && Math.min(a.y,b.y)<card.y+card.height
+      : a.y>card.y && a.y<card.y+card.height && Math.max(a.x,b.x)>card.x && Math.min(a.x,b.x)<card.x+card.width;
+    assert.equal(enters,false,`route must not pass through ${card.id}`);
+  }
+});
+
+test('automatic lanes reserve the visible captured route rather than its unused automatic substitute', () => {
+  const small=(id:string,x:number,y:number)=>({id,x,y,width:100,height:50});
+  const a=small('a',0,0),at=small('at',300,200),b=small('b',150,0),bt=small('bt',550,200);
+  const captured=[{x:50,y:50},{x:50,y:75},{x:-50,y:75},{x:-50,y:175},{x:350,y:175},{x:350,y:200}];
+  const edges:Edge[]=[{id:'captured',source:a.id,target:at.id,data:{sourceRoute:{sourceBounds:a,targetBounds:at,points:captured}}},{id:'automatic',source:b.id,target:bt.id}];
+  const before=structuredClone(edges);const routes=buildOrthogonalEdgeRoutes([a,at,b,bt],edges);
+  assert.deepEqual(routes.get('captured')!.points,captured);
+  assert.equal(routes.get('automatic')!.points[1].y,125,'the clear midpoint lane should remain available');
+  assert.deepEqual(edges,before,'rendering must not rewrite stored source evidence');
+});
+
+test('captured source side spines complete aligned siblings without central stubs', () => {
+ const nodes=[{id:'section',x:0,y:0,width:300,height:90},...['a','b','c'].map((id,i)=>({id,x:30,y:120+i*100,width:270,height:80}))];
+ const edges:Edge[]=['a','b','c'].map(id=>({id,source:'section',target:id}));
+ edges[2].data={sourceRoute:{sourceBounds:nodes[0],targetBounds:nodes[3],points:[{x:15,y:90},{x:15,y:360},{x:30,y:360}]}};
+ const before=structuredClone(edges);
+ for(const mode of ['separate','combed'] as const){
+  const routes=buildOrthogonalEdgeRoutes(nodes,edges,mode);
+  for(const [i,id] of ['a','b','c'].entries()){
+   assert.deepEqual(routes.get(id)!.points,[{x:15,y:90},{x:15,y:160+i*100},{x:30,y:160+i*100}]);
+   assert.equal(routes.get(id)!.targetSide,'left');
+  }
+ }
+ assert.deepEqual(edges,before);
+ // A moved source card invalidates the captured anchor and its inferred siblings.
+ const moved=nodes.map(n=>n.id==='section'?{...n,x:40}:n);
+ assert.notDeepEqual(buildOrthogonalEdgeRoutes(moved,edges).get('a')!.points,[{x:15,y:90},{x:15,y:160},{x:30,y:160}]);
+ // Explicit manual work always has precedence.
+ edges[0].data={manualRoute:{version:1,points:[{x:150,y:105},{x:165,y:105}],targetPortOffset:0}};
+ assert.equal(buildOrthogonalEdgeRoutes(nodes,edges).get('a')!.controls.some(c=>c.pinned),true);
+});

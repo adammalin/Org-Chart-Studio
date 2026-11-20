@@ -9,26 +9,32 @@ const {
   isAllowedAppRequest,
 } = require("../electron/network-policy.cjs");
 
-test("desktop network policy accepts only loopback and non-network URLs", () => {
+const appUrl = "http://127.0.0.1:43123/";
+
+test("desktop network policy pins HTTP and WebSocket traffic to its own server", () => {
   for (const allowed of [
     "http://127.0.0.1:43123/api/charts",
-    "http://localhost:43123/",
     "ws://127.0.0.1:43123/",
     "about:blank",
     "blob:http://127.0.0.1:43123/fixture",
     "data:text/plain,fixture",
   ]) {
-    assert.equal(isAllowedAppRequest(allowed), true, allowed);
+    assert.equal(isAllowedAppRequest(allowed, appUrl), true, allowed);
   }
 
   for (const blocked of [
+    "http://localhost:43123/",
+    "http://127.0.0.1:43124/",
+    "ws://127.0.0.1:43124/",
+    "http://user:pass@127.0.0.1:43123/",
+    "file://remote-host/share/file",
     "https://example.com/",
     "http://192.168.1.25/",
     "wss://example.com/socket",
     "mailto:someone@example.com",
     "not a url",
   ]) {
-    assert.equal(isAllowedAppRequest(blocked), false, blocked);
+    assert.equal(isAllowedAppRequest(blocked, appUrl), false, blocked);
   }
 });
 
@@ -46,7 +52,10 @@ test("desktop request filter blocks external URLs and adds the local token", () 
     },
   };
 
-  installLocalOnlyNetworkPolicy(electronSession, "desktop-secret");
+  let serverUrl = "";
+  installLocalOnlyNetworkPolicy(electronSession, "desktop-secret", () => serverUrl);
+  assert.equal(isAllowedAppRequest(appUrl), false, "network must fail closed before the server starts");
+  serverUrl = appUrl;
 
   let result;
   beforeRequest({ url: "https://example.com/" }, (value) => {
@@ -69,6 +78,11 @@ test("desktop request filter blocks external URLs and adds the local token", () 
     Accept: "text/html",
     "X-OrgChart-Desktop-Token": "desktop-secret",
   });
+  beforeSendHeaders(
+    { url: "http://127.0.0.1:43124/", requestHeaders: { Accept: "text/html", "x-orgchart-desktop-token": "stale", "X-OrgChart-Desktop-Token": "stale" } },
+    value => { result = value; },
+  );
+  assert.deepEqual(result.requestHeaders, { Accept: "text/html" });
 });
 
 test("desktop window keeps the Electron renderer isolated", () => {
@@ -113,6 +127,7 @@ test("desktop quit control confirms before using the clean shutdown path", () =>
   assert.match(mainSource, /taskkill\.exe[\s\S]*"\/T"[\s\S]*"\/F"/);
   assert.match(
     mainSource,
-    /if \(smokeTest\)[\s\S]*process\.exit\(requestedExitCode\)/,
+    /if \(smokeTest\)[\s\S]*app\.exit\(requestedExitCode\)/,
   );
+  assert.doesNotMatch(mainSource, /process\.exit\(requestedExitCode\)/);
 });

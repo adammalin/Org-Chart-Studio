@@ -33,6 +33,9 @@ jobs:
       - name: Run security, type, build, and behavior tests
         run: npm test
 
+      - name: Verify generated static artifact
+        run: npm run web:verify
+
       - name: Run lint checks
         run: npm run lint
 

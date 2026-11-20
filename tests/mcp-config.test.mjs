@@ -48,6 +48,8 @@ test("installer-managed MCP configuration preserves existing settings and is ide
     assert.match(source, /default_tools_approval_mode = "writes"/);
     assert.match(source, /start-orgchart-mcp\.zsh/);
     assert.match(source, /enabled_tools = \["list_charts"/);
+    assert.match(source, /"get_source_checks"/);
+    assert.match(source, /"record_source_check"/);
 
     const repeated = configureOrgChartMcp({
       action: "install",
@@ -81,7 +83,7 @@ test("packaged desktop MCP registration uses its bundled runtime and current too
     assert.equal(status.installed, true);
     assert.equal(status.needsRepair, false);
     assert.ok(source.includes(`command = ${JSON.stringify(executablePath)}`));
-    assert.match(source, /mcp[\\/]server\.mjs/);
+    assert.ok(source.includes(JSON.stringify(path.join(item.projectRoot, "mcp", "server.mjs"))));
     assert.match(source, /ELECTRON_RUN_AS_NODE = "1"/);
     assert.match(source, /stage_normalized_import/);
     assert.match(source, /stage_source_recheck/);
@@ -123,7 +125,7 @@ test("MCP configuration CLI accepts the direct Node runtime used by Windows sour
     assert.equal(result.status, 0, result.stderr);
     assert.ok(source.includes(`command = ${JSON.stringify(process.execPath)}`));
     assert.ok(source.includes(JSON.stringify(runtimePath)));
-    assert.match(source, /mcp[\\/]server\.mjs/);
+    assert.ok(source.includes(JSON.stringify(path.join(item.projectRoot, "mcp", "server.mjs"))));
     assert.doesNotMatch(source, /start-orgchart-mcp\.zsh/);
   } finally {
     item.cleanup();

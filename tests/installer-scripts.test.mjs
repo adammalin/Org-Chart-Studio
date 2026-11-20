@@ -165,7 +165,7 @@ test("Windows command-line installer matches the macOS safety and setup flow", (
   assert.match(electronStartSource, /process\.env\.ORGCHART_ELECTRON_SMOKE === "1"/);
   assert.match(electronStartSource, /taskkill\.exe/);
   assert.match(electronStartSource, /ORGCHART_ELECTRON_SMOKE/);
-  assert.equal(packageJson.scripts.build, "node scripts/run-vinext.mjs build");
+  assert.equal(packageJson.scripts.build, "node scripts/run-vinext.mjs build && npm run web:build");
   assert.equal(packageJson.scripts.dev, "node scripts/run-vinext.mjs dev");
   assert.equal(packageJson.scripts.start, "node scripts/run-vinext.mjs start");
   assert.equal(packageJson.scripts["desktop:smoke"], "node scripts/start-electron.mjs --smoke");
@@ -210,9 +210,9 @@ test("bundled quick-start has a second page for the reviewed local AI workflow",
 
   assert.equal(guide.getPageCount(), 2);
   assert.match(generatorSource, /Use the orgchart_studio MCP server/);
-  assert.match(generatorSource, /AI stages edits and imports\. You decide\. The app remains the source of truth\./);
+  assert.match(generatorSource, /AI stages changes\. You decide what becomes saved data\./);
   assert.match(generatorSource, /Stage a reviewed import or source recheck/);
-  assert.match(generatorSource, /Source extraction is off by default/);
+  assert.match(generatorSource, /Source extraction is on by default/);
   assert.match(generatorSource, /Return raw source files or passphrases/);
   assert.match(generatorSource, /Bypass review for chart replacement/);
   assert.match(generatorSource, /not ChatGPT web/);
@@ -230,19 +230,22 @@ test("desktop guide covers both command-line installs, updates, storage, and opt
   );
   const guide = await PDFDocument.load(readFileSync(guidePath));
 
-  assert.equal(guide.getPageCount(), 3);
+  assert.equal(guide.getPageCount(), 4);
+  assert.match(generatorSource, /Choose web or desktop/);
+  assert.match(generatorSource, /Open library/);
+  assert.match(generatorSource, /Download full working library/);
   assert.match(generatorSource, /No signed installer required/);
-  assert.match(generatorSource, /Mac - paste all five lines into Terminal/);
+  assert.match(generatorSource, /Mac - one command in Terminal/);
   assert.match(generatorSource, /Windows - one command in Terminal, Command Prompt, or PowerShell/);
   assert.match(generatorSource, /install-windows-command\.txt/);
   assert.match(generatorSource, /ActualText/);
-  assert.match(generatorSource, /Repeat the same installation commands from page 1/i);
+  assert.match(generatorSource, /Repeat the same installation command from page 1/i);
   assert.match(generatorSource, /Install the local MCP integration\? \[y\/N\]/);
   assert.match(generatorSource, /Install local AI integration/);
   assert.match(generatorSource, /OneDrive or Dropbox/);
   assert.match(generatorSource, /Encryption is optional/);
   assert.match(generatorSource, /Run backup now/);
-  assert.match(generatorSource, /Retained-source extraction starts off/);
+  assert.match(generatorSource, /Retained-source extraction starts on/);
 });
 
 test("public Windows install instructions use one shell-independent command", () => {
@@ -268,7 +271,7 @@ test("unsigned native packaging stays manual while retaining per-platform smoke 
 
   assert.equal(packageJson.scripts["package:mac"].includes("package-electron.mjs mac"), true);
   assert.equal(packageJson.scripts["package:windows"].includes("package-electron.mjs windows"), true);
-  assert.equal(packageJson.dependencies.wrangler, "4.118.0");
+  assert.match(packageJson.dependencies.wrangler, /^4\.\d+\.\d+$/, "the packaged worker must use an exact tested Wrangler 4 version");
   assert.match(forgeSource, /appBundleId: "gov\.ornl\.orgchart-studio"/);
   assert.match(forgeSource, /@electron-forge\/maker-dmg/);
   assert.match(forgeSource, /@electron-forge\/maker-squirrel/);

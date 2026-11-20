@@ -1,3 +1,4 @@
+import type { SupportPanel, SourceLayout } from "./chart-supplements";
 import type { Edge } from "@xyflow/react";
 import type { ChartQualityReport } from "./chart-governance";
 import type { ChartDocument } from "./chart-library";
@@ -9,7 +10,7 @@ export interface AiImportProposal {
   operation: "stage_normalized_import";
   status: "pending";
   createdAt: string;
-  expiresAt: string;
+  expiresAt: string | null;
   format: "csv" | "json";
   intakeId: string | null;
   intakeName: string | null;
@@ -17,6 +18,8 @@ export interface AiImportProposal {
   proposed: {
     nodes: OrgFlowNode[];
     edges: Edge[];
+    supportPanels?: SupportPanel[];
+    sourceLayout?: SourceLayout;
   };
   findings: ValidationFinding[];
   quality: ChartQualityReport;

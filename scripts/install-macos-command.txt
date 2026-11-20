@@ -1,0 +1,1 @@
+/usr/bin/curl --fail --location --show-error "https://raw.githubusercontent.com/adammalin/Org-Chart-Studio/main/scripts/bootstrap-mac-source-test.zsh" --output "$HOME/Downloads/orgchart-studio-install.zsh" && /bin/zsh "$HOME/Downloads/orgchart-studio-install.zsh" "$HOME/OrgChart-Studio-source-test"
