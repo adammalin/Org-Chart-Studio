@@ -9,7 +9,7 @@ November 19, 2026. Version 0.4.0 is a local release candidate, not a published w
 | Portable libraries | Full identity-preserving Open, separate legacy Merge, sources, pending reviews/imports, history and unfinished monthly work. |
 | Saving | Verified linked-file writes, external-change checks, download fallback, optional encryption, save status/reminders. |
 | Desktop handoff | Full continuation export; separate sandboxed file workspace; original database/MCP target preserved. |
-| Agent access | Shared 30 operations, 32 browser tools with workspace/connection guards, Pause and existing source/scope controls. |
+| Agent access | 38 shared operations, 42 browser tools with workspace/connection guards, Pause and source/scope controls; resumable batches, narrow field patches, digest-bound UI review sets and download receipts. Deployment is separately authorized. |
 | UI and outputs | Desktop-only controls hidden; accessible compact navigation; actual browser SVG/PNG/PDF/PPTX downloads checked. |
 | Companion plugin | Staged 0.4.0 package, ten routed skills, generated tool schemas, unchanged desktop installer pin/helpers. |
 | Guide | Four-page selectable-text guide with original Mac/Windows commands and browser file workflow. |

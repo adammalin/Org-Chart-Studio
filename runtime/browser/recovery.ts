@@ -2,7 +2,7 @@ import type { BrowserDatabase, EngineSnapshot } from "./sqlite";
 
 export interface WorkspaceMetadata {
   id: string; revision: number; fileRevision: number; fileName: string | null;
-  lastFileSavedAt: string | null; fileSaveEvidence?:'verified-write'|'user-confirmed-download'; recoveredAt: string; protection: "encrypted" | "unencrypted";
+  lastFileSavedAt: string | null; fileSaveEvidence?:'verified-write'|'user-confirmed-download'|'agent-reported-download'; recoveredAt: string; protection: "encrypted" | "unencrypted";
 }
 export interface RecoveryRecord { metadata: WorkspaceMetadata; database: Uint8Array; salt?: Uint8Array }
 const encode=(bytes:Uint8Array)=>bytes.slice().buffer as ArrayBuffer;

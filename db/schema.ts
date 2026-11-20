@@ -1,5 +1,6 @@
 import { editHistorySchema } from "../lib/edit-history-schema";
 export const schemaStatements = [
+  `CREATE TABLE IF NOT EXISTS agent_operations(id TEXT PRIMARY KEY,kind TEXT NOT NULL,request_hash TEXT NOT NULL,chart_ids TEXT NOT NULL,payload TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS ai_import_proposals (id TEXT PRIMARY KEY,created_at TEXT NOT NULL,payload TEXT NOT NULL,contents TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS mutation_guards (id TEXT PRIMARY KEY, ok INTEGER NOT NULL CHECK(ok=1))`,
   `CREATE TABLE IF NOT EXISTS monthly_updates (id TEXT PRIMARY KEY, month TEXT NOT NULL, label TEXT NOT NULL, change_list TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', effective_date TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL, completed_at TEXT, chart_ids TEXT NOT NULL)`,
@@ -103,5 +104,6 @@ export const schemaStatements = [
   )`,
   `CREATE INDEX IF NOT EXISTS import_intake_files_intake_id_idx
     ON import_intake_files(intake_id)`,
+  `CREATE TRIGGER IF NOT EXISTS agent_operations_chart_delete AFTER DELETE ON charts BEGIN DELETE FROM agent_operations WHERE EXISTS(SELECT 1 FROM json_each(chart_ids) WHERE value=OLD.id); END`,
   ...editHistorySchema,
 ] as const;

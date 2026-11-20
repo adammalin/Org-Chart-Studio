@@ -367,6 +367,8 @@ test("local STDIO MCP exposes bounded tools and reaches only the authorized runn
       "replace_chart_draft",
       "stage_source_recheck",
       "save_chart_version",
+      "stage_chart_patch", "get_chart_proposal", "start_validation_batch", "start_source_check_batch",
+      "continue_agent_batch", "list_agent_operations", "get_agent_operation", "prepare_reviewed_apply",
       "search_library",
       "list_history",
       "get_history_checkpoint",

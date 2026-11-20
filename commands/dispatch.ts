@@ -13,10 +13,12 @@ import * as route11 from "./routes/monthly-workspace/route";
 import * as route12 from "./routes/backups/route";
 import * as route13 from "./routes/ai-import-proposals/route";
 import * as workspaceRoute from "./routes/workspace/route";
-export type CommandPath = "/api/workspace" | "/api/edit-history" | "/api/preferences" | "/api/ai-proposals" | "/api/charts" | "/api/ai-activity" | "/api/consistency" | "/api/import-intakes" | "/api/source-extractions" | "/api/history" | "/api/history/answers" | "/api/mcp-control" | "/api/monthly-workspace" | "/api/backups" | "/api/ai-import-proposals";
+import * as agentWorkflows from "./routes/agent-workflows/route";
+export type CommandPath = "/api/agent-workflows" | "/api/workspace" | "/api/edit-history" | "/api/preferences" | "/api/ai-proposals" | "/api/charts" | "/api/ai-activity" | "/api/consistency" | "/api/import-intakes" | "/api/source-extractions" | "/api/history" | "/api/history/answers" | "/api/mcp-control" | "/api/monthly-workspace" | "/api/backups" | "/api/ai-import-proposals";
 type Handler = (request: Request) => Promise<Response>;
 const commands: Record<string, { GET?: Handler; POST?: Handler }> = {
   "/api/workspace": workspaceRoute,
+  "/api/agent-workflows": agentWorkflows,
   "/api/edit-history": route0,
   "/api/preferences": route1,
   "/api/ai-proposals": route2,

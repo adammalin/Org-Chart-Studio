@@ -1,3 +1,4 @@
+import {registerAgentWorkflowTools} from './agent-workflow-tools.mjs';
 import { registerEditHistoryTools } from "./edit-history-tools.mjs";
 import { registerSupplementTools } from "./supplement-tools.mjs";
 import fs from "node:fs";
@@ -24,6 +25,7 @@ export function createOrgChartMcpServer(options = {}) {
     },
   );
   registerTools(server, client);
+  registerAgentWorkflowTools(server, client);
   registerHistoryTools(server, client);
   registerEditHistoryTools(server, client);
   registerInsightTools(server, client);

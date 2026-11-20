@@ -1,5 +1,5 @@
 import {createContext,useContext,type ComponentType,type ReactNode} from 'react';
-export interface StudioEnvironment {kind:'desktop'|'browser'; LibraryControls?:ComponentType<{editorSaveState:string}>; browserAgentAvailable:boolean}
+export interface StudioEnvironment {kind:'desktop'|'browser'; BrowserAgentControls?:ComponentType; LibraryControls?:ComponentType<{editorSaveState:string}>; browserAgentAvailable:boolean}
 const environment=createContext<StudioEnvironment>({kind:'desktop',browserAgentAvailable:false});
 export const StudioEnvironmentProvider=({value,children}:{value:StudioEnvironment;children:ReactNode})=><environment.Provider value={value}>{children}</environment.Provider>;
 export const useStudioEnvironment=()=>useContext(environment);

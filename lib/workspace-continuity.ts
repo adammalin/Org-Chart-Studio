@@ -1,3 +1,4 @@
+import {agentOperationSchema,exportAgentOperations,importAgentOperations} from "./agent-workflows";
 import {listPendingImports,savePendingImport,deletePendingImport} from "./pending-import-store";
 import {z} from 'zod';
 import type {AppBindings} from '../db';
@@ -7,7 +8,7 @@ const date=z.string().max(50).refine(v=>Number.isFinite(Date.parse(v)));
 const id=z.string().min(1).max(200);
 const file=z.object({id,intakeId:id,fileName:z.string().min(1).max(500),contentType:z.string().max(200),fileSize:z.number().int().min(0).max(250_000_000),checksum:z.string().regex(/^[a-f0-9]{64}$/),createdAt:date,dataBase64:z.string().max(340_000_000)}).strict();
 const intake=z.object({id,name:z.string().min(1).max(500),status:z.enum(['pending','imported']),createdAt:date,updatedAt:date,chartId:id.nullable(),files:z.array(file).max(1000)}).strict();
-export const continuitySchema=z.object({intakes:z.array(intake).max(200),importProposals:z.array(z.object({proposal:z.record(z.string(),z.unknown()),contents:z.string().max(4_500_000)})).max(20),appearance:z.enum(['official','annotated']).optional(),libraryView:z.enum(['flat','tree']).optional()}).strict();
+export const continuitySchema=z.object({agentOperations:z.array(agentOperationSchema).max(20000).optional(),intakes:z.array(intake).max(200),importProposals:z.array(z.object({proposal:z.record(z.string(),z.unknown()),contents:z.string().max(4_500_000)})).max(20),appearance:z.enum(['official','annotated']).optional(),libraryView:z.enum(['flat','tree']).optional()}).strict();
 export type WorkspaceContinuity=z.infer<typeof continuitySchema>;
 const base64=(bytes:Uint8Array)=>{let s='';for(let i=0;i<bytes.length;i+=0x8000)s+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return btoa(s);};
 export async function exportContinuity(bindings:AppBindings):Promise<WorkspaceContinuity>{
@@ -23,10 +24,12 @@ export async function exportContinuity(bindings:AppBindings):Promise<WorkspaceCo
   intakes.push({id:row.id,name:row.name,status:row.status,createdAt:row.created_at,updatedAt:row.updated_at,chartId:row.chart_id,files:evidence});
  }
  const preferences=await bindings.DB.prepare("SELECT key,payload FROM app_settings WHERE key IN ('chart-appearance','library-view')").all<{key:string;payload:string}>();const values=new Map(preferences.results.map(r=>[r.key,r.payload]));
- return {intakes,importProposals:(await listPendingImports(bindings.DB)).map(s=>({...s,proposal:{...s.proposal}})),appearance:values.get('chart-appearance')==='annotated'?'annotated':'official',libraryView:values.get('library-view')==='tree'?'tree':'flat'};
+ const agentOperations=await exportAgentOperations(bindings.DB);
+ return {...(agentOperations.length?{agentOperations}:{}),intakes,importProposals:(await listPendingImports(bindings.DB)).map(s=>({...s,proposal:{...s.proposal}})),appearance:values.get('chart-appearance')==='annotated'?'annotated':'official',libraryView:values.get('library-view')==='tree'?'tree':'flat'};
 }
 export async function importContinuity(value:unknown,bindings:AppBindings,chartIds:Set<string>){
  const state=continuitySchema.parse(value);let total=0;
+ if(state.agentOperations)await importAgentOperations(bindings.DB,state.agentOperations,chartIds);
  for(const [key,entry] of [['chart-appearance',state.appearance],['library-view',state.libraryView]])if(entry)await bindings.DB.prepare('INSERT INTO app_settings(key,payload) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload').bind(key!,entry).run();
  const ids=new Set<string>();
  for(const intake of state.intakes){

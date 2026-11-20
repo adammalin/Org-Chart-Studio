@@ -172,7 +172,7 @@ function validateEditableChart(chart: ChartDocument) {
   return null;
 }
 
-async function loadCurrentChart(db: D1Database, chartId: string) {
+export async function loadCurrentChart(db: D1Database, chartId: string) {
   const [row, sourceResult] = await Promise.all([
     db
       .prepare("SELECT * FROM charts WHERE id = ?")
@@ -229,25 +229,8 @@ export async function GET(request: Request) {
   return noStoreJson({ activities: result.results.map(activityFromRow) });
 }
 
-export async function POST(request: Request) {
-  const { DB } = getBindings();
-  await ensureSchema(DB);
-  const requestBody = await readJsonObject(request, {
-    action: jsonField.text,
-    proposalId: jsonField.text,
-    changeSummary: jsonField.text,
-    chart: jsonField.object,
-  });
-  if (!requestBody.ok) return requestBody.response;
-  const body = requestBody.body as {
-    action?: "stage" | "accept" | "reject";
-    chart?: ChartDocument;
-    proposalId?: string;
-    changeSummary?: string;
-  };
-
-  if (body.action === "stage" && body.chart) {
-    const proposed = body.chart;
+export async function stageReviewedChart(DB: D1Database, chart: ChartDocument, changeSummary?: string, extra?: (proposal: AiChartProposal) => D1PreparedStatement[] | Promise<D1PreparedStatement[]>) {
+    const proposed = chart;
     const error = validateEditableChart(proposed);
     if (error) return noStoreJson({ error }, { status: 422 });
     const current = await loadCurrentChart(DB, proposed.id);
@@ -314,7 +297,7 @@ export async function POST(request: Request) {
       chartName: proposed.name,
       operation: "replace_chart_draft",
       status: "pending",
-      changeSummary: body.changeSummary?.trim().slice(0, 500) || null,
+      changeSummary: changeSummary?.trim().slice(0, 500) || null,
       createdAt: createdAt.toISOString(),
       expiresAt: null,
       current,
@@ -328,8 +311,29 @@ export async function POST(request: Request) {
       changes,
       summary,
     };
-    await savePendingProposal(DB, proposal);
+    await savePendingProposal(DB, proposal, await extra?.(proposal) ?? []);
     return noStoreJson({ proposal }, { status: 201 });
+}
+
+export async function POST(request: Request) {
+  const { DB } = getBindings();
+  await ensureSchema(DB);
+  const requestBody = await readJsonObject(request, {
+    action: jsonField.text,
+    proposalId: jsonField.text,
+    changeSummary: jsonField.text,
+    chart: jsonField.object,
+  });
+  if (!requestBody.ok) return requestBody.response;
+  const body = requestBody.body as {
+    action?: "stage" | "accept" | "reject";
+    chart?: ChartDocument;
+    proposalId?: string;
+    changeSummary?: string;
+  };
+
+  if (body.action === "stage" && body.chart) {
+    return stageReviewedChart(DB, body.chart, body.changeSummary);
   }
 
   if (

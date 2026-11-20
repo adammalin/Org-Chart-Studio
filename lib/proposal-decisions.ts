@@ -51,6 +51,7 @@ export async function decideProposals(
   ids: string[],
   decision: "accept" | "reject",
   batchId?: string,
+  extra: D1PreparedStatement[] = [],
 ) {
   if (
     !Array.isArray(ids) ||
@@ -266,7 +267,7 @@ export async function decideProposals(
     ),
   );
   try {
-    await db.batch(statements);
+    await db.batch([...statements, ...extra]);
   } catch {
     throw new DecisionError(
       409,

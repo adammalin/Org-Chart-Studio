@@ -7130,3 +7130,17 @@ button:disabled {
 @media(min-width:901px) and (max-width:1220px) {
  .validation-status:not(.has-blocking-findings), .sidebar-tools .source-check-progress {display:none;}
 }
+
+.agent-review-sets {margin:16px 24px;padding:18px;border:1px solid #9eb6ad;border-left:4px solid #006b32;background:#f4f8f5;overflow-wrap:anywhere;}
+.agent-review-sets h2 {font-size:18px;margin:0 0 8px;}
+.agent-review-sets details {margin:12px 0;padding:12px;background:white;border:1px solid #cdd6d0;}
+.agent-review-sets summary {cursor:pointer;font-weight:600;}
+.agent-review-table {overflow:auto;max-height:50vh;margin:12px 0;}
+.agent-review-table table {width:100%;border-collapse:collapse;table-layout:fixed;}
+.agent-review-table th,.agent-review-table td {padding:10px;text-align:left;border:1px solid #d5ddd8;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere;}
+.agent-review-actions,.browser-agent-health {display:flex;flex-wrap:wrap;align-items:center;gap:12px;}
+.browser-agent-health {padding:18px;border:1px solid #ced8d2;background:#f4f8f5;margin:18px 0;}
+.browser-agent-health p {flex:1 1 280px;margin:0;}
+
+.prepared-library-download {display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:12px;}
+.prepared-library-download small {flex-basis:100%;overflow-wrap:anywhere;}
