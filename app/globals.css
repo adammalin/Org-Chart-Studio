@@ -7104,3 +7104,8 @@ button:disabled {
 @media(min-width:901px) {
  .studio-shell--detail-open .workspace {margin-right:360px;}
 }
+
+/* Compact desktop navigation favors actionable state over repeated healthy-state details. */
+@media(min-width:901px) and (max-width:1220px) {
+ .validation-status:not(.has-blocking-findings), .sidebar-tools .source-check-progress {display:none;}
+}
