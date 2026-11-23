@@ -6578,11 +6578,12 @@ button:disabled {
 }
 .workflow-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
   border: 1px solid var(--border-subtle);
   margin: 24px 0;
 }
 .workflow-metrics > div {
+  min-width: 0;
   display: grid;
   gap: 8px;
   padding: 20px;
@@ -6594,6 +6595,7 @@ button:disabled {
 }
 .workflow-metrics span {
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 .workflow-filters {
   display: flex;
