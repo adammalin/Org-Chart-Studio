@@ -5,7 +5,7 @@ import {unzipSync,strFromU8} from 'fflate';
 import {PDFDocument} from 'pdf-lib';
 import {testDatabase} from './helpers/test-db';
 import {supportFixture} from './helpers/support-fixture';
-import {officialCard,officialAssignment,officialTextWidth,officialWrap,OFFICIAL_COLORS} from '../lib/chart-appearance';
+import {officialCard,officialAssignment,officialSupport,officialTextWidth,officialWrap,OFFICIAL_COLORS} from '../lib/chart-appearance';
 import {buildChartExportScene,buildChartSvg} from '../lib/chart-export';
 import {buildChartPdf} from '../lib/chart-export-pdf';
 import {buildChartPptx} from '../lib/chart-export-pptx';
@@ -60,6 +60,41 @@ test('official public appearance does not leak private assignments into visual e
  const scene=buildChartExportScene(chart,'public');const svg=buildChartSvg(scene);
  assert.doesNotMatch(svg,/SYNTHETIC PRIVATE/);
  const bytes=await buildChartPptx(scene);assert.doesNotMatch(strFromU8(unzipSync(bytes)['ppt/slides/slide1.xml']),/SYNTHETIC PRIVATE/);
+});
+
+test('acting qualifiers already in a role are not appended to the person again',()=>{
+ const unit=supportFixture().nodes[0].data.unit;
+ unit.positionStatus='acting';unit.assignmentLabel='Synthetic Temporary Holder';
+ for(const role of ['Director (Interim)','Acting Director','Director (INTERIM)']){
+  unit.positionTitle=role;
+  assert.equal(officialAssignment(unit),'Synthetic Temporary Holder');
+  const text=officialCard(unit,320,200,2,1).lines.map(l=>l.text).join(' ');
+  assert.equal(text.match(/\b(?:interim|acting)\b/gi)?.length,1);
+ }
+ unit.positionTitle='Director';assert.equal(officialAssignment(unit),'Synthetic Temporary Holder, Interim');
+ unit.assignmentLabel='Synthetic Actingston';assert.equal(officialAssignment(unit),'Synthetic Actingston, Interim');
+ unit.assignmentLabel='Synthetic Holder (Interim)';assert.equal(officialAssignment(unit),'Synthetic Holder (Interim)');
+ const support=officialSupport('Synthetic support',[{role:'Acting Manager',person:'Synthetic Holder',positionStatus:'acting'}],320,200,1);
+ assert.equal(support.lines.map(l=>l.text).join(' ').match(/\b(?:interim|acting)\b/gi)?.length,1);
+});
+
+test('public acting cards retain one role qualifier without revealing the person',()=>{
+ const unit=supportFixture().nodes[0].data.unit;
+ unit.positionStatus='acting';unit.positionTitle='Director (Interim)';unit.assignmentLabel='SYNTHETIC PRIVATE HOLDER';
+ const text=officialCard(unit,320,200,2,1,true).lines.map(l=>l.text).join(' ');
+ assert.doesNotMatch(text,/SYNTHETIC PRIVATE/);assert.equal(text.match(/\bInterim\b/g)?.length,1);
+});
+
+test('SVG and editable PowerPoint share the single-qualifier card without changing data',async()=>{
+ const chart=supportFixture(),unit=chart.nodes[0].data.unit;
+ unit.positionStatus='acting';unit.positionTitle='Director (Interim)';unit.assignmentLabel='Synthetic Temporary Holder';
+ const before=structuredClone(chart),scene=buildChartExportScene(chart,'internal');
+ const card=scene.nodes.find(n=>n.id===chart.nodes[0].id)!.official!;
+ assert.equal(card.lines.map(l=>l.text).join(' ').match(/\bInterim\b/g)?.length,1);
+ const svg=buildChartSvg(scene);assert.doesNotMatch(svg,/Holder, Interim/);
+ const xml=strFromU8(unzipSync(await buildChartPptx(scene))['ppt/slides/slide1.xml']);
+ assert.doesNotMatch(xml,/Holder, Interim/);assert.match(xml,/Director \(Interim\)/);
+ assert.deepEqual(chart,before);
 });
 
 test('official drawing keeps compact selection and support assignments accessible',async()=>{
