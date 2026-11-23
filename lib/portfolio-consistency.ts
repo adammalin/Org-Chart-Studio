@@ -95,73 +95,128 @@ export function relatedAppearances(
     }
   return groups;
 }
-export function auditPortfolio(charts: ChartDocument[]): ConsistencyIssue[] {
-  const issues: ConsistencyIssue[] = [];
-  for (const [key, rows] of relatedAppearances(charts)) {
-    if (new Set(rows.map((r) => r.chartId)).size < 2) continue;
-    const add = (
-      category: ConsistencyCategory,
-      title: string,
-      priority: "high" | "medium",
-    ) =>
-      issues.push({
-        id: category + ":" + key,
-        organizationKey: key,
-        organization: rows[0].organization,
-        category,
-        priority,
-        title,
-        appearances: rows,
-      });
-    if (new Set(rows.map((r) => r.chartId)).size !== rows.length) {
-      add(
-        "identity",
-        "Multiple positions share this organization name; confirm identity before synchronizing",
-        "medium",
-      );
-      continue;
+/** Role labels describe positions; they are never evidence that two people are identical. */
+export function roleKey(value: string) {
+  return searchText(value)
+    .replace(/\b(?:assoc lab|associate lab) director\b/g, "associate laboratory director")
+    .replace(/\bald\b/g, "associate laboratory director")
+    .replace(/\bcoo\b/g, "chief operating officer")
+    .replace(/\bcio\b/g, "chief information officer")
+    .replace(/\bcco\b/g, "chief communications officer")
+    .replace(/\bchro\b/g, "chief human resources officer")
+    .replace(/\bchief human resource officer\b/g, "chief human resources officer")
+    .replace(/\b(?:acting|interim)\b/g, "")
+    .replace(/^(?:division|office|directorate|laboratory) director$/, "director")
+    .replace(/\s+/g, " ").trim();
+}
+interface Assignment { person: string; role: string }
+const embeddedRole = /(?:deputy\s+)?associate\s+(?:laboratory|lab)\s+director|(?:deputy\s+)?assoc\.?\s+lab\.?\s+director|chief\s+(?:human\s+resources?|operating|information|communications?)\s+officer|(?:deputy|associate|operations|program|project|division|office|laboratory|directorate)\s+director|executive\s+assistant|senior\s+administrative\s+assistant|division\s+admin(?:istrator)?|group\s+leader|section\s+head|director|\b(?:ALD|COO|CIO|CCO|CHRO)\b/gi;
+function personKey(value: string) {
+  return searchText(value.replace(/\([^)]*\)/g, "").replace(/\b(?:acting|interim)\b/gi, ""));
+}
+export function comparableAssignments(person: string, role: string): Assignment[] {
+  if (!meaningful(person)) return [];
+  const assignments: Assignment[] = [];
+  const segments = person.split(/[·;\n]+/).map(s => s.trim()).filter(Boolean);
+  for (const segment of segments) {
+    const matches = [...segment.matchAll(embeddedRole)];
+    if (matches.length) {
+      let from = 0;
+      for (const match of matches) {
+        const name = personKey(segment.slice(from, match.index).replace(/[,\s]+$/, ""));
+        if (name) assignments.push({ person: name, role: roleKey(match[0]) });
+        from = match.index! + match[0].length;
+      }
+    } else if (segment.includes(",")) {
+      const comma = segment.indexOf(",");
+      const name = personKey(segment.slice(0, comma));
+      const title = segment.slice(comma + 1).trim();
+      if (name && meaningful(title)) assignments.push({ person: name, role: roleKey(title) });
+    } else {
+      const name = personKey(segment);
+      if (name) assignments.push({ person: name, role: segments.length === 1 && meaningful(role) ? roleKey(role) : "" });
     }
-    const people = new Set(
-      rows
-        .map((r) => r.person)
-        .filter(meaningful)
-        .map(searchText),
-    );
-    if (people.size > 1)
-      add(
-        "assignment",
-        "Different assignments appear in related charts",
-        "high",
-      );
-    const parents = new Set(
-      rows
-        .map((r) => r.parent)
-        .filter((p): p is string => !!p)
-        .map(organizationKey),
-    );
-    if (parents.size > 1)
-      add(
-        "reporting",
-        "Different immediate reporting parents appear in related charts",
-        "high",
-      );
-    const roles = new Set(
-      rows
-        .map((r) => r.role)
-        .filter(meaningful)
-        .map(searchText),
-    );
-    if (roles.size > 1)
-      add("role", "Position titles differ across related charts", "medium");
   }
-  return issues.sort(
-    (a, b) =>
-      (a.priority === "high" ? 0 : 1) - (b.priority === "high" ? 0 : 1) ||
-      a.organization.localeCompare(b.organization),
-  );
+  return assignments;
+}
+function explicitLevel(name: string) {
+  return searchText(name).match(/ (directorate|division|office|group|team|department)$/)?.[1];
+}
+function sameOrganizationContext(a: RelatedAppearance, b: RelatedAppearance) {
+  const al = explicitLevel(a.organization), bl = explicitLevel(b.organization);
+  if (al && bl && al !== bl) return false;
+  // Dropping a suffix finds candidates, not identity. In particular, a project
+  // function called Research is not automatically the Research Division.
+  const sameName = searchText(a.organization) === searchText(b.organization);
+  const sameParent = !!a.parent && !!b.parent && organizationKey(a.parent) === organizationKey(b.parent);
+  return sameParent || (sameName && (!a.parent || !b.parent));
+}
+export function auditPortfolio(charts: ChartDocument[]): ConsistencyIssue[] {
+  const issues = new Map<string, ConsistencyIssue>();
+  for (const [key, rows] of relatedAppearances(charts)) {
+    if (new Set(rows.map(r => r.chartId)).size < 2) continue;
+    const add = (category: ConsistencyCategory, title: string, priority: "high" | "medium", pair: RelatedAppearance[], role = "") => {
+      const id = category + ":" + key + (role ? ":" + role : "");
+      const existing = issues.get(id);
+      const appearances = [...(existing?.appearances ?? []), ...pair];
+      issues.set(id, { id, organizationKey: key, organization: pair[0].organization,
+        category, priority, title, appearances: [...new Map(appearances.map(a => [a.chartId + ":" + a.nodeId, a])).values()] });
+    };
+    for (let i = 0; i < rows.length; i++) for (let j = i + 1; j < rows.length; j++) {
+      const a = rows[i], b = rows[j];
+      if (a.chartId === b.chartId) continue;
+      const aa = comparableAssignments(a.person, a.role), ba = comparableAssignments(b.person, b.role);
+      const commonRoles = [...new Set(aa.map(x => x.role).filter(r => r && ba.some(x => x.role === r)))];
+      const sameContext = sameOrganizationContext(a, b);
+      // No name-only promotion: unrelated groups, service portfolios and unknown
+      // roles remain visible as identity/context questions, never high conflicts.
+      if (!sameContext || !commonRoles.length) {
+        if (!sameContext && a.parent && b.parent && searchText(a.organization) === searchText(b.organization) && commonRoles.length && rows.some(r => !r.parent)) {
+          add("reporting", "A root-matched organization and role appear under different parents; verify identity, source scope and authority", "medium", [a, b]);
+          continue;
+        }
+        const peopleA = new Set(aa.map(x => x.person));
+        const peopleB = new Set(ba.map(x => x.person));
+        const differentSharedRole = commonRoles.some(role => {
+          const names = (values: Assignment[]) => [...new Set(values.filter(x => x.role === role).map(x => x.person))].sort().join("|");
+          return names(aa) !== names(ba);
+        });
+        if (differentSharedRole || (peopleA.size && peopleB.size && [...peopleA].every(p => !peopleB.has(p)))) {
+          add("identity", "Similar organization names have different or undocumented role/context; confirm identity before comparing", "medium", [a, b]);
+        } else if (sameContext && meaningful(a.role) && meaningful(b.role) && roleKey(a.role) !== roleKey(b.role)) {
+          add("role", "The same named person has different role labels; verify whether these are separate positions", "medium", [a, b]);
+        }
+        continue;
+      }
+      for (const role of commonRoles) {
+        const pa = [...new Set(aa.filter(x => x.role === role).map(x => x.person))].sort();
+        const pb = [...new Set(ba.filter(x => x.role === role).map(x => x.person))].sort();
+        if (pa.join("|") !== pb.join("|")) {
+          add("assignment", `Different named assignments for the same role (${role}); verify both official sources`, "high", [a, b], role);
+        }
+      }
+      if (meaningful(a.role) && meaningful(b.role) && searchText(a.role) !== searchText(b.role) && roleKey(a.role) === roleKey(b.role)) {
+        // Preserve meaningful acting/interim qualifications; harmless abbreviations
+        // and extra administrative staff do not constitute different leaders.
+        const qualifiers = (v: string) => searchText(v).match(/\b(?:acting|interim)\b/g)?.sort().join(" ") ?? "";
+        if (qualifiers(a.role) !== qualifiers(b.role)) add("role", "Acting/interim role qualifications differ; compare the official labels", "medium", [a, b]);
+      }
+    }
+  }
+  return [...issues.values()].sort((a, b) => (a.priority === "high" ? 0 : 1) - (b.priority === "high" ? 0 : 1) || a.organization.localeCompare(b.organization) || a.id.localeCompare(b.id));
+}
+export function undocumentedEffectiveDate(value: string) {
+  return !value.trim() || /not (?:specified|supplied|documented)|unknown|^current$/i.test(value);
+}
+export function effectiveDateCoverage(charts: ChartDocument[]) {
+  const rows = charts.filter(c => c.status !== "archived").map(c => ({
+    chartId: c.id, chartName: c.name,
+    missing: c.nodes.filter(n => n.data.unit.planningState !== "planned" && undocumentedEffectiveDate(n.data.unit.effectiveDate)),
+  }));
+  return { cards: rows.reduce((n, r) => n + r.missing.length, 0), charts: rows.filter(r => r.missing.length), };
 }
 export type ReviewCategory =
-  "conflicts" | "reporting" | "dates" | "source" | "placement";
+  "conflicts" | "identity" | "reporting" | "dates" | "source" | "placement";
 export interface ReviewTask {
   id: string;
   category: ReviewCategory;
@@ -184,8 +239,8 @@ export function prioritizedReview(charts: ChartDocument[]): ReviewTask[] {
     );
   const tasks: ReviewTask[] = issues.map((i) => ({
     id: i.id,
-    category: "conflicts",
-    priority: i.priority === "high" ? 0 : 1,
+    category: i.category === "identity" ? "identity" : i.category === "reporting" ? "reporting" : "conflicts",
+    priority: i.priority === "high" ? 0 : i.category === "identity" ? 2 : 1,
     chartId: i.appearances[0].chartId,
     chartName: i.appearances[0].chartName,
     nodeId: i.appearances[0].nodeId,
@@ -202,20 +257,15 @@ export function prioritizedReview(charts: ChartDocument[]): ReviewTask[] {
         conflicts.has(c.id + ":" + n.id)
       )
         continue;
-      const missing =
-        !u.effectiveDate ||
-        /not specified|unknown|^current$/i.test(u.effectiveDate);
       tasks.push({
         id: c.id + ":" + n.id,
-        category: missing ? "dates" : "source",
-        priority: missing ? 3 : 2,
+        category: "source",
+        priority: 2,
         chartId: c.id,
         chartName: c.name,
         nodeId: n.id,
         title: u.name,
-        detail: missing
-          ? "No documented effective date; do not infer one from a save or file date."
-          : u.reviewNote || "Compare this card with the source.",
+        detail: u.reviewNote || "Compare this card with the source.",
         source: u.source,
         sourceLocator: u.sourceLocator ?? "",
       });
@@ -261,6 +311,12 @@ export function prioritizedReview(charts: ChartDocument[]): ReviewTask[] {
         sourceLocator: "",
       });
     }
+  }
+  for (const row of effectiveDateCoverage(charts).charts) {
+    tasks.push({ id: "dates:" + row.chartId, category: "dates", priority: 4,
+      chartId: row.chartId, chartName: row.chartName, nodeId: row.missing[0].id,
+      title: row.chartName, detail: `${row.missing.length} current ${row.missing.length === 1 ? "card has" : "cards have"} no documented effective date. This is a source coverage gap, not a proven error. Keep dates unknown when the official chart does not state them.`,
+      source: "Effective-date coverage", sourceLocator: "" });
   }
   return tasks.sort(
     (a, b) => a.priority - b.priority || a.title.localeCompare(b.title),

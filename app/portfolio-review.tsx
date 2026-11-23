@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import type { ChartDocument } from "../lib/chart-library";
 import {
   auditPortfolio,
+  effectiveDateCoverage,
   prioritizedReview,
   type ReviewCategory,
   type RelatedAppearance,
@@ -28,14 +29,15 @@ export function PortfolioReview({
     view?: "canvas" | "review" | "library",
   ) => void;
 }) {
-  const [filter, setFilter] = useState<ReviewCategory | "all">("all"),
+  const [filter, setFilter] = useState<ReviewCategory | "all" | "comparisons">("comparisons"),
     [query, setQuery] = useState(""),
     [limit, setLimit] = useState(30);
   const issues = useMemo(() => auditPortfolio(charts), [charts]),
-    tasks = useMemo(() => prioritizedReview(charts), [charts]);
+    tasks = useMemo(() => prioritizedReview(charts), [charts]),
+    dateCoverage = useMemo(() => effectiveDateCoverage(charts), [charts]);
   const visible = tasks.filter(
     (t) =>
-      (filter === "all" || t.category === filter) &&
+      (filter === "all" || t.category === filter || (filter === "comparisons" && t.category !== "dates" && t.category !== "placement")) &&
       [t.title, t.chartName, t.detail].some((v) =>
         v.toLowerCase().includes(query.toLowerCase()),
       ),
@@ -57,8 +59,9 @@ export function PortfolioReview({
           Immediate parent: {a.parent ?? "Chart root — parent not shown"}
         </p>
         <p>
-          Effective date: {a.effectiveDate || "Not supplied"} ·{" "}
-          {a.certainty.replace("_", " ")}
+          Effective date: {a.effectiveDate || "Not supplied"}
+          <br />
+          Card source certainty: {a.certainty.replace("_", " ")}
         </p>
         <details>
           <summary>Source evidence and review note</summary>
@@ -79,24 +82,24 @@ export function PortfolioReview({
     <section className="portfolio-review">
       <h1>Consistency and prioritized review</h1>
       <p>
-        Related names are candidates for comparison. Confirm that they represent
-        the same organization before making consistent changes; repeated
-        positions and planned roles may be intentional.
+        Compare matching organizations and roles against their official sources.
+        Similar names with different or undocumented contexts stay in Identity
+        questions. Counts describe review work, not proven errors or chart approval.
       </p>
       <div className="workflow-metrics">
         <div>
           <strong>{issues.filter((i) => i.priority === "high").length}</strong>
-          <span>High-priority disagreements</span>
+          <span>Comparable-role differences</span>
         </div>
         <div>
           <strong>
             {tasks.filter((t) => t.category === "reporting").length}
           </strong>
-          <span>Reporting lines to verify</span>
+          <span>Reporting-source questions</span>
         </div>
         <div>
-          <strong>{tasks.filter((t) => t.category === "dates").length}</strong>
-          <span>Effective dates not documented</span>
+          <strong>{dateCoverage.cards}</strong>
+          <span>Cards without documented dates</span>
         </div>
         <div>
           <strong>
@@ -104,7 +107,16 @@ export function PortfolioReview({
           </strong>
           <span>Uncertain tree placements</span>
         </div>
+        <div>
+          <strong>{issues.filter((i) => i.category === "identity").length}</strong>
+          <span>Identity and context questions</span>
+        </div>
       </div>
+      <p>
+        Date coverage spans {dateCoverage.charts.length} active charts. Missing
+        dates may be absent from the official slide; keep them unknown. Tree
+        placements organize the library and do not change reporting lines.
+      </p>
       <div className="workflow-filters">
         <label>
           Review type
@@ -116,10 +128,12 @@ export function PortfolioReview({
             }}
           >
             {[
-              ["all", "All priorities"],
+              ["comparisons", "Source comparisons"],
+              ["all", "All review and coverage items"],
               ["conflicts", "Cross-chart disagreements"],
+              ["identity", "Identity questions"],
               ["reporting", "Reporting lines"],
-              ["dates", "Missing effective dates"],
+              ["dates", "Date coverage by chart"],
               ["source", "Source questions"],
               ["placement", "Tree placement"],
             ].map(([value, label]) => (
@@ -127,6 +141,8 @@ export function PortfolioReview({
                 {label} (
                 {value === "all"
                   ? tasks.length
+                  : value === "comparisons"
+                  ? tasks.filter(t => t.category !== "dates" && t.category !== "placement").length
                   : tasks.filter((t) => t.category === value).length}
                 )
               </option>
@@ -155,7 +171,7 @@ export function PortfolioReview({
             >
               <span className="eyebrow">
                 {t.priority === 0
-                  ? "High priority"
+                  ? "Source comparison needed"
                   : t.category.replace("_", " ")}
               </span>
               <h2>{t.title}</h2>
@@ -169,7 +185,7 @@ export function PortfolioReview({
                   <p>
                     {t.chartName} · {t.source}
                   </p>
-                  <SourceLink value={t.sourceLocator} />
+                  {t.sourceLocator ? <SourceLink value={t.sourceLocator} /> : null}
                   <button
                     className="button button--secondary"
                     onClick={() =>
@@ -182,6 +198,8 @@ export function PortfolioReview({
                   >
                     {t.category === "placement"
                       ? "Choose tree placement"
+                      : t.category === "dates"
+                      ? "Inspect chart dates"
                       : "Open this review"}
                   </button>
                 </>
