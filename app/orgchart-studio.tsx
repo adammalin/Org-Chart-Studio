@@ -8736,6 +8736,7 @@ function StudioWorkspace() {
                         <span>Source chart</span>
                         <select
                           value={effectiveComparisonSourceId}
+                          title={comparisonSource?.name}
                           onChange={(event) =>
                             setComparisonSourceId(event.target.value)
                           }
@@ -8752,6 +8753,7 @@ function StudioWorkspace() {
                         <span>Target chart</span>
                         <select
                           value={effectiveComparisonTargetId}
+                          title={comparisonTarget?.name}
                           onChange={(event) =>
                             setComparisonTargetId(event.target.value)
                           }
