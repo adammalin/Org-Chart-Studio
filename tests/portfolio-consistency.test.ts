@@ -71,6 +71,13 @@ test("a changed COO is retained even when the principal leader agrees", () => {
   assert.match(issues[0].title, /chief operating officer/);
 });
 
+test("an additional operations director is a separate role from the principal director", () => {
+  const a = occurrence("a", "Synthetic Business Directorate", "Example Alice, Director · Example Bob, Executive Assistant", "Director");
+  const b = occurrence("b", "Synthetic Business", "Example Alice, Director · Example Carol, Operations Director", "Director", "Synthetic Laboratory");
+  assert.equal(auditPortfolio([a, b]).length, 0);
+  assert.deepEqual(comparableAssignments("Example Carol, Operations Director", "Director"), [{ person: "example carol", role: "operations director" }]);
+});
+
 test("same group names beneath unrelated parents remain context questions", () => {
   const a = occurrence("a", "Synthetic Application Engineering Group", "Example Alice", "Group Leader", "Synthetic Computing Section");
   const b = occurrence("b", "Synthetic Application Engineering Group", "Example Bob", "Group Leader", "Synthetic Enrichment Section");

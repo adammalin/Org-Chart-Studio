@@ -110,7 +110,7 @@ export function roleKey(value: string) {
     .replace(/\s+/g, " ").trim();
 }
 interface Assignment { person: string; role: string }
-const embeddedRole = /associate\s+(?:laboratory|lab)\s+director|assoc\.?\s+lab\.?\s+director|chief\s+(?:human\s+resources?|operating|information|communications?)\s+officer|deputy\s+director|executive\s+assistant|senior\s+administrative\s+assistant|division\s+admin(?:istrator)?|group\s+leader|section\s+head|director|\b(?:ALD|COO|CIO|CCO|CHRO)\b/gi;
+const embeddedRole = /associate\s+(?:laboratory|lab)\s+director|assoc\.?\s+lab\.?\s+director|chief\s+(?:human\s+resources?|operating|information|communications?)\s+officer|(?:deputy|associate|operations|program|project|division|office|laboratory|directorate)\s+director|executive\s+assistant|senior\s+administrative\s+assistant|division\s+admin(?:istrator)?|group\s+leader|section\s+head|director|\b(?:ALD|COO|CIO|CCO|CHRO)\b/gi;
 function personKey(value: string) {
   return searchText(value.replace(/\([^)]*\)/g, "").replace(/\b(?:acting|interim)\b/gi, ""));
 }
