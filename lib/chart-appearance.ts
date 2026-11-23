@@ -27,9 +27,10 @@ export function officialWrap(text:string,width:number,size:number,bold=false):st
   return output;
 }
 const clean=(s:string)=>s.replace(/\\?\*+/g,'').replace(/[ \t]+/g,' ').trim();
-export function officialAssignment(unit:Pick<OrganizationalUnit,'assignmentLabel'|'positionStatus'>) {
+const hasActingQualifier=(value:string)=>/\b(?:interim|acting)\b/i.test(value);
+export function officialAssignment(unit:Pick<OrganizationalUnit,'assignmentLabel'|'positionStatus'> & Partial<Pick<OrganizationalUnit,'positionTitle'>>) {
   const assignment=clean(unit.assignmentLabel).replace(/\s+·\s+/g,'\n');
-  if(unit.positionStatus==='acting') return assignment ? /interim|acting/i.test(assignment)?assignment:`${assignment}, Interim` : 'Interim';
+  if(unit.positionStatus==='acting'&&!hasActingQualifier(unit.positionTitle??'')) return assignment ? hasActingQualifier(assignment)?assignment:`${assignment}, Interim` : 'Interim';
   if(unit.positionStatus==='vacant')return assignment||'Vacant';
   return assignment;
 }
@@ -39,7 +40,7 @@ export function officialScale(sourceWidth:number|undefined,width:number) {
 export function officialCard(unit:OrganizationalUnit,width:number,height:number,level:number,scale:number, publicAudience=false,entries:{id:string;title:string;assignment:string}[]=[],sourceFill?:string):OfficialCard {
   const title=clean(unit.shortName||unit.name);
   const role=clean(unit.positionTitle);
-  const assignment=publicAudience ? (unit.positionStatus==='vacant'?'Vacant':unit.positionStatus==='acting'?'Interim':'') : officialAssignment(unit);
+  const assignment=publicAudience ? (unit.positionStatus==='vacant'?'Vacant':unit.positionStatus==='acting'&&!hasActingQualifier(role)?'Interim':'') : officialAssignment(unit);
   const showRole=role&&!/assignment shown in source/i.test(role)&&role.toLowerCase()!==title.toLowerCase()&&!assignment.toLowerCase().includes(role.toLowerCase());
   const root=level===1;
   const bodySize=unit.type==='division'?12.24:unit.type==='section'?12:['group','team'].includes(unit.type)?10.5:10.8;
@@ -70,5 +71,5 @@ export function layoutOfficialBlocks(blocks:{text:string;size:number;bold:boolea
   return {fill,border:OFFICIAL_COLORS.border,borderWidth:.75*scale,lines};
 }
 export function officialSupport(title:string,entries:{role:string;person:string;positionStatus:OrganizationalUnit['positionStatus']}[],width:number,height:number,scale:number):OfficialCard {
-  return layoutOfficialBlocks([{text:title,size:10.8*scale,bold:true},...entries.map(e=>({text:`${e.role}: ${officialAssignment({assignmentLabel:e.person,positionStatus:e.positionStatus})}`,size:9.36*scale,bold:false}))],width,height,scale,OFFICIAL_COLORS.support);
+  return layoutOfficialBlocks([{text:title,size:10.8*scale,bold:true},...entries.map(e=>({text:`${e.role}: ${officialAssignment({assignmentLabel:e.person,positionStatus:e.positionStatus,positionTitle:e.role})}`,size:9.36*scale,bold:false}))],width,height,scale,OFFICIAL_COLORS.support);
 }
