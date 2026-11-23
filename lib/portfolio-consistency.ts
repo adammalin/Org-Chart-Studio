@@ -110,7 +110,7 @@ export function roleKey(value: string) {
     .replace(/\s+/g, " ").trim();
 }
 interface Assignment { person: string; role: string }
-const embeddedRole = /associate\s+(?:laboratory|lab)\s+director|assoc\.?\s+lab\.?\s+director|chief\s+(?:human\s+resources?|operating|information|communications?)\s+officer|(?:deputy|associate|operations|program|project|division|office|laboratory|directorate)\s+director|executive\s+assistant|senior\s+administrative\s+assistant|division\s+admin(?:istrator)?|group\s+leader|section\s+head|director|\b(?:ALD|COO|CIO|CCO|CHRO)\b/gi;
+const embeddedRole = /(?:deputy\s+)?associate\s+(?:laboratory|lab)\s+director|(?:deputy\s+)?assoc\.?\s+lab\.?\s+director|chief\s+(?:human\s+resources?|operating|information|communications?)\s+officer|(?:deputy|associate|operations|program|project|division|office|laboratory|directorate)\s+director|executive\s+assistant|senior\s+administrative\s+assistant|division\s+admin(?:istrator)?|group\s+leader|section\s+head|director|\b(?:ALD|COO|CIO|CCO|CHRO)\b/gi;
 function personKey(value: string) {
   return searchText(value.replace(/\([^)]*\)/g, "").replace(/\b(?:acting|interim)\b/gi, ""));
 }
@@ -145,9 +145,11 @@ function explicitLevel(name: string) {
 function sameOrganizationContext(a: RelatedAppearance, b: RelatedAppearance) {
   const al = explicitLevel(a.organization), bl = explicitLevel(b.organization);
   if (al && bl && al !== bl) return false;
-  // Matching a chart root with a named occurrence is an identity candidate.
-  // A common role or matching parent provides the additional comparison context.
-  return (!a.parent || !b.parent) || organizationKey(a.parent) === organizationKey(b.parent);
+  // Dropping a suffix finds candidates, not identity. In particular, a project
+  // function called Research is not automatically the Research Division.
+  const sameName = searchText(a.organization) === searchText(b.organization);
+  const sameParent = !!a.parent && !!b.parent && organizationKey(a.parent) === organizationKey(b.parent);
+  return sameParent || (sameName && (!a.parent || !b.parent));
 }
 export function auditPortfolio(charts: ChartDocument[]): ConsistencyIssue[] {
   const issues = new Map<string, ConsistencyIssue>();
@@ -169,13 +171,17 @@ export function auditPortfolio(charts: ChartDocument[]): ConsistencyIssue[] {
       // No name-only promotion: unrelated groups, service portfolios and unknown
       // roles remain visible as identity/context questions, never high conflicts.
       if (!sameContext || !commonRoles.length) {
-        if (!sameContext && a.parent && b.parent && commonRoles.length && rows.some(r => !r.parent) && (!explicitLevel(a.organization) || !explicitLevel(b.organization) || explicitLevel(a.organization) === explicitLevel(b.organization))) {
+        if (!sameContext && a.parent && b.parent && searchText(a.organization) === searchText(b.organization) && commonRoles.length && rows.some(r => !r.parent)) {
           add("reporting", "A root-matched organization and role appear under different parents; verify identity, source scope and authority", "medium", [a, b]);
           continue;
         }
         const peopleA = new Set(aa.map(x => x.person));
         const peopleB = new Set(ba.map(x => x.person));
-        if (peopleA.size && peopleB.size && [...peopleA].every(p => !peopleB.has(p))) {
+        const differentSharedRole = commonRoles.some(role => {
+          const names = (values: Assignment[]) => [...new Set(values.filter(x => x.role === role).map(x => x.person))].sort().join("|");
+          return names(aa) !== names(ba);
+        });
+        if (differentSharedRole || (peopleA.size && peopleB.size && [...peopleA].every(p => !peopleB.has(p)))) {
           add("identity", "Similar organization names have different or undocumented role/context; confirm identity before comparing", "medium", [a, b]);
         } else if (sameContext && meaningful(a.role) && meaningful(b.role) && roleKey(a.role) !== roleKey(b.role)) {
           add("role", "The same named person has different role labels; verify whether these are separate positions", "medium", [a, b]);

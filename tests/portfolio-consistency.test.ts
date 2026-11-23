@@ -78,6 +78,28 @@ test("an additional operations director is a separate role from the principal di
   assert.deepEqual(comparableAssignments("Example Carol, Operations Director", "Director"), [{ person: "example carol", role: "operations director" }]);
 });
 
+test("deputy associate laboratory directors do not become additional principal leaders", () => {
+  const a = occurrence("a", "Synthetic Security Directorate", "Example Alice, Associate Laboratory Director · Example Bob, Deputy Associate Laboratory Director · Example Carol, COO", "Associate Laboratory Director");
+  const b = occurrence("b", "Synthetic Security", "Example Alice Assoc Lab Director · Example Carol, COO", "Assignment shown in source", "Synthetic Laboratory");
+  assert.equal(auditPortfolio([a, b]).length, 0);
+  assert.equal(comparableAssignments("Example Bob, Deputy Associate Laboratory Director", "Director")[0].role, "deputy associate laboratory director");
+});
+
+test("project function names cannot become formal division identity from a shared Director title", () => {
+  const project = occurrence("p", "Synthetic Application Development", "Example Alice, Director · Example Bob, Deputy Director", "Assignment shown in source", "Synthetic Computing Project");
+  const division = occurrence("d", "Synthetic Application Development Division", "Example Carol", "Director");
+  const questions = auditPortfolio([project, division]);
+  assert.equal(questions.length, 1);
+  assert.equal(questions[0].category, "identity");
+  assert.equal(questions[0].priority, "medium");
+});
+
+test("an uncertain name alias retains a secondary-role difference even if the main leader agrees", () => {
+  const a = occurrence("a", "Synthetic Directorate", "Example Alice, Director · Example Bob, COO", "Director");
+  const b = occurrence("b", "Synthetic", "Example Alice, Director · Example Carol, COO", "Director", "Synthetic Laboratory");
+  assert.equal(auditPortfolio([a, b])[0].category, "identity");
+});
+
 test("same group names beneath unrelated parents remain context questions", () => {
   const a = occurrence("a", "Synthetic Application Engineering Group", "Example Alice", "Group Leader", "Synthetic Computing Section");
   const b = occurrence("b", "Synthetic Application Engineering Group", "Example Bob", "Group Leader", "Synthetic Enrichment Section");
