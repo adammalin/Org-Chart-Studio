@@ -7181,3 +7181,8 @@ button:disabled {
 
 .prepared-library-download {display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:12px;}
 .prepared-library-download small {flex-basis:100%;overflow-wrap:anywhere;}
+
+/* Short, dismissible navigation tutorials; shared by web and desktop. */
+.sidebar-help {position:fixed;z-index:1200;box-sizing:border-box;max-height:calc(100vh - 24px);overflow:auto;padding:16px 18px;border:1px solid #91aca3;border-left:4px solid var(--ornl-green);border-radius:6px;background:#fff;color:var(--ornl-hale-navy);box-shadow:0 8px 28px #002b3030;font-size:13px;line-height:1.5;text-align:left;}
+.sidebar-help strong {display:block;font-size:14px;line-height:1.35;margin-bottom:6px;}
+.sidebar-help p {margin:0;overflow-wrap:anywhere;}

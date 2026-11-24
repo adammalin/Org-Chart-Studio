@@ -1,6 +1,7 @@
 "use client";
 import { useInterfaceMode } from "./interface-mode";
 import { StudioTutorial } from "./studio-tutorial";
+import { SidebarHelpButton } from "./sidebar-help";
 import { TUTORIAL_WELCOME_KEY } from "../lib/studio-tutorial";
 import type { InterfaceMode } from "../lib/interface-mode";
 import {AgentReviewRequests} from '../components/agent-review-requests';
@@ -5144,7 +5145,7 @@ function StudioWorkspace() {
         </label>
         {preferenceError ? <p className="interface-mode-error" role="status">{preferenceError}</p> : null}
         <div className="sidebar__section sidebar__primary" aria-label="Everyday tools">
-          <button aria-label="Chart library"
+          <SidebarHelpButton aria-label="Chart library"
             type="button"
             className={workspaceView === "library" ? "is-active" : ""}
             onClick={() => setWorkspaceView("library")}
@@ -5154,8 +5155,8 @@ function StudioWorkspace() {
             <span className="nav-count nav-count--neutral">
               {charts.length}
             </span>
-          </button>
-          <button aria-label="Chart editor"
+          </SidebarHelpButton>
+          <SidebarHelpButton aria-label="Chart editor"
             type="button"
             className={workspaceView === "canvas" ? "is-active" : ""}
             onClick={() => setWorkspaceView("canvas")}
@@ -5163,8 +5164,8 @@ function StudioWorkspace() {
           >
             <SquaresFour size={19} aria-hidden="true" />
             <span>Chart editor</span>
-          </button>
-          <button aria-label="Review queue"
+          </SidebarHelpButton>
+          <SidebarHelpButton aria-label="Review queue"
             type="button"
             className={workspaceView === "review" ? "is-active" : ""}
             onClick={() => setWorkspaceView("review")}
@@ -5185,8 +5186,8 @@ function StudioWorkspace() {
             ) : (
               <span className="nav-count nav-count--neutral">0</span>
             )}
-          </button>
-          <button aria-label="History / Timeline"
+          </SidebarHelpButton>
+          <SidebarHelpButton aria-label="History / Timeline"
             type="button"
             className={workspaceView === "history" ? "is-active" : ""}
             onClick={showVersionHistory}
@@ -5197,24 +5198,24 @@ function StudioWorkspace() {
             <span className="nav-count nav-count--neutral">
               {versions.length || activeChart?.version || 0}
             </span>
-          </button>
-          <button aria-label="Monthly updates"
+          </SidebarHelpButton>
+          <SidebarHelpButton aria-label="Monthly updates"
             type="button"
             className={workspaceView === "monthly" ? "is-active" : ""}
             onClick={() => setWorkspaceView("monthly")}
           >
             <ClockCounterClockwise size={19} aria-hidden="true" />
             <span>Monthly updates</span>
-          </button>
-          <button aria-label="Backup & restore"
+          </SidebarHelpButton>
+          <SidebarHelpButton aria-label="Backup & restore"
             type="button"
             className={workspaceView === "backups" ? "is-active" : ""}
             onClick={() => setWorkspaceView("backups")}
           >
             <FileLock size={19} aria-hidden="true" />
             <span>Backup & restore</span>
-          </button>
-          <button aria-label="Publish & export"
+          </SidebarHelpButton>
+          <SidebarHelpButton aria-label="Publish & export"
             type="button"
             className={workspaceView === "exports" ? "is-active" : ""}
             onClick={() => setWorkspaceView("exports")}
@@ -5222,11 +5223,11 @@ function StudioWorkspace() {
           >
             <DownloadSimple size={19} aria-hidden="true" />
             <span>Publish & export</span>
-          </button>
+          </SidebarHelpButton>
         </div>
         {advanced ? <details className="sidebar-tools" key="advanced-tools" open={workspaceView === "table" || workspaceView === "sources" || workspaceView === "consistency"}>
-          <summary>Advanced tools</summary><div className="sidebar__section">
-          <button aria-label="Accessible table"
+          <SidebarHelpButton as="summary" aria-label="Advanced tools">Advanced tools</SidebarHelpButton><div className="sidebar__section">
+          <SidebarHelpButton aria-label="Accessible table"
             type="button"
             className={workspaceView === "table" ? "is-active" : ""}
             onClick={() => setWorkspaceView("table")}
@@ -5234,16 +5235,16 @@ function StudioWorkspace() {
           >
             <Table size={19} aria-hidden="true" />
             <span>Accessible table</span>
-          </button>
-          <button aria-label="Sources & imports"
+          </SidebarHelpButton>
+          <SidebarHelpButton aria-label="Sources & imports"
             type="button"
             className={workspaceView === "sources" ? "is-active" : ""}
             onClick={() => setWorkspaceView("sources")}
           >
             <FileArrowUp size={19} aria-hidden="true" />
             <span>Sources & imports</span>
-          </button>
-          <button aria-label="Consistency & priorities"
+          </SidebarHelpButton>
+          <SidebarHelpButton aria-label="Consistency & priorities"
             type="button"
             className={workspaceView === "consistency" ? "is-active" : ""}
             onClick={() => setWorkspaceView("consistency")}
@@ -5253,12 +5254,12 @@ function StudioWorkspace() {
             <span className="nav-count nav-count--warning">
               {portfolioIssues.length}
             </span>
-          </button>
+          </SidebarHelpButton>
           <SourceCheckProgress charts={charts}/>
           </div>
         </details> : null}
         <div className="sidebar__section sidebar__utilities">
-          <button aria-label={environment.kind === "browser" ? "Browser AI control" : "Local AI control"}
+          <SidebarHelpButton aria-label={environment.kind === "browser" ? "Browser AI control" : "Local AI control"}
             type="button"
             className={workspaceView === "ai" ? "is-active" : ""}
             onClick={() => setWorkspaceView("ai")}
@@ -5271,7 +5272,7 @@ function StudioWorkspace() {
             >
               {mcpControl?.paused ? "Paused" : "On"}
             </span>
-          </button><button aria-label="Tips & tour"
+          </SidebarHelpButton><SidebarHelpButton aria-label="Tips & tour"
             type="button"
             className="tour-nav-button"
             onClick={startOnboardingTour}
@@ -5279,7 +5280,7 @@ function StudioWorkspace() {
           >
             <Question size={19} aria-hidden="true" />
             <span>Tips &amp; tour</span>
-          </button>
+          </SidebarHelpButton>
         </div>
       </aside>
 
