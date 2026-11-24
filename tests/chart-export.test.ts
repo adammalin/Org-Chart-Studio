@@ -358,9 +358,9 @@ test("horizontal compact exports use wide hierarchy rows and top-entry connector
   assert.doesNotMatch(svg, /data-port-kind=/);
 });
 
-test("sibling relationships use separate source ports and connector lanes", () => {
+test("explicit separate mode keeps independent source ports and connector lanes", () => {
   const chart = seedChartDocuments()[0];
-  const scene = buildChartExportScene(chart, "internal", generatedAt);
+  const scene = buildChartExportScene(chart, "internal", generatedAt, "separate");
   const siblingEdges = scene.edges.filter((edge) => edge.sourceId === "unit-lab");
 
   assert.ok(siblingEdges.length > 1);
