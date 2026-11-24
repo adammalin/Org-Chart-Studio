@@ -388,7 +388,7 @@ export function buildChartExportScene(
   chart: ChartDocument,
   audience: ExportAudience,
   generatedAt = new Date().toISOString(),
-  connectorRoutingMode: ConnectorRoutingMode = "separate",
+  connectorRoutingMode: ConnectorRoutingMode = "auto",
   presentationMode: ChartPresentationMode = "individual",
   compactLayoutOrientation: CompactLayoutOrientation = "vertical",
   appearance: ChartAppearance = "official",

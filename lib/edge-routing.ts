@@ -1,6 +1,10 @@
 import type { Edge } from "@xyflow/react";
 
-export type ConnectorRoutingMode = "separate" | "combed";
+export type ConnectorRoutingMode = "auto" | "separate" | "combed";
+
+export function connectorRoutingPreference(value: string | null): ConnectorRoutingMode {
+  return value === "separate" || value === "combed" ? value : "auto";
+}
 
 export interface EdgeRoutingNode {
   id: string;
@@ -615,12 +619,22 @@ function buildRouteGroups(
     const topTargetEdges = automaticEdges.filter(
       (edge) => nodeById.get(edge.target)?.targetSide !== "left",
     );
+    // Automatic alignment is conservative: only downward, primary siblings
+    // share a branch. Keep a parent's existing port arrangement intact when
+    // any branch has a manual pin or captured source route.
+    const alignableEdges = mode === "auto"
+      ? topTargetEdges.filter(edge =>
+          manualEdges.length === 0 &&
+          (edge.data?.relationshipType ?? "primary supervisory") === "primary supervisory" &&
+          nodeById.get(edge.target)!.y >= source.y + source.height + MIN_LEAD * 2)
+      : topTargetEdges;
+    const alignableIds = new Set(alignableEdges.map(edge => edge.id));
     const topTargetGroups =
-      mode === "combed"
-        ? clusterEdgesByTargetRow(topTargetEdges, nodeById).flatMap(
+      mode !== "separate"
+        ? [...clusterEdgesByTargetRow(alignableEdges, nodeById).flatMap(
             (cluster) =>
               cluster.length > 1 ? [cluster] : cluster.map((edge) => [edge]),
-          )
+          ), ...topTargetEdges.filter(edge => !alignableIds.has(edge.id)).map(edge => [edge])]
         : topTargetEdges.map((edge) => [edge]);
     const automaticGroups = [
       ...(leftTargetEdges.length ? [leftTargetEdges] : []),
@@ -721,53 +735,57 @@ function routeCombedGroup(
   const averageTargetY =
     group.targets.reduce((total, target) => total + target.y, 0) /
     group.targets.length;
-  let best: { routes: Point[][]; score: number } | null = null;
-
   const trunkCandidates = [
     group.sourceX,
     ...sideChannelCandidates(allNodes, group.sourceX),
   ];
-  for (const laneY of laneCandidates(
-    group.sourceY,
-    averageTargetY,
-    obstacles,
-  )) {
-    for (const trunkX of trunkCandidates) {
-      const direction = averageTargetY >= group.sourceY ? 1 : -1;
-      const sourceLeadY = group.sourceY + direction * MIN_LEAD;
-      const routes = group.targets.map((target) => {
-        const targetX = target.x + target.width / 2;
-        return compressedPoints(
-          Math.abs(trunkX - group.sourceX) <= EPSILON
-            ? [
-                { x: group.sourceX, y: group.sourceY },
-                { x: group.sourceX, y: laneY },
-                { x: targetX, y: laneY },
-                { x: targetX, y: target.y },
-              ]
-            : [
-                { x: group.sourceX, y: group.sourceY },
-                { x: group.sourceX, y: sourceLeadY },
-                { x: trunkX, y: sourceLeadY },
-                { x: trunkX, y: laneY },
-                { x: targetX, y: laneY },
-                { x: targetX, y: target.y },
-              ],
+  // Prefer the normal lead. In a tight gap, a shorter initial stem can reach a
+  // clear side channel instead of falling back to a path through another card.
+  for (const leadDistance of [MIN_LEAD, NODE_CLEARANCE / 2]) {
+    let best: { routes: Point[][]; score: number } | null = null;
+    for (const laneY of laneCandidates(
+      group.sourceY,
+      averageTargetY,
+      obstacles,
+    )) {
+      for (const trunkX of trunkCandidates) {
+        const direction = averageTargetY >= group.sourceY ? 1 : -1;
+        const sourceLeadY = group.sourceY + direction * leadDistance;
+        const routes = group.targets.map((target) => {
+          const targetX = target.x + target.width / 2;
+          return compressedPoints(
+            Math.abs(trunkX - group.sourceX) <= EPSILON
+              ? [
+                  { x: group.sourceX, y: group.sourceY },
+                  { x: group.sourceX, y: laneY },
+                  { x: targetX, y: laneY },
+                  { x: targetX, y: target.y },
+                ]
+              : [
+                  { x: group.sourceX, y: group.sourceY },
+                  { x: group.sourceX, y: sourceLeadY },
+                  { x: trunkX, y: sourceLeadY },
+                  { x: trunkX, y: laneY },
+                  { x: targetX, y: laneY },
+                  { x: targetX, y: target.y },
+                ],
+          );
+        });
+        const scores = routes.map((points) =>
+          routeScore(points, obstacles, reserved, group.bundleKey),
         );
-      });
-      const scores = routes.map((points) =>
-        routeScore(points, obstacles, reserved, group.bundleKey),
-      );
-      if (scores.some((score) => score === null)) continue;
-      const totalScore = (scores as number[]).reduce(
-        (total, score) => total + score,
-        0,
-      );
-      if (!best || totalScore < best.score)
-        best = { routes, score: totalScore };
+        if (scores.some((score) => score === null)) continue;
+        const totalScore = (scores as number[]).reduce(
+          (total, score) => total + score,
+          0,
+        );
+        if (!best || totalScore < best.score)
+          best = { routes, score: totalScore };
+      }
     }
+    if (best) return best.routes;
   }
-  return best?.routes ?? null;
+  return null;
 }
 
 function reserveRoutes(
@@ -845,7 +863,7 @@ function completeSourceSpines(nodes: EdgeRoutingNode[], edges: Edge[], captured:
 export function buildOrthogonalEdgeRoutes(
   nodes: EdgeRoutingNode[],
   edges: Edge[],
-  mode: ConnectorRoutingMode = "separate",
+  mode: ConnectorRoutingMode = "auto",
 ): Map<string, OrthogonalEdgeRoute> {
   const routes = new Map<string, OrthogonalEdgeRoute>();
   const reserved: Segment[] = [];

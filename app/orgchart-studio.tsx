@@ -180,6 +180,7 @@ import {
   moveManualEdgeRouteLane,
   sourcePortOffset,
   type ConnectorRoutingMode,
+  connectorRoutingPreference,
   type EdgeRoutePoint,
   type ManualEdgeRoute,
   type OrthogonalEdgeRoute,
@@ -298,7 +299,7 @@ function storedCompactLayoutOrientation(): CompactLayoutOrientation {
 
 function connectorRoutingSnapshot(): ConnectorRoutingMode {
   const storedMode = window.localStorage.getItem(CONNECTOR_ROUTING_STORAGE_KEY);
-  return storedMode === "combed" ? "combed" : "separate";
+  return connectorRoutingPreference(storedMode);
 }
 
 function subscribeToConnectorRouting(callback: () => void): () => void {
@@ -842,7 +843,7 @@ function StudioWorkspace() {
   const connectorRoutingMode = useSyncExternalStore<ConnectorRoutingMode>(
     subscribeToConnectorRouting,
     connectorRoutingSnapshot,
-    (): ConnectorRoutingMode => "separate",
+    (): ConnectorRoutingMode => "auto",
   );
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("library");
   const [notice, setNotice] = useState("");
@@ -1450,7 +1451,9 @@ function StudioWorkspace() {
       window.localStorage.setItem(CONNECTOR_ROUTING_STORAGE_KEY, mode);
       window.dispatchEvent(new Event(CONNECTOR_ROUTING_EVENT));
       setNotice(
-        mode === "combed"
+        mode === "auto"
+          ? "Automatic connector alignment enabled. Compatible siblings share a level branch where a clear route exists. Card positions, reporting lines, manual pins and captured source routes stay unchanged."
+          : mode === "combed"
           ? "Sibling combs enabled. Nearby same-row relationships from one parent may share a trunk; unrelated branches remain separate."
           : "Separate connector lanes enabled. Every relationship receives an independent non-overlapping route.",
       );
@@ -5530,8 +5533,9 @@ function StudioWorkspace() {
                           event.target.value as ConnectorRoutingMode,
                         )
                       }
-                      title="Choose whether same-parent relationships may share a comb or always remain separate"
+                      title="Automatically align compatible sibling branches, or choose an explicit connector style"
                     >
+                      <option value="auto">Automatic alignment</option>
                       <option value="separate">Separate lanes</option>
                       <option value="combed">Sibling combs</option>
                     </select>
@@ -5620,6 +5624,16 @@ function StudioWorkspace() {
                 >
                   <ArrowsOut size={17} aria-hidden="true" />
                   Fit view
+                </button>
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  disabled={!activeChart || activeChartReadOnly}
+                  onClick={() => changeConnectorRoutingMode("auto")}
+                  title="Align compatible sibling connectors without moving cards; preserve manually pinned and source-captured routes"
+                >
+                  <TreeStructure size={17} aria-hidden="true" />
+                  Align connectors
                 </button>
                 <button type="button" className="button button--secondary" onClick={()=>setWorkspaceView("table")}><Table size={17} aria-hidden="true"/>Table view</button>
                 {!advanced ? <span className="canvas-edit-hint">Select a card to update its details</span> : null}
@@ -6161,7 +6175,9 @@ function StudioWorkspace() {
                   </span>
                   <span>
                     <TreeStructure size={14} aria-hidden="true" />
-                    {connectorRoutingMode === "combed"
+                    {connectorRoutingMode === "auto"
+                      ? "Compatible sibling branches align automatically"
+                      : connectorRoutingMode === "combed"
                       ? "Sibling combs share only within one branch"
                       : "Every connector uses a separate lane"}
                   </span>
